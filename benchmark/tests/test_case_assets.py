@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
-RELEASED_CASE_IDS = tuple(f"case{i:03d}" for i in range(27, 33))
+RELEASED_CASE_IDS = tuple(f"case{i:03d}" for i in range(1, 7))
 
 
 def test_released_suite_has_required_public_assets() -> None:

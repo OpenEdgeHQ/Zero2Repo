@@ -46,7 +46,7 @@ def test_run_argv_blocks_github_hosts() -> None:
 def test_agent_dockerfile_clears_app_workspace() -> None:
     from cbrun.images import _build_dockerfile  # noqa: WPS433
 
-    df = _build_dockerfile("codingbench-benchmark/case028:deliverable", None)
+    df = _build_dockerfile("codingbench-benchmark/case002:deliverable", None)
     assert "rm -rf /app" in df
     assert "/opt/codingbench/repo" in df
     assert "/opt/cb-warm" in df

@@ -1,11 +1,13 @@
 {
-  "schema_version": 1,
-  "case_id": "case028",
-  "frozen_at": "2026-08-31T16:27:53.060533+00:00",
-  "base_image": "codingbench-base/ubuntu:24.04",
-  "public": true,
+  "schema_version": 3,
+  "case_id": "case002",
   "runner": {
+    "schema_version": 1,
+    "language_label": "Go (modules, GNU make) Git large-file CLI",
     "install_command": "set -e\nexport DEBIAN_FRONTEND=noninteractive\napt-get update -qq\napt-get install -y --no-install-recommends ca-certificates curl git make gettext fish zsh\n(\n  cd /tmp\n  curl -fsSLO https://go.dev/dl/go1.26.5.linux-amd64.tar.gz\n  echo \"5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053  go1.26.5.linux-amd64.tar.gz\" | sha256sum -c -\n  rm -rf /usr/local/go\n  tar -C /usr/local -xzf go1.26.5.linux-amd64.tar.gz\n  rm -f /tmp/go1.26.5.linux-amd64.tar.gz\n)\nmkdir -p /opt/go/pkg/mod /opt/go/cache /etc/go\nchmod 1777 /opt/go /opt/go/pkg /opt/go/pkg/mod /opt/go/cache\nrm -f /usr/local/bin/go /usr/local/bin/gofmt\nprintf '%s\\n' '#!/bin/sh' 'export GOPATH=\"${GOPATH:-/opt/go}\"' 'export GOMODCACHE=\"${GOMODCACHE:-/opt/go/pkg/mod}\"' 'export GOCACHE=\"${GOCACHE:-/opt/go/cache}\"' 'export GOTOOLCHAIN=\"${GOTOOLCHAIN:-local}\"' 'export GOPROXY=\"${GOPROXY:-https://proxy.golang.org,direct}\"' 'export GOSUMDB=\"${GOSUMDB:-sum.golang.org}\"' 'exec /usr/local/go/bin/go \"$@\"' > /usr/local/bin/go\nprintf '%s\\n' '#!/bin/sh' 'exec /usr/local/go/bin/gofmt \"$@\"' > /usr/local/bin/gofmt\nchmod 755 /usr/local/bin/go /usr/local/bin/gofmt\nprintf '%s\\n' 'export PATH=/usr/local/bin:$PATH' 'export GOTOOLCHAIN=local' 'export GOPATH=/opt/go' 'export GOMODCACHE=/opt/go/pkg/mod' 'export GOCACHE=/opt/go/cache' 'export GOPROXY=https://proxy.golang.org,direct' 'export GOSUMDB=sum.golang.org' > /etc/profile.d/go.sh\nprintf '%s\\n' 'GOPATH=/opt/go' 'GOMODCACHE=/opt/go/pkg/mod' 'GOCACHE=/opt/go/cache' 'GOTOOLCHAIN=local' 'GOPROXY=https://proxy.golang.org,direct' 'GOSUMDB=sum.golang.org' > /etc/go/env\nrm -rf /var/lib/apt/lists/*",
-    "build_command": "GOPROXY=https://proxy.golang.org,direct GOFLAGS=-buildvcs=false FORCE_LOCALIZE=true make"
-  }
+    "build_command": "GOPROXY=https://proxy.golang.org,direct GOFLAGS=-buildvcs=false FORCE_LOCALIZE=true make",
+    "test_command_template": "python3 -m pytest {test_files}",
+    "workdir": "."
+  },
+  "status": "released"
 }

@@ -36,7 +36,7 @@ cd ..
 ./local_agents/run_smoke.sh codex
 
 set -a && source local_agents/codex.env && set +a
-cbrun --case case027 --backend codex --model "$MODEL"
+cbrun --case case001 --backend codex --model "$MODEL"
 ```
 
 Supported backends: `codex`, `opencode`, `claude-code`, `cursor`.
@@ -44,7 +44,7 @@ Supported backends: `codex`, `opencode`, `claude-code`, `cursor`.
 ## Harbor adapter
 
 ```bash
-zero2repo-harbor --case-id case027 --force
+zero2repo-harbor --case-id case001 --force
 # or
 zero2repo-harbor --all --force
 ```
@@ -80,7 +80,7 @@ otherwise the command from `test_manifest.json`, and writes
 ## Offline judge (no Docker)
 
 ```bash
-zero2repo-harbor --case-id case027 --force
+zero2repo-harbor --case-id case001 --force
 # Point FINAL_WORKSPACE at a workspace mirroring /app, then invoke final_judge
 # as documented in coding_bench_harbor/final_judge.py.
 ```

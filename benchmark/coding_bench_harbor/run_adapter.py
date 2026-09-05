@@ -4,7 +4,7 @@ Examples
 --------
 Build one case:
 
-    zero2repo-harbor --case-id case027
+    zero2repo-harbor --case-id case001
 
 Build every case under the cases root into a dataset directory:
 

@@ -1,13 +1,11 @@
 {
-  "schema_version": 3,
-  "case_id": "case029",
+  "schema_version": 1,
+  "case_id": "case003",
+  "frozen_at": "2026-09-01T04:40:48.976302+00:00",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "public": true,
   "runner": {
-    "schema_version": 1,
-    "language_label": "Python (setuptools, pytest, doctest)",
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3 python3-pip python3-setuptools && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest>=6.0.1' pytest-mock 'regex>=2021.8.3' defusedxml click 'joblib>=1.0.1' 'tqdm>=4.59.0' && rm -rf /var/lib/apt/lists/* && mkdir -p /opt/models && cp -a /opt/cb-cache/data/lingora-models/. /opt/models/ && python3 -c \"import base64,sys; exec(base64.b64decode('CmltcG9ydCBwYXRobGliLCBzaXRlLCBzeXNjb25maWcKYiA9ICIiImltcG9ydCBpbXBvcnRsaWIudXRpbCwgc3lzCk0gPSAnL29wdC9tb2RlbHMnCmNsYXNzIEY6CiAgICBkZWYgZmluZF9zcGVjKHNlbGYsIG4sIHA9Tm9uZSwgdD1Ob25lKToKICAgICAgICBpZiBub3Qgbi5lbmRzd2l0aCgnLmRhdGEnKToKICAgICAgICAgICAgcmV0dXJuIE5vbmUKICAgICAgICBzeXMubWV0YV9wYXRoLnJlbW92ZShzZWxmKQogICAgICAgIHRyeToKICAgICAgICAgICAgcyA9IGltcG9ydGxpYi51dGlsLmZpbmRfc3BlYyhuKQogICAgICAgIGZpbmFsbHk6CiAgICAgICAgICAgIHN5cy5tZXRhX3BhdGguaW5zZXJ0KDAsIHNlbGYpCiAgICAgICAgaWYgcyBpcyBOb25lIG9yIHMubG9hZGVyIGlzIE5vbmU6CiAgICAgICAgICAgIHJldHVybiBzCiAgICAgICAgTCA9IHMubG9hZGVyCiAgICAgICAgY2xhc3MgVzoKICAgICAgICAgICAgZGVmIGNyZWF0ZV9tb2R1bGUoc2VsZiwgc3BlYyk6CiAgICAgICAgICAgICAgICBmbiA9IGdldGF0dHIoTCwgJ2NyZWF0ZV9tb2R1bGUnLCBOb25lKQogICAgICAgICAgICAgICAgcmV0dXJuIGZuKHNwZWMpIGlmIGZuIGVsc2UgTm9uZQogICAgICAgICAgICBkZWYgZXhlY19tb2R1bGUoc2VsZiwgbSk6CiAgICAgICAgICAgICAgICBMLmV4ZWNfbW9kdWxlKG0pCiAgICAgICAgICAgICAgICBxID0gZ2V0YXR0cihtLCAncGF0aCcsIE5vbmUpCiAgICAgICAgICAgICAgICBpZiBpc2luc3RhbmNlKHEsIGxpc3QpIGFuZCBNIG5vdCBpbiBxOgogICAgICAgICAgICAgICAgICAgIHEuaW5zZXJ0KDAsIE0pCiAgICAgICAgcy5sb2FkZXIgPSBXKCkKICAgICAgICByZXR1cm4gcwpzeXMubWV0YV9wYXRoLmluc2VydCgwLCBGKCkpCiIiIgp0ID0gImltcG9ydCBjYl9tb2RlbHNfYm9vdHN0cmFwXG4iCmRpcnMgPSBsaXN0KHNpdGUuZ2V0c2l0ZXBhY2thZ2VzKCkgb3IgW10pCmRpcnMuYXBwZW5kKHN5c2NvbmZpZy5nZXRfcGF0aCgicHVyZWxpYiIpKQpkaXJzLmFwcGVuZCgiL3Vzci9saWIvcHl0aG9uMy9kaXN0LXBhY2thZ2VzIikKc2VlbiA9IHNldCgpCmZvciBkIGluIGRpcnM6CiAgICBpZiBub3QgZCBvciBkIGluIHNlZW46CiAgICAgICAgY29udGludWUKICAgIHNlZW4uYWRkKGQpCiAgICBwID0gcGF0aGxpYi5QYXRoKGQpCiAgICBwLm1rZGlyKHBhcmVudHM9VHJ1ZSwgZXhpc3Rfb2s9VHJ1ZSkKICAgIChwIC8gImNiX21vZGVsc19ib290c3RyYXAucHkiKS53cml0ZV90ZXh0KGIpCiAgICAocCAvICJjYl9tb2RlbHMucHRoIikud3JpdGVfdGV4dCh0KQo=').decode())\"",
-    "build_command": "",
-    "test_command_template": "PYTHONPATH=. python3 -m pytest {test_files}",
-    "workdir": "."
-  },
-  "status": "released"
+    "build_command": ""
+  }
 }

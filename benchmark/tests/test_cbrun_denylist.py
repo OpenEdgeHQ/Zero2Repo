@@ -195,8 +195,8 @@ def test_scan_workspace_imports_skips_cpp_line_comments(tmp_path: Path) -> None:
     assert hits == []
 
 
-def test_load_denylist_case027_allows_cuda_namespace() -> None:
-    case_dir = BENCHMARK_ROOT / "cases" / "case027"
+def test_load_denylist_case001_allows_cuda_namespace() -> None:
+    case_dir = BENCHMARK_ROOT / "cases" / "case001"
     if not (case_dir / "source" / "denylist.json").is_file():
         pytest.skip("denylist.json is not part of the public case bundle")
     spec = load_denylist(case_dir)
@@ -259,14 +259,14 @@ def test_validate_denylist_artifact_accepts_empty_import_ban_for_source_case() -
     assert errors == []
 
 
-def test_validate_denylist_artifact_accepts_case027_shape() -> None:
-    denylist_path = BENCHMARK_ROOT / "cases" / "case027" / "source" / "denylist.json"
+def test_validate_denylist_artifact_accepts_case001_shape() -> None:
+    denylist_path = BENCHMARK_ROOT / "cases" / "case001" / "source" / "denylist.json"
     if not denylist_path.is_file():
         pytest.skip("denylist.json is not part of the public case bundle")
     manifest = json.loads(
-        (BENCHMARK_ROOT / "cases" / "case027" / "source" / "manifest.json").read_text(
+        (BENCHMARK_ROOT / "cases" / "case001" / "source" / "manifest.json").read_text(
             encoding="utf-8",
         ),
     )
     payload = json.loads(denylist_path.read_text(encoding="utf-8"))
-    assert validate_denylist_artifact(payload, manifest, case_id="case027") == []
+    assert validate_denylist_artifact(payload, manifest, case_id="case001") == []

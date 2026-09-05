@@ -17,10 +17,10 @@ cp cursor.env.example cursor.env
 # edit each *.env — keys stay on your machine (gitignored)
 ```
 
-2. Ensure a case `:deliverable` image exists (CPU-only smoke default is `case027`):
+2. Ensure a case `:deliverable` image exists (CPU-only smoke default is `case001`):
 
 ```bash
-docker images codingbench-benchmark/case027:deliverable
+docker images codingbench-benchmark/case001:deliverable
 # If missing, pull or build the case :deliverable image first.
 ```
 
@@ -45,7 +45,7 @@ python local_agents/smoke.py --all
 
 For each backend the script verifies the **same container path cbrun uses**:
 
-1. Derive/reuse the `:agent` image for `case027`.
+1. Derive/reuse the `:agent` image for `case001`.
 2. Run agent **setup** (Codex writes `auth.json` / `config.toml`; Claude runs as `cbagent`).
 3. Ask the model to create `/app/smoke_probe.txt` with content `AGENT_OK`.
 4. Confirm the probe file exists and the agent CLI produced output.
@@ -58,7 +58,7 @@ case run:
 ```bash
 cd benchmark
 set -a && source local_agents/codex.env && set +a
-cbrun --case case027 --backend codex --model "$MODEL"
+cbrun --case case001 --backend codex --model "$MODEL"
 ```
 
 Repeat with the other env files and `--backend opencode` / `--backend claude-code`

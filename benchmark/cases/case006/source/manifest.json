@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "case_id": "case032",
+  "case_id": "case006",
   "runner": {
     "schema_version": 1,
     "language_label": "Python (setuptools, pytest)",

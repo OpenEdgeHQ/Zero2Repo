@@ -130,7 +130,7 @@ cd benchmark
 ```bash
 cd benchmark
 set -a && source local_agents/codex.env && set +a
-cbrun --case case027 --backend codex --model "$MODEL"
+cbrun --case case001 --backend codex --model "$MODEL"
 ```
 
 Results land under `benchmark/output/` (reward, logs, trajectories).

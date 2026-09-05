@@ -40,7 +40,7 @@ from cbrun.steps import discover_steps  # noqa: E402
 
 LOCAL_AGENTS = Path(__file__).resolve().parent
 BACKENDS = ("codex", "opencode", "claude-code", "cursor")
-SMOKE_CASE = "case027"
+SMOKE_CASE = "case001"
 SMOKE_INSTRUCTION = (
     "Smoke test only. Create the file /app/smoke_probe.txt whose entire content "
     "is exactly AGENT_OK (no quotes, no extra lines). Do not modify any other "

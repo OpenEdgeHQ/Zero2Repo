@@ -23,7 +23,7 @@ from coding_bench_harbor.adapter import (  # noqa: E402
 from coding_bench_harbor.run_adapter import _iter_case_dirs  # noqa: E402
 
 CASES_ROOT = BENCHMARK_ROOT / "cases"
-SAMPLE_CASE_ID = "case027"
+SAMPLE_CASE_ID = "case001"
 
 
 @pytest.mark.parametrize("name,expected", [

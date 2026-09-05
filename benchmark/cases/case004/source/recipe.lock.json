@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "case_id": "case030",
+  "case_id": "case004",
   "frozen_at": "2026-08-31T07:45:25.560973+00:00",
   "base_image": "codingbench-base/ubuntu:24.04",
   "public": true,

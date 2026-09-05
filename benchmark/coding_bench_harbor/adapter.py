@@ -45,7 +45,7 @@ CONTAINER_TESTS_FINAL = "/tests/final"
 
 # Released suite shipped under benchmark/cases/.
 RELEASED_CASE_IDS: frozenset[str] = frozenset(
-    f"case{i:03d}" for i in range(27, 33)
+    f"case{i:03d}" for i in range(1, 7)
 )
 
 

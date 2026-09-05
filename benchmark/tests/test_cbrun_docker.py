@@ -24,7 +24,7 @@ from cbrun.docker_env import Container, docker_available, image_exists  # noqa: 
 from cbrun.isolation import synthesize_task_toml  # noqa: E402
 from cbrun.steps import discover_steps  # noqa: E402
 
-ORACLE_CASE = "case028"  # CPU-only pytest acceptance; cheapest oracle.
+ORACLE_CASE = "case002"  # CPU-only pytest acceptance; cheapest oracle.
 GENERIC_JUDGE_IMAGE = "codingbench-base/ubuntu:24.04"
 
 
