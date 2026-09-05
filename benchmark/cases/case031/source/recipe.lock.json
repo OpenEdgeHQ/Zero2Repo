@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "case_id": "case031",
+  "frozen_at": "2026-09-02T09:33:11.500683+00:00",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "public": true,
+  "runner": {
+    "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest>=9.0.3' 'setuptools>=77.0' 'click>=5.0' ipython && rm -rf /var/lib/apt/lists/*",
+    "build_command": ""
+  }
+}

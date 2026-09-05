@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "case_id": "case030",
+  "frozen_at": "2026-08-31T07:45:25.560973+00:00",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "public": true,
+  "runner": {
+    "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl && (cd /tmp && curl -fsSLO https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz && echo \"855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec  node-v24.20.0-linux-x64.tar.gz\" | sha256sum -c - && rm -rf /opt/nodejs && mkdir -p /opt/nodejs && tar -xzf node-v24.20.0-linux-x64.tar.gz -C /opt/nodejs --strip-components=1 && rm -f node-v24.20.0-linux-x64.tar.gz) && ln -sfn /opt/nodejs/bin/node /usr/local/bin/node && ln -sfn /opt/nodejs/bin/npm /usr/local/bin/npm && ln -sfn /opt/nodejs/bin/npx /usr/local/bin/npx && ln -sfn /opt/nodejs/bin/corepack /usr/local/bin/corepack && mkdir -p /opt/npm-cache && npm config --location=global set cache /opt/npm-cache && rm -rf /var/lib/apt/lists/*",
+    "build_command": "npm ci --cache /opt/npm-cache --prefer-offline && npm run build"
+  }
+}

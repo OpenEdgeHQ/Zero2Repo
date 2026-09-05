@@ -1,0 +1,40 @@
+[project]
+name = "zero2repo"
+version = "0.1.0"
+description = "Evaluation harness for zero2repo bench (formerly CodingBench): Harbor adapter and hidden-test judge."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    # Writing task.toml. tomllib (stdlib) only reads TOML; we need a writer.
+    "tomli-w>=1.0.0",
+    "calllmcost @ file:../vendor/CalLLMCost",
+]
+
+[project.urls]
+Homepage = "https://bench.zero2repo.ai/"
+Repository = "https://github.com/OpenEdgeHQ/Zero2Repo"
+
+[project.optional-dependencies]
+# The Harbor engine itself. Kept optional so the adapter/judge can be installed
+# and unit-checked without pulling the full harness toolchain.
+harbor = ["harbor"]
+
+[project.scripts]
+cbrun = "cbrun.cli:main"
+zero2repo-harbor = "coding_bench_harbor.run_adapter:main"
+zero2repo-cost = "coding_bench_harbor.cost_report:main"
+coding-bench-harbor = "coding_bench_harbor.run_adapter:main"
+coding-bench-cost = "coding_bench_harbor.cost_report:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["coding_bench_harbor*", "cbrun*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: docker-gated integration tests that build/run case images",
+]

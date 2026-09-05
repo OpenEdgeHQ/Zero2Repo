@@ -1,0 +1,29 @@
+# Local agent credentials and overrides (copy from *.env.example).
+# This directory is for **your machine only** — never commit secrets.
+
+# Per-agent env files (create from examples):
+local_agents/codex.env
+local_agents/opencode.env
+local_agents/claude-code.env
+
+# Optional OpenCode provider config copied into the container during smoke tests:
+local_agents/opencode.json
+
+# Smoke run artifacts:
+local_agents/output/
+
+# Per-trial host cache (extracted hidden tests, denylist scratch):
+.cbrun_cache/
+
+# Dev-only case id mapping (do not publish):
+cases/_mapping.private.json
+
+# Private harness metadata (upstream denylist; not for public release):
+cases/*/source/denylist.json
+
+# Keep tracked templates and docs:
+!local_agents/*.env.example
+!local_agents/opencode.json.example
+!local_agents/README.md
+!local_agents/smoke.py
+!local_agents/run_smoke.sh

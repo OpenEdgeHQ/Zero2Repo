@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calllmcost"
+version = "0.2.0"
+description = "CalLLMCost: normalize LLM usage payloads and compute USD cost from a pinned 4-bucket pricing table (OpenRouter-aligned)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "CalLLMCost contributors" }]
+keywords = ["llm", "openrouter", "pricing", "tokens", "usage", "cost"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/Amorth/CalLLMCost"
+Repository = "https://github.com/Amorth/CalLLMCost"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+calllmcost = ["py.typed"]

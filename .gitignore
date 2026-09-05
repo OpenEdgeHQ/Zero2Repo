@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.env
+*.env
+!*.env.example
+benchmark/output/
+benchmark/local_agents/*.env
+benchmark/local_agents/*.bak*
+benchmark/.cbrun_cache/
+benchmark/cases/_mapping.private.json
+benchmark/cases/*/source/denylist.json
+.DS_Store

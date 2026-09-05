@@ -1,0 +1,206 @@
+{
+  "schema_version": 3,
+  "step": "final",
+  "test_files": [
+    "tests/F01_acceptance.py",
+    "tests/F02_acceptance.py",
+    "tests/F03_acceptance.py",
+    "tests/F04_acceptance.py",
+    "tests/F05_acceptance.py",
+    "tests/F06_acceptance.py",
+    "tests/F07_acceptance.py",
+    "tests/F08_acceptance.py",
+    "tests/F09_acceptance.py",
+    "tests/F10_acceptance.py",
+    "tests/F11_acceptance.py",
+    "tests/F12_acceptance.py",
+    "tests/F13_acceptance.py",
+    "tests/F14_acceptance.py",
+    "tests/F15_acceptance.py",
+    "tests/F16_acceptance.py",
+    "tests/F17_acceptance.py",
+    "tests/F18_acceptance.py"
+  ],
+  "support_files": [
+    "tests/_harness.py",
+    "tests/conftest.py"
+  ],
+  "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F05_acceptance.py tests/F06_acceptance.py tests/F07_acceptance.py tests/F08_acceptance.py tests/F09_acceptance.py tests/F10_acceptance.py tests/F11_acceptance.py tests/F12_acceptance.py tests/F13_acceptance.py tests/F14_acceptance.py tests/F15_acceptance.py tests/F16_acceptance.py tests/F17_acceptance.py tests/F18_acceptance.py",
+  "test_command_template": "python3 -m pytest {test_files}",
+  "workdir": ".",
+  "execution_groups": [
+    {
+      "feature_ids": [
+        "F01"
+      ],
+      "test_files": [
+        "tests/F01_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F01_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F02"
+      ],
+      "test_files": [
+        "tests/F02_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F02_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F03"
+      ],
+      "test_files": [
+        "tests/F03_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F03_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F04"
+      ],
+      "test_files": [
+        "tests/F04_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F04_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F05"
+      ],
+      "test_files": [
+        "tests/F05_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F05_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F06"
+      ],
+      "test_files": [
+        "tests/F06_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F06_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F07"
+      ],
+      "test_files": [
+        "tests/F07_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F07_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F08"
+      ],
+      "test_files": [
+        "tests/F08_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F08_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F09"
+      ],
+      "test_files": [
+        "tests/F09_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F09_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F10"
+      ],
+      "test_files": [
+        "tests/F10_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F10_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F11"
+      ],
+      "test_files": [
+        "tests/F11_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F11_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F12"
+      ],
+      "test_files": [
+        "tests/F12_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F12_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F13"
+      ],
+      "test_files": [
+        "tests/F13_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F13_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F14"
+      ],
+      "test_files": [
+        "tests/F14_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F14_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F15"
+      ],
+      "test_files": [
+        "tests/F15_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F15_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F16"
+      ],
+      "test_files": [
+        "tests/F16_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F16_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F17"
+      ],
+      "test_files": [
+        "tests/F17_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F17_acceptance.py"
+    },
+    {
+      "feature_ids": [
+        "F18"
+      ],
+      "test_files": [
+        "tests/F18_acceptance.py"
+      ],
+      "test_command": "python3 -m pytest tests/F18_acceptance.py"
+    }
+  ],
+  "execution_policy": {
+    "schema_version": 1,
+    "network": "none",
+    "product_immutable": true,
+    "build_owner": "runner",
+    "entrypoint": "test_command",
+    "run_dependencies": [
+      "python3",
+      "pytest"
+    ]
+  }
+}

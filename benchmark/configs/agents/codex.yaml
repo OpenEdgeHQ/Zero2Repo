@@ -1,0 +1,27 @@
+# Harbor job config: run zero2repo tasks with the Codex CLI agent.
+#
+# Uses CodingBenchCodex (image-baked codex + npm fallback; no nvm). It reads
+# OPENAI_API_KEY and, when set, writes OPENAI_BASE_URL into the Codex config so
+# you can point it at any OpenAI-compatible gateway. Bring your own credentials.
+#
+# Run from the benchmark/ directory after building tasks into ./output:
+#   python -m coding_bench_harbor.run_adapter --all --force
+#   OPENAI_API_KEY=... harbor run --config configs/agents/codex.yaml
+jobs_dir: jobs
+n_attempts: 1
+timeout_multiplier: 1.0
+orchestrator:
+  type: local
+  n_concurrent_trials: 1
+environment:
+  type: docker
+  force_build: true
+  delete: true
+  env:
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+agents:
+  - import_path: coding_bench_harbor.agents.codex:CodingBenchCodex
+    model_name: openai/gpt-5.5
+datasets:
+  - path: output
