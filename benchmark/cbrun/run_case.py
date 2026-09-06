@@ -109,6 +109,7 @@ def run_trial(
         cache_root=Path(cache_root),
         case_dir=case_dir,
         force=force_image,
+        backend=backend,
     )
 
     gpus = case.docker_gpus or None

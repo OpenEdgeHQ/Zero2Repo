@@ -1,12 +1,17 @@
-"""Per-case ``:agent`` image derivation and hidden-test extraction.
+"""Per-case ``:deliverable`` / ``:agent`` image derivation.
 
-For each case cbrun derives an ``:agent`` image from the published GT-free
-``:deliverable`` image by (1) extracting ``/tests/final`` to a host-side cache,
-(2) installing the agent CLIs (pinned where configured), and (3) physically
-removing ``/tests/final`` in a new image layer. The solve container is started
-from this ``:agent`` image, so the hidden tests are absent from the solve
-filesystem entirely (not merely deleted at runtime), and are re-injected only
-for the judge phase.
+When ``:deliverable`` is missing, cbrun rebuilds it from the shared
+``codingbench-base/*`` image plus ``source/recipe.lock.json`` (env-install-only:
+toolchain, public specs, hidden tests, empty ``/app``). Callers that clone the
+repo therefore do not need a per-case image tarball.
+
+From that ``:deliverable``, cbrun derives an ``:agent`` image by (1) extracting
+``/tests/final`` to a host-side cache, (2) installing the requested backend
+CLI (or all built-in CLIs when no backend is given), and (3) physically
+removing ``/tests/final`` in a new image layer. Per-backend images are tagged
+``:agent-<backend>`` so a Cursor trial does not pull unused npm CLIs. The solve container is started from this ``:agent`` image, so the hidden
+tests are absent from the solve filesystem entirely (not merely deleted at
+runtime), and are re-injected only for the judge phase.
 
 Note on a shared CLI base: the published ``:deliverable`` images have
 heterogeneous bases (e.g. ``python:3.13-slim`` vs ``cuda:13.0-devel-ubuntu24.04``),
@@ -47,7 +52,9 @@ def deliverable_tag(case_id: str) -> str:
     return f"codingbench-benchmark/{case_id}:deliverable"
 
 
-def agent_tag(case_id: str) -> str:
+def agent_tag(case_id: str, backend: str | None = None) -> str:
+    if backend:
+        return f"codingbench-benchmark/{case_id}:agent-{backend}"
     return f"codingbench-benchmark/{case_id}:agent"
 
 
@@ -114,10 +121,14 @@ def _node_install_snippet() -> str:
     )
 
 
-def _cli_install_snippet(environ: dict[str, str] | None) -> str:
+def _cli_install_snippet(environ: dict[str, str] | None, backend: str | None = None) -> str:
+    if backend == "cursor":
+        return agents.cli_install_command("cursor", environ)
+    if backend is not None:
+        return agents.cli_install_command(backend, environ)
     pkgs = []
-    for backend, (pkg, _env_key) in agents._CLI_PACKAGES.items():
-        pkgs.append(pkg + agents.cli_version_spec(backend, environ))
+    for name, (pkg, _env_key) in agents._CLI_PACKAGES.items():
+        pkgs.append(pkg + agents.cli_version_spec(name, environ))
     pkg_args = " ".join(pkgs)
     return (
         f"npm install -g {pkg_args} && "
@@ -144,15 +155,24 @@ def _build_dockerfile(
     environ: dict[str, str] | None,
     *,
     denylist_snippet: str = "",
+    backend: str | None = None,
 ) -> str:
     denylist_block = ""
     if denylist_snippet:
         denylist_block = f"RUN mkdir -p /opt/cbrun/bin\n{denylist_snippet}"
+    cli = _cli_install_snippet(environ, backend)
+    # Cursor installs from the official script; other backends need npm.
+    if backend == "cursor":
+        install = f"RUN set -eux; {cli}; {_agent_user_snippet()}\n"
+    else:
+        install = (
+            f"RUN set -eux; {_node_install_snippet()}; {cli}; "
+            f"{_agent_user_snippet()}\n"
+        )
     return (
         f"FROM {deliverable_image}\n"
         "USER root\n"
-        f"RUN set -eux; {_node_install_snippet()}; {_cli_install_snippet(environ)}; "
-        f"{_agent_user_snippet()}\n"
+        f"{install}"
         f"{denylist_block}"
         f"RUN set -eux; {_AGENT_APP_SANITIZE}; rm -rf {CONTAINER_TESTS_FINAL}\n"
     )
@@ -166,6 +186,7 @@ def ensure_agent_image(
     deliverable_image: str | None = None,
     force: bool = False,
     environ: dict[str, str] | None = None,
+    backend: str | None = None,
 ) -> AgentImage:
     """Build (or reuse) the ``:agent`` image and extract hidden tests.
 
@@ -173,13 +194,17 @@ def ensure_agent_image(
     ``force`` is False, returns immediately.
     """
     deliverable = deliverable_image or deliverable_tag(case_id)
-    if not image_exists(deliverable):
-        raise RuntimeError(
-            f"deliverable image not found: {deliverable}. Build or pull the "
-            "GT-free :deliverable image first."
-        )
+    if not image_exists(deliverable) or (force and case_dir is not None):
+        if case_dir is None:
+            raise RuntimeError(
+                f"deliverable image not found: {deliverable}. Pass case_dir so "
+                "cbrun can rebuild it from recipe.lock + the shared base image."
+            )
+        from .recipe_image import ensure_deliverable_image
 
-    tag = agent_tag(case_id)
+        deliverable = ensure_deliverable_image(case_dir, force=force)
+
+    tag = agent_tag(case_id, backend)
     tests_cache = Path(cache_root) / case_id / "tests"
     final_dir = tests_cache / "final"
 
@@ -195,18 +220,20 @@ def ensure_agent_image(
         denylist_snippet = ""
         if case_dir is not None:
             denylist_snippet = write_shim_assets(build_ctx, case_dir / "source" / "denylist.json")
-        dockerfile = _build_dockerfile(deliverable, environ, denylist_snippet=denylist_snippet)
+        dockerfile = _build_dockerfile(
+            deliverable, environ, denylist_snippet=denylist_snippet, backend=backend
+        )
         df_path = build_ctx / "Dockerfile"
         df_path.write_text(dockerfile, encoding="utf-8")
+        print(
+            f"[cbrun] building agent image {tag} (cli={backend or 'all'})",
+            flush=True,
+        )
         build = subprocess.run(
             ["docker", "build", "-t", tag, "-f", str(df_path), ctx],
-            capture_output=True,
-            text=True,
         )
         if build.returncode != 0:
-            raise RuntimeError(
-                f"docker build of {tag} failed:\n{build.stdout[-2000:]}\n{build.stderr[-2000:]}"
-            )
+            raise RuntimeError(f"docker build of {tag} failed (exit {build.returncode})")
     return AgentImage(case_id, deliverable, tag, tests_cache)
 
 

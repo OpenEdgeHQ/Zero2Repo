@@ -157,7 +157,9 @@ def run_smoke(
     case_dir = _case_dir(case_id, cases_root)
     case = load_case(case_dir)
     step = discover_steps(case)[0]
-    image = ensure_agent_image(case_id, cache_root=cache_root, case_dir=case_dir)
+    image = ensure_agent_image(
+        case_id, cache_root=cache_root, case_dir=case_dir, backend=backend
+    )
     invocation = resolve_agent(backend=backend, model=model, environ=os.environ)
 
     out_dir = out_root / backend

@@ -54,6 +54,23 @@ def test_agent_dockerfile_clears_app_workspace() -> None:
     assert "rm -rf /tests/final" in df
 
 
+def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
+    from cbrun.images import _build_dockerfile, agent_tag  # noqa: WPS433
+
+    df = _build_dockerfile(
+        "codingbench-benchmark/case001:deliverable",
+        None,
+        backend="cursor",
+    )
+    assert "cursor.com/install" in df
+    assert "@openai/codex" not in df
+    assert "opencode-ai" not in df
+    assert "@anthropic-ai/claude-code" not in df
+    assert "setup_22.x" not in df
+    assert agent_tag("case001", "cursor") == "codingbench-benchmark/case001:agent-cursor"
+    assert agent_tag("case001") == "codingbench-benchmark/case001:agent"
+
+
 # --- judge wiring: report parsing and judge_error classification -------------
 
 class _FakeContainer:

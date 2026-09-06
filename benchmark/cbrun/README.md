@@ -179,6 +179,9 @@ multi-step support can be added later. Multi-step development orchestration is
 ## Usage
 
 ```bash
+# Rebuild :deliverable from recipe.lock + shared base (no model needed)
+cbrun --case case001 --build-images
+
 # One case, one backend
 cbrun --case case001 --backend codex --model openai/gpt-5.5
 
@@ -205,8 +208,11 @@ version when available.
 
 ## Pipeline (per trial)
 
-1. Derive/reuse the `:agent` image (extract hidden tests to host cache, install
-   pinned CLIs, create `cbagent` user, `rm -rf /tests/final`). Idempotent.
+1. If `:deliverable` is missing, rebuild it from the shared `codingbench-base/*`
+   image plus `source/recipe.lock.json` (install toolchain, copy public specs and
+   hidden tests, leave `/app` empty). Then derive/reuse the `:agent` image
+   (extract hidden tests to host cache, install pinned CLIs, create `cbagent`
+   user, `rm -rf /tests/final`). Idempotent.
 2. Start a GT-free container (`--gpus` only when the case needs it, host network
    for model APIs, **never** the Docker socket).
 3. Inject the instruction; **setup** agent auth/config; **chown** `/app` (+ HOME

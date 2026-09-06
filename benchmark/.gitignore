@@ -5,6 +5,7 @@
 local_agents/codex.env
 local_agents/opencode.env
 local_agents/claude-code.env
+local_agents/cursor.env
 
 # Optional OpenCode provider config copied into the container during smoke tests:
 local_agents/opencode.json

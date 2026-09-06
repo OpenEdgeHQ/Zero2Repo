@@ -118,6 +118,18 @@ cp codex.env.example codex.env          # set OPENAI_API_KEY / MODEL
 # or: cp cursor.env.example cursor.env
 ```
 
+### Build case images from recipe (no per-case download)
+
+Each case ships `source/recipe.lock.json`. With the shared
+`codingbench-base/*` image already loaded, cbrun rebuilds
+`:deliverable` locally:
+
+```bash
+cd benchmark
+cbrun --case case001 --build-images
+# or, on the first trial, cbrun builds it automatically
+```
+
 ### Smoke-test the container wiring
 
 ```bash

@@ -57,7 +57,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="Path to a local AgentSpec file (.json or .yaml). Mutually exclusive with --backend.",
     )
-    parser.add_argument("--model", required=True, help="Model id (e.g. openai/gpt-5.5).")
+    parser.add_argument("--model", help="Model id (e.g. openai/gpt-5.5). Required unless --build-images.")
+    parser.add_argument(
+        "--build-images",
+        action="store_true",
+        help="Build :deliverable from recipe.lock + shared base image, then exit.",
+    )
     parser.add_argument("--cases-root", type=Path, default=_default_cases_root())
     parser.add_argument(
         "--out",
@@ -73,7 +78,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--agent-timeout-sec", type=float, default=DEFAULT_AGENT_TIMEOUT_SEC)
     parser.add_argument("--test-timeout-sec", type=float, default=DEFAULT_TEST_TIMEOUT_SEC)
     parser.add_argument("--timeout-multiplier", type=float, default=1.0)
-    parser.add_argument("--force-image", action="store_true", help="Rebuild :agent images.")
+    parser.add_argument(
+        "--force-image",
+        action="store_true",
+        help="Rebuild :deliverable (from recipe) and :agent images.",
+    )
     parser.add_argument(
         "--allow-leakage",
         action="store_true",
@@ -148,6 +157,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if not case_dirs:
         print(f"error: no cases found under {args.cases_root}", file=sys.stderr)
+        return 2
+
+    if args.build_images:
+        from .recipe_image import ensure_deliverable_image
+
+        failed = 0
+        for case_dir in case_dirs:
+            print(f"[cbrun] build-images {case_dir.name} ...", file=sys.stderr)
+            try:
+                tag = ensure_deliverable_image(case_dir, force=args.force_image)
+            except Exception as exc:  # noqa: BLE001 - keep the matrix going
+                print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            print(tag)
+        return 1 if failed else 0
+
+    if not args.model:
+        print("error: --model is required unless --build-images", file=sys.stderr)
         return 2
 
     limits = resolve_limits(
