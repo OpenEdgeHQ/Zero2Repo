@@ -73,6 +73,94 @@ def test_build_task_uses_single_prd_document(tmp_path: Path) -> None:
     prd_body = full_prd.read_text(encoding="utf-8")
     assert prd_body in instruction
     assert "# Interface Contract" in instruction
+    assert "cmake -G Ninja -B build" in instruction
+    assert "does **not** run any install or build" in instruction
+    assert "/tests/final" not in instruction
+
+
+def _write_minimal_case(
+    root: Path,
+    *,
+    build_command: str,
+    sensitive_terms: list[str],
+) -> Path:
+    case = root / "leakcase"
+    (case / "source").mkdir(parents=True)
+    (case / "public").mkdir()
+    tests_dir = case / "milestones" / "final" / "tests"
+    tests_dir.mkdir(parents=True)
+    (case / "public" / "Full_PRD.md").write_text("A harmless PRD.\n")
+    (case / "public" / "Interface_Contract.md").write_text("A harmless contract.\n")
+    (tests_dir / "test_dummy.py").write_text("def test_ok():\n    assert True\n")
+    (case / "source" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "case_id": "leakcase",
+                "sensitive_terms": sensitive_terms,
+                "runner": {
+                    "schema_version": 1,
+                    "language_label": "python",
+                    "install_command": "",
+                    "build_command": build_command,
+                    "test_command_template": "python3 -m pytest {test_files}",
+                    "workdir": ".",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (case / "milestones" / "final" / "test_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "step": "final",
+                "test_files": ["tests/test_dummy.py"],
+                "test_command": "python3 -m pytest {test_files}",
+                "workdir": ".",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return case
+
+
+def test_build_task_rejects_leak_in_build_command(tmp_path: Path) -> None:
+    from coding_bench_harbor.adapter import AdapterError, build_task
+
+    case_dir = _write_minimal_case(
+        tmp_path,
+        build_command="make UNIQUE_LEAK_TOKEN_XYZ",
+        sensitive_terms=["UNIQUE_LEAK_TOKEN_XYZ"],
+    )
+    with pytest.raises(AdapterError, match="UNIQUE_LEAK_TOKEN_XYZ"):
+        build_task(
+            case_dir,
+            tmp_path / "out",
+            force=True,
+            allow_leakage=False,
+            require_released=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["case001", "case002", "case003", "case004", "case005", "case006"],
+)
+def test_harbor_instruction_surfaces_case_build_command(case_id: str) -> None:
+    from coding_bench_harbor.adapter import _build_instruction
+
+    assets = discover_case(CASES_ROOT / case_id, require_gt=False)
+    contract = assets.contract_path.read_text(encoding="utf-8")
+    out = _build_instruction(assets, contract)
+    cmd = assets.runner.build_command.strip()
+    if cmd:
+        assert cmd in out
+        assert "no build step" not in out
+    else:
+        assert "no build step" in out
+    assert "/tests/final" not in out
+    assert "does **not** run any install or build" in out
 
 
 def test_build_task_creates_final_tests_and_acceptance_script(tmp_path: Path) -> None:

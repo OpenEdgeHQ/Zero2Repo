@@ -65,8 +65,8 @@ def _probe_cli_version(container: Container, spec_name: str) -> str | None:
 
 
 def _check_public_leakage(case: CaseSpec, *, allow_leakage: bool) -> None:
-    """Fail fast when public PRD/Contract contain case sensitive terms."""
-    full_text = f"{case.prd_text}\n{case.contract_text}"
+    """Fail fast when public PRD/Contract/build_command contain sensitive terms."""
+    full_text = f"{case.prd_text}\n{case.contract_text}\n{case.build_command}"
     hits = scan_leakage(full_text, case.sensitive_terms)
     if not hits or allow_leakage:
         return
@@ -362,6 +362,8 @@ def _run_step(
         step.prd_text,
         step.contract_text,
         hardware_text=case.hardware_text,
+        build_command=case.build_command,
+        workdir=case.workdir,
     )
     _inject_instruction(container, base_instruction, invocation)
 

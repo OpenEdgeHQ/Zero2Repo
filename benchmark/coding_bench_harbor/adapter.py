@@ -72,13 +72,46 @@ below, from scratch, in your current working directory. Implement every step of
 the development plan so that the finished project fully satisfies the
 specification.
 
-When you are done, the project must be importable and installable from the
-current working directory (for example via `pip install -e .`, or by being
-importable from the working directory root).
+When you are done, the workspace must be in a state the hidden tests can use
+directly. See the Build contract below for whether a build step is required
+and where outputs must remain.
 
 ---
 
 """
+
+
+def build_contract_notes(build_command: str, workdir: str = ".") -> str:
+    """Tell the agent how the judge locates build outputs. Judge never builds."""
+    cmd = (build_command or "").strip()
+    wd = (workdir or ".").strip() or "."
+    header = (
+        "## Build contract\n\n"
+        "* The judge does **not** run any install or build step for you. "
+        "The hidden acceptance tests run against your final `/app` exactly as "
+        "you leave it.\n"
+    )
+    if not cmd:
+        return (
+            header
+            + "* There is no build step for this project: the hidden tests "
+            "import / run it directly from the `/app` source root.\n"
+        )
+    workdir_line = ""
+    if wd != ".":
+        workdir_line = (
+            f"* The hidden tests run with `/app/{wd}` as their working "
+            "directory.\n"
+        )
+    return (
+        header
+        + "* They locate build outputs where this command would place them "
+        "when run from the `/app` root:\n\n"
+        f"  `{cmd}`\n\n"
+        "  Leave those outputs in place before you submit. Do not clean the "
+        "build tree.\n"
+        + workdir_line
+    )
 
 
 class AdapterError(RuntimeError):
@@ -332,6 +365,10 @@ def _full_prd_text(case: "CaseAssets") -> str:
 
 def _build_instruction(case: CaseAssets, contract_text: str | None = None) -> str:
     parts = [_INSTRUCTION_PREAMBLE]
+    parts.append(
+        build_contract_notes(case.runner.build_command, case.runner.workdir)
+    )
+    parts.append("\n")
     parts.append("# Product Requirements Document\n\n")
     parts.append(_full_prd_text(case))
     parts.append("\n\n")
@@ -464,6 +501,8 @@ def build_task(
 
     prd_text = _full_prd_text(case)
     full_text = prd_text + ("\n" + contract_text if contract_text else "")
+    if case.runner.build_command:
+        full_text = f"{full_text}\n{case.runner.build_command}"
     hits = scan_leakage(full_text, case.sensitive_terms)
     if hits:
         summary = ", ".join(f"{h.term} (x{h.occurrences})" for h in hits)

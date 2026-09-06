@@ -12,19 +12,25 @@ benchmark asset, never an agent output.
 
 * **Input** the agent sees: the PRD (`/environment/prd/Full_PRD.md`) and the
   Interface Contract (`/environment/Interface_Contract.md`), both also embedded
-  in the instruction prompt. The agent's workspace `/app` starts empty.
-* **Output** the agent produces: the implementation in `/app`, importable /
-  installable from the workspace root.
+  in the instruction prompt, plus the case `build_command` (when non-empty)
+  as the Build contract. The agent's workspace `/app` starts empty.
+* **Output** the agent produces: the implementation in `/app`. When the case
+  has a `build_command`, leave the outputs that command would produce; the
+  judge does not rebuild.
 * **Scoring**: after a valid submit file is present, the runner copies only
-  `/app` into a fresh judge container and injects the hidden suite. Reward is 1
+  `/app` into a fresh judge container and injects the hidden suite. The judge
+  does **not** execute `install_command` or `build_command`. Reward is 1
   only after the suite is collected and executed and every test passes. CLI
   exit 0 alone is not a submit and not a pass.
 
 The guiding invariant is *information completeness*: the provided environment
-(empty `/app` + PRD + Interface Contract) must be theoretically sufficient for an
-ideal agent to pass the hidden tests. If a case's `test_command` depends on build
-scaffolding the spec never declares, that is a **case spec defect** — fix the
-case, never patch it in the runner.
+(empty `/app` + PRD + Interface Contract + the declared `build_command` when
+present) must be theoretically sufficient for an ideal agent to pass the hidden
+tests. The runner must show `build_command` to the agent; it is public text and
+must not contain recipe-only flags that only the original repository understands.
+If that command still cannot imply a path the hidden harness hard-codes, that is
+a **case spec defect** — fix the case, never patch a per-case path into the
+runner.
 
 ## Fairness: visible checks vs hidden gates
 
@@ -227,7 +233,7 @@ version when available.
 ## Reused components
 
 * `coding_bench_harbor.adapter`: case discovery, `CaseAssets`, the from-scratch
-  `_INSTRUCTION_PREAMBLE`, runner normalization.
+  `_INSTRUCTION_PREAMBLE`, `build_contract_notes`, runner normalization.
 * `coding_bench_harbor.final_judge`: the scoring engine (single source of truth,
   shared with the Harbor adapter).
 

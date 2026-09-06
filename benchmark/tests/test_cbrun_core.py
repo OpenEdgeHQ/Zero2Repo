@@ -64,6 +64,68 @@ def test_instruction_does_not_leak_hidden_test_paths() -> None:
     out = instr_mod.build_instruction("prd", "contract")
     assert "/tests/final" not in out
     assert "test_manifest" not in out
+    assert "no build step" in out
+    assert "pip install -e ." not in out
+
+
+def test_instruction_includes_nonempty_build_command() -> None:
+    cmd = "cmake -G Ninja -B build && cmake --build build"
+    out = instr_mod.build_instruction(
+        "PRD BODY",
+        "CONTRACT BODY",
+        build_command=cmd,
+        workdir=".",
+    )
+    assert cmd in out
+    assert "does **not** run any install or build" in out
+    assert "no build step" not in out
+    assert "You must run this exact command" not in out
+
+
+def test_instruction_states_test_workdir_only_when_not_root() -> None:
+    root = instr_mod.build_instruction(
+        "P", "C", build_command="make", workdir="."
+    )
+    assert "as their working directory" not in root
+    assert "from the `/app` root" in root
+
+    nested = instr_mod.build_instruction(
+        "P", "C", build_command="make", workdir="src"
+    )
+    assert "`/app/src` as their working directory" in nested
+    assert "from the `/app` root" in nested
+
+
+def test_instruction_empty_build_command_declares_no_build_step() -> None:
+    out = instr_mod.build_instruction(
+        "PRD BODY", "CONTRACT BODY", build_command="", workdir="."
+    )
+    assert "no build step" in out
+    assert "does **not** run any install or build" in out
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["case001", "case002", "case003", "case004", "case005", "case006"],
+)
+def test_instruction_surfaces_each_case_build_command(case_id: str) -> None:
+    from cbrun.assets import load_case
+
+    case = load_case(BENCHMARK_ROOT / "cases" / case_id)
+    out = instr_mod.build_instruction(
+        "PRD",
+        "CONTRACT",
+        build_command=case.build_command,
+        workdir=case.workdir,
+    )
+    cmd = case.build_command.strip()
+    if cmd:
+        assert cmd in out
+        assert "no build step" not in out
+    else:
+        assert "no build step" in out
+    assert "/tests/final" not in out
+    assert "does **not** run any install or build" in out
 
 
 # --- limits -------------------------------------------------------------------
@@ -149,6 +211,8 @@ def _make_case(
     workdir: str = ".",
     test_manifest: dict | None = None,
     tmp_path: Path,
+    build_command: str = "",
+    sensitive_terms: list[str] | None = None,
 ) -> CaseSpec:
     from types import SimpleNamespace
 
@@ -162,9 +226,9 @@ def _make_case(
         language="python",
         prd_text="PRD",
         contract_text="CONTRACT",
-        sensitive_terms=[],
+        sensitive_terms=list(sensitive_terms or []),
         install_command=install_command,
-        build_command="",
+        build_command=build_command,
         test_command=test_command,
         workdir=workdir,
         docker_image="",
@@ -223,6 +287,21 @@ def test_synthesize_task_toml_round_trips(tmp_path: Path) -> None:
     assert runner["workdir"] == "src"
     assert doc["metadata"]["case_id"] == "demo-001"
     assert doc["metadata"]["judge_mode"] == "final_tests"
+
+
+def test_check_public_leakage_rejects_term_in_build_command(tmp_path: Path) -> None:
+    from cbrun.assets import AdapterError
+    from cbrun.run_case import _check_public_leakage
+
+    case = _make_case(
+        install_command="",
+        tmp_path=tmp_path,
+        build_command="make UNIQUE_LEAK_TOKEN_XYZ",
+        sensitive_terms=["UNIQUE_LEAK_TOKEN_XYZ"],
+    )
+    with pytest.raises(AdapterError, match="UNIQUE_LEAK_TOKEN_XYZ"):
+        _check_public_leakage(case, allow_leakage=False)
+    _check_public_leakage(case, allow_leakage=True)
 
 
 # --- results ------------------------------------------------------------------

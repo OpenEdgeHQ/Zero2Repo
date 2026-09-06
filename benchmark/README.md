@@ -71,6 +71,7 @@ downgrade that to a warning.
 | `public/Full_PRD.md` | `instruction.md` + `environment/prd/Full_PRD.md` | yes |
 | `public/Interface_Contract.md` | `instruction.md` + `environment/Interface_Contract.md` | yes |
 | `public/Hardware_Requirements.md` | `environment/Hardware_Requirements.md` | yes |
+| `source/manifest.json` `runner.build_command` | `instruction.md` (Build contract) | yes (when non-empty) |
 | `milestones/final/` acceptance | `tests/final/` | no (judge only) |
 
 After the agent exits, `final_judge.py` runs `run_acceptance.sh` when present,

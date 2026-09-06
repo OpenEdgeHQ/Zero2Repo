@@ -10,7 +10,7 @@ a wall-clock limit, and the visible-vs-hidden test boundary.
 
 from __future__ import annotations
 
-from coding_bench_harbor.adapter import _INSTRUCTION_PREAMBLE
+from coding_bench_harbor.adapter import _INSTRUCTION_PREAMBLE, build_contract_notes
 
 from .submit import CONTAINER_SUBMIT_PATH, SUBMIT_TOKEN
 
@@ -34,8 +34,8 @@ def _environment_notes(*, has_hardware: bool) -> str:
 ## Your environment
 
 * Your workspace is `{WORKSPACE_CONTAINER_PATH}` (your current working directory).
-  Build the project here so it is importable / installable from this directory
-  root (for example `pip install -e .`, or importable from the root).
+  Build the project here. See the Build contract below for how the judge
+  locates outputs.
 * The full specification is also available as files inside the container:
   the PRD at `{PRD_CONTAINER_PATH}` and the Interface Contract at
   `{CONTRACT_CONTAINER_PATH}` (identical to the text below).
@@ -86,16 +86,21 @@ def build_instruction(
     contract_text: str,
     *,
     hardware_text: str | None = None,
+    build_command: str = "",
+    workdir: str = ".",
 ) -> str:
     """Assemble the full agent prompt from the public spec.
 
-    Order: shared from-scratch preamble, cbrun environment/scoring notes, then
-    the verbatim PRD and Interface Contract. No hidden-test content is included.
-    Optional hardware requirements are appended when provided.
+    Order: shared from-scratch preamble, cbrun environment/scoring notes, the
+    build contract, then the verbatim PRD and Interface Contract. No
+    hidden-test content is included. Optional hardware requirements are
+    appended when provided.
     """
     hw = (hardware_text or "").strip()
     parts: list[str] = [_INSTRUCTION_PREAMBLE.rstrip(), "\n\n"]
     parts.append(_environment_notes(has_hardware=bool(hw)).rstrip())
+    parts.append("\n\n")
+    parts.append(build_contract_notes(build_command, workdir).rstrip())
     parts.append("\n\n---\n\n")
     parts.append("# Product Requirements Document\n\n")
     parts.append(prd_text.strip())
