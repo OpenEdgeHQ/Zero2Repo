@@ -36,7 +36,7 @@ Inspect and mutate on a successful `hrefparse::url_aggregator` compile as follow
 
 URL Search Params is the type `hrefparse::url_search_params`. Callers construct it from a `std::string_view`. Methods compile as follows. Pair count is `size`, assigned to `size_t`. Serialize is `to_string`, stored in a `std::string`. First-value lookup is `get` with a `std::string` key; the result is optional-like (`has_value`, then unary `*`). All-values lookup is `get_all` with a `std::string` key; the result is vector-like (`size` and `[]`). Presence is `has` in a one-argument (key) form and a two-argument (key, value) form, both used as bool. Writers `append` and `set` take two `std::string` arguments. `remove` compiles as one-argument (key) and two-argument (key, value). `sort` takes no argument. `reset` takes a `std::string` query. Iterators `get_keys`, `get_values`, and `get_entries` take no argument; callers walk with `has_next` and `next` where `next` is optional-like (`has_value`, then unary `*`). An entries item exposes `first` and `second`.
 
-URLPattern is the class template `hrefparse::url_pattern` on the caller-supplied engine. A successful compile is observed by treating `tl::expected` of `hrefparse::url_pattern` as true and then using `operator->`. Methods compile as follows. Regexp-group report is `has_regexp_groups`, used as bool. Compiled component pattern strings are `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, used as `std::string_view`. `test` compiles as `std::string_view` plus a null pointer, and as `hrefparse::url_pattern_init` plus a null pointer; the return is `hrefparse::result` of bool (boolean conversion, then unary `*`). `exec` compiles the same two overloads; the return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result` (a failed result is unexpected; empty optional is no-match; filled optional is a match). Callers default-construct `hrefparse::url_pattern_init` and assign protocol, username, password, hostname, port, pathname, search, hash, and `base_url` from `std::string`. Callers default-construct `hrefparse::url_pattern_options` and write public member `ignore_case`. A successful `exec` unwraps `hrefparse::url_pattern_result` with those eight component members, each an `hrefparse::url_pattern_component_result` exposing `input` and `groups` (sized; range-for of pair: `first` name, `second` optional-like with `has_value` then unary `*`). Remaining method-level defaults belong with those symbols.
+URLPattern is the class template `hrefparse::url_pattern` on the caller-supplied engine. A successful compile is observed by treating `tl::expected` of `hrefparse::url_pattern` as true and then using `operator->`. Callers default-construct that `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`, then assign the return of `hrefparse::parse_url_pattern`. Methods compile as follows. Regexp-group report is `has_regexp_groups`, used as bool. Compiled component pattern strings are `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, used as `std::string_view`. `test` compiles as `std::string_view` plus a null pointer, and as `hrefparse::url_pattern_init` plus a null pointer; the return is `hrefparse::result` of bool (boolean conversion, then unary `*`). `exec` compiles the same two overloads; the return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result` (a failed result is unexpected; empty optional is no-match; filled optional is a match). Callers default-construct those `hrefparse::result` objects, then assign the returns of `test` and `exec`. Callers default-construct `hrefparse::url_pattern_init` and assign protocol, username, password, hostname, port, pathname, search, hash, and `base_url` from `std::string`. Callers default-construct `hrefparse::url_pattern_options` and write public member `ignore_case`. A successful `exec` unwraps `hrefparse::url_pattern_result` with those eight component members, each an `hrefparse::url_pattern_component_result` exposing `input` and `groups` (sized; range-for of pair: `first` name, `second` optional-like with `has_value` then unary `*`). Remaining method-level defaults belong with those symbols.
 
 **C interface.** C callers include `hrefparse_c.h` and link the same library (the implementation needs the C++ standard library; linking with a C++ driver is the usual way to satisfy that). The C type `hrefparse_url` is an opaque handle. Every handle returned by a parse entry is released with `hrefparse_free`. View strings use `hrefparse_string` (`data`, `length`) and remain valid only while the underlying `hrefparse_url` is unchanged. Owned strings use `hrefparse_owned_string` (`data`, `length`) and are released with `hrefparse_free_owned_string`. Among C component readers, `hrefparse_get_origin` is the owned-string exception: it returns `hrefparse_owned_string` and is released with `hrefparse_free_owned_string`; the other named C readers return `hrefparse_string` views.
 
@@ -109,7 +109,7 @@ C readers: `hrefparse_get_href`, `hrefparse_get_origin`, `hrefparse_get_protocol
 
 **Special schemes.** The finite special-scheme set is exactly `ftp`, `file`, `http`, `https`, `ws`, and `wss`. Any other scheme is non-special.
 
-**URLPattern.** C++ parse entry `hrefparse::parse_url_pattern` (function template on the caller-supplied engine). Compiled type `hrefparse::url_pattern`. Initializer `hrefparse::url_pattern_init` (component members protocol, username, password, hostname, port, pathname, search, hash, plus `base_url`). Options `hrefparse::url_pattern_options` (member `ignore_case`). Compile result is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Methods: `has_regexp_groups`, `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, `test`, `exec`. Execute result `hrefparse::url_pattern_result` of eight `hrefparse::url_pattern_component_result` members (`input`, `groups`). Engine: `regex_type`; static `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type` (`std::nullopt` is compile failure); static `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`; static `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool. The compile definition `HREFPARSE_USE_UNSAFE_STD_REGEX_PROVIDER` exposes a `std::regex`-backed provider; it is not a safe default for untrusted patterns.
+**URLPattern.** C++ parse entry `hrefparse::parse_url_pattern` (function template on the caller-supplied engine). Compiled type `hrefparse::url_pattern`. Initializer `hrefparse::url_pattern_init` (component members protocol, username, password, hostname, port, pathname, search, hash, plus `base_url`). Options `hrefparse::url_pattern_options` (member `ignore_case`). Compile result is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`; callers default-construct that expected and assign the parse return. Methods: `has_regexp_groups`, `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, `test`, `exec`. Callers default-construct `hrefparse::result` of bool and `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`, then assign the returns of `test` and `exec`. Execute result `hrefparse::url_pattern_result` of eight `hrefparse::url_pattern_component_result` members (`input`, `groups`). Engine: `regex_type`; static `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type` (`std::nullopt` is compile failure); static `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`; static `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool. The compile definition `HREFPARSE_USE_UNSAFE_STD_REGEX_PROVIDER` exposes a `std::regex`-backed provider; it is not a safe default for untrusted patterns.
 
 ### Global observables an implementer must reproduce
 
@@ -157,7 +157,7 @@ The matching C entry is `hrefparse_can_parse` (include `hrefparse_c.h`). It is t
 
 ### Signature
 
-Callers declare the compile result as `tl::expected` of `hrefparse::url_pattern` and `hrefparse::errors`. A failed expected is falsy and does not yield a usable pattern. That failure is distinguishable from a compiled pattern whose `test` / `exec` is no-match.
+Callers default-construct `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`, then assign the return of `hrefparse::parse_url_pattern`. A failed expected is falsy and does not yield a usable pattern. That failure is distinguishable from a compiled pattern whose `test` / `exec` is no-match.
 
 ## `hrefparse::href_from_file`
 
@@ -185,7 +185,7 @@ Include `hrefparse.h`. The C++ URLPattern compile entry is `hrefparse::parse_url
 
 ### Signature
 
-Callers compile two forms. The first takes `std::string_view`, a pointer to a `std::string_view` base (null when the caller has no base), and a pointer to `hrefparse::url_pattern_options`. The second takes `hrefparse::url_pattern_init`, a null pointer, and a pointer to `hrefparse::url_pattern_options`. Both return `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. A failed expected is falsy and does not yield a usable pattern.
+Callers compile two forms. The first takes `std::string_view`, a pointer to a `std::string_view` base (null when the caller has no base), and a pointer to `hrefparse::url_pattern_options`. The second takes `hrefparse::url_pattern_init`, a null pointer, and a pointer to `hrefparse::url_pattern_options`. Both return `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Callers default-construct that expected, then assign the return. A failed expected is falsy and does not yield a usable pattern.
 
 The engine type must expose `regex_type` and these static members. `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type`; returning `std::nullopt` is compile failure. `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`. `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool.
 
@@ -196,6 +196,8 @@ The engine type must expose `regex_type` and these static members. `create_insta
 A successful result converts to true. Components are read through arrow access (for example `get_href`, `get_hostname`). A successful result is also dereferenceable with unary `*` so that `&*` of that result is a pointer to the `hrefparse::url_aggregator`, which is the already-parsed base passed to two-argument `hrefparse::parse`.
 
 A failed result is falsy and does not yield a usable URL.
+
+Callers default-construct `hrefparse::result` of bool and `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`, then assign the returns of `test` and `exec`.
 
 ## `hrefparse::url_aggregator.host_type`
 
@@ -229,7 +231,7 @@ Include `hrefparse.h`. URLPattern is the class template `hrefparse::url_pattern`
 
 ### Signature
 
-A successful `hrefparse::parse_url_pattern` is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Callers treat a successful expected as true and reach methods through `operator->`.
+A successful `hrefparse::parse_url_pattern` is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Callers default-construct that expected, assign the parse return, treat a successful expected as true, and reach methods through `operator->`.
 
 ## `hrefparse::url_pattern.exec`
 
@@ -237,7 +239,7 @@ On a successful `hrefparse::url_pattern`, structured match is `exec`.
 
 ### Signature
 
-Callers compile `exec` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`. A failed result is unexpected after a successful compile. Callers use `operator->` then `has_value`: empty optional is no-match; a filled optional is a match and unwraps `hrefparse::url_pattern_result`. A failed compile has no `exec`. No-match is not a compile error.
+Callers compile `exec` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`. Callers default-construct that result, then assign the return. A failed result is unexpected after a successful compile. Callers use `operator->` then `has_value`: empty optional is no-match; a filled optional is a match and unwraps `hrefparse::url_pattern_result`. A failed compile has no `exec`. No-match is not a compile error.
 
 ## `hrefparse::url_pattern.get_pathname`
 
@@ -261,7 +263,7 @@ On a successful `hrefparse::url_pattern`, yes/no match is `test`.
 
 ### Signature
 
-Callers compile `test` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of bool. A successful result converts to true; callers then dereference with unary `*` for the yes/no. `test` agrees with whether `exec` produced a match. A failed compile has no `test`.
+Callers compile `test` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of bool. Callers default-construct that result, then assign the return. A successful result converts to true; callers then dereference with unary `*` for the yes/no. `test` agrees with whether `exec` produced a match. A failed compile has no `test`.
 
 ## `hrefparse::url_pattern_component_result`
 
