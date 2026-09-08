@@ -1,877 +1,441 @@
 # feature: F03
-"""FP-03: URL Search Params (C++ library and matching C interface)."""
+"""FP-03: parse TOML from a binary file object.
+
+Assertions follow Full_PRD.original.md FP-03 (L164–L183). Structural and
+scalar fine rules are FP-01 / FP-02; this feature proves those rules apply
+to the UTF-8 text of a binary file, that text-mode is a type error (not a
+decode error; FP-04 L215), and that non-UTF-8 bytes do not succeed.
+"""
 
 from __future__ import annotations
 
-import pytest
+from tomlparse import TOMLDecodeError, load  # noqa: F401 — public binary-file surface
 
-from _helpers import (
-    inspect_url,
-    run_search_params,
-    search_params_probe_has_named_append_success,
-    try_search_params_without_linked_library,
-    unique_token,
+from _harness import binary_buffer, text_buffer
+from F01_helpers import (
+    decode_error_type,
+    is_mapping,
+    parse_text,
+    require_mapping,
+    require_path,
+    require_sequence,
+    runtime_int,
+    runtime_token,
+)
+from F02_helpers import require_int, require_str
+from F03_helpers import (
+    lax_success_invalid_utf8,
+    parse_binary,
+    require_type_error,
+    require_unsuccessful,
+    utf8_source,
 )
 
-BOTH_LANGS = ("c++", "c")
+_NAMED_ROOT = "one=1\ntwo='two'\narr=[]"
+_NAMED_CRLF = "one=1\r\ntwo='two'"
+_NAMED_LF = "one=1\ntwo='two'"
+_PLAYERS = (
+    "[[players]]\n"
+    'name = "Lehtinen"\n'
+    "number = 26\n"
+    "[[players]]\n"
+    'name = "Numminen"\n'
+    "number = 27\n"
+)
+_NAMED_ESCAPE = 'k = "\\e"'
+_NAMED_INLINE = "t = {\nc = 1,\n}\n"
+_LATIN1_LETTERS = (
+    tuple(range(0x00C0, 0x00D7))
+    + tuple(range(0x00D8, 0x00F7))
+    + tuple(range(0x00F8, 0x0100))
+)
 
-NAMED_THREE = "a=b&c=d&e=f"
-NAMED_SORT = "z=b&a=b&z=a&a=a"
-KEY_U1F308 = "\U0001f308"
-KEY_UFB03 = "\ufb03"
-GOOGLE_SEARCH_URL = "https://www.google.com/pathname?query=true"
+
+def _string_mapping(text: str):
+    print(f"string source={text!r}", flush=True)
+    mapping = require_mapping(parse_text(text))
+    print(f"string keys={list(mapping)}", flush=True)
+    return mapping
 
 
-def _print_snap(label: str, snap, *, language: str) -> None:
-    print(
-        f"{label} language={language} size={snap.size} "
-        f"serial={snap.serialize!r} keys={list(snap.keys)} "
-        f"values={list(snap.values)} entries={list(snap.entries)} "
-        f"construct_size={snap.construct_size} "
-        f"construct_serial={snap.construct_serialize!r}"
+def _binary_mapping_disk(ws, relpath: str, content: str | bytes):
+    data = content if isinstance(content, bytes) else utf8_source(content)
+    print(f"binary disk {relpath!r} bytes={data!r}", flush=True)
+    with ws.binary_source(relpath, data) as fp:
+        result = parse_binary(fp)
+    mapping = require_mapping(result)
+    print(f"binary disk keys={list(mapping)}", flush=True)
+    return mapping
+
+
+def _binary_mapping_buffer(content: str | bytes):
+    data = content if isinstance(content, bytes) else utf8_source(content)
+    print(f"binary buffer bytes={data!r}", flush=True)
+    result = parse_binary(binary_buffer(data))
+    mapping = require_mapping(result)
+    print(f"binary buffer keys={list(mapping)}", flush=True)
+    return mapping
+
+
+def _require_same_mapping(binary_map, string_map) -> None:
+    assert binary_map == string_map, (
+        f"binary mapping {binary_map!r} != string mapping {string_map!r}"
     )
 
 
-def _require_present(snap, key: str, expected: str | None = None):
-    assert key in snap.gets, f"lookup for {key!r} was not requested"
-    got = snap.gets[key]
-    assert got.present, (
-        f"get({key!r}) ABSENT; serial={snap.serialize!r} "
-        f"stderr={snap.stderr!r}"
+def _assert_named_root(mapping) -> None:
+    require_int(require_path(mapping, "one"), 1)
+    require_str(require_path(mapping, "two"), "two")
+    arr = require_sequence(require_path(mapping, "arr"))
+    assert len(arr) == 0, f"arr is not empty: {arr!r}"
+
+
+def _assert_text_mode_type_error(result) -> None:
+    """L176: type error, not decode error, and no document mapping."""
+    exc = require_type_error(result)
+    assert isinstance(exc, TypeError), (
+        f"text-mode file must be a type error, got {type(exc).__name__}: {exc!r}"
     )
-    if expected is not None:
-        assert got.value == expected, (
-            f"get({key!r})={got.value!r} expected {expected!r}; "
-            f"serial={snap.serialize!r}"
+    assert not isinstance(exc, decode_error_type()), (
+        f"text-mode file was a decode error, not a type error: {exc!r}"
+    )
+    if result.value is not None:
+        assert not is_mapping(result.value), (
+            f"text-mode file still yielded a document mapping: {result.value!r}"
         )
-    return got.value
 
 
-def _require_absent(snap, key: str) -> None:
-    assert key in snap.gets, f"lookup for {key!r} was not requested"
-    got = snap.gets[key]
-    assert not got.present, (
-        f"get({key!r}) PRESENT value={got.value!r}; "
-        f"serial={snap.serialize!r} stderr={snap.stderr!r}"
+def _assert_non_utf8_unsuccessful(result) -> None:
+    """L177: no document mapping; the call does not succeed."""
+    require_unsuccessful(result)
+    has_mapping = False
+    if result.value is not None:
+        has_mapping = is_mapping(result.value)
+    assert not has_mapping, (
+        f"invalid UTF-8 yielded a document mapping: {result.value!r}"
     )
-    assert got.value is None
-
-
-def _require_empty_object(snap, would_be_key: str, *, which: str) -> None:
-    assert snap.size == 0, (
-        f"{which} size={snap.size} serial={snap.serialize!r} "
-        f"stderr={snap.stderr!r}"
+    succeeded = result.exception is None and has_mapping
+    assert not succeeded, (
+        f"invalid UTF-8 parse succeeded: {result.value!r}"
     )
-    assert snap.serialize == "", (
-        f"{which} serial not empty: {snap.serialize!r}"
+
+
+def _runtime_bmp_letter() -> str:
+    code = _LATIN1_LETTERS[runtime_int() % len(_LATIN1_LETTERS)]
+    return chr(code)
+
+
+def _non_ascii_document() -> tuple[str, str, str]:
+    key = runtime_token()
+    letter = _runtime_bmp_letter()
+    assert ord(letter) > 127, f"expected non-ASCII scalar, got U+{ord(letter):04X}"
+    src = f'{key} = "{letter}"\n'
+    encoded = utf8_source(src)
+    utf8_letter = letter.encode("utf-8")
+    assert len(utf8_letter) >= 2, (
+        f"{letter!r} is not a multi-byte UTF-8 scalar"
     )
-    _require_absent(snap, would_be_key)
-    assert snap.has_keys[would_be_key] is False
-    assert snap.get_alls[would_be_key] == ()
+    assert utf8_letter in encoded
+    return src, key, letter
 
 
-def _query_of_length(length: int, key: str, token: str) -> str:
-    prefix = f"{key}={token}"
-    if length < len(prefix):
-        raise ValueError(f"length {length} shorter than {prefix!r}")
-    return prefix + ("x" * (length - len(prefix)))
+def _lax_invariant(raw: bytes):
+    text = raw.decode("latin-1")
+    print(f"latin-1 text={text!r}", flush=True)
+    mapping = require_mapping(parse_text(text))
+    print(f"latin-1 mapping keys={list(mapping)}", flush=True)
+    return mapping
+
+
+def _valid_utf8_baseline_disk(ws, relpath: str):
+    key = runtime_token()
+    n = runtime_int()
+    src = f"{key} = {n}\n"
+    mapping = _binary_mapping_disk(ws, relpath, src)
+    require_int(require_path(mapping, key), n)
+    return mapping
+
+
+def _valid_utf8_baseline_buffer():
+    key = runtime_token()
+    n = runtime_int()
+    src = f"{key} = {n}\n"
+    mapping = _binary_mapping_buffer(src)
+    require_int(require_path(mapping, key), n)
+    return mapping
 
 
 # ---------------------------------------------------------------------------
-# A. Construct, append, size, get, get-all, has
+# A. Named root document: binary matches string (L170, L182)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_construct_three_pairs_then_append(language: str) -> None:
-    snap = run_search_params(
-        NAMED_THREE,
-        (("append", "g", "h"),),
-        language=language,
-        lookup_keys=("a", "c", "e", "g"),
-    )
-    _print_snap("three-then-append", snap, language=language)
-    assert snap.construct_size == 3
-    assert snap.size == 4
-    assert not snap.serialize.startswith("?")
-    _require_present(snap, "a", "b")
-    _require_present(snap, "c", "d")
-    _require_present(snap, "e", "f")
-    _require_present(snap, "g", "h")
-    assert snap.entries == (("a", "b"), ("c", "d"), ("e", "f"), ("g", "h"))
+def test_named_one_two_arr_binary_matches_string(isolated_ws):
+    mapping = _binary_mapping_disk(isolated_ws, "named.toml", _NAMED_ROOT)
+    _assert_named_root(mapping)
+    _require_same_mapping(mapping, _string_mapping(_NAMED_ROOT))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_duplicate_key_preserves_both_get_first(language: str) -> None:
-    snap = run_search_params(
-        "",
-        (("append", "k", "first"), ("append", "k", "second")),
-        language=language,
-        lookup_keys=("k",),
-    )
-    _print_snap("dup-key", snap, language=language)
-    assert snap.size == 2
-    _require_present(snap, "k", "first")
-    assert snap.get_alls["k"] == ("first", "second")
-    assert snap.has_keys["k"] is True
-    assert snap.entries == (("k", "first"), ("k", "second"))
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_append_get_and_get_all_order(language: str) -> None:
-    key = unique_token()
-    val = unique_token()
-    v1 = unique_token()
-    v2 = unique_token()
-    one = run_search_params(
-        NAMED_THREE,
-        (("append", key, val),),
-        language=language,
-        lookup_keys=(key,),
-    )
-    _print_snap("runtime-append", one, language=language)
-    assert one.size == 4
-    _require_present(one, key, val)
-
-    two = run_search_params(
-        "",
-        (("append", key, v1), ("append", key, v2)),
-        language=language,
-        lookup_keys=(key,),
-    )
-    _print_snap("runtime-get-all", two, language=language)
-    _require_present(two, key, v1)
-    assert two.get_alls[key] == (v1, v2)
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_has_by_key_and_by_key_value(language: str) -> None:
-    snap = run_search_params(
-        "key1=value1&key1=value2",
-        language=language,
-        lookup_keys=("key1", "missing"),
-        lookup_pairs=(
-            ("key1", "value1"),
-            ("key1", "value2"),
-            ("key1", "other"),
-            ("missing", "value1"),
-        ),
-    )
-    _print_snap("has-named", snap, language=language)
-    assert snap.has_keys["key1"] is True
-    assert snap.has_keys["missing"] is False
-    assert snap.has_pairs[("key1", "value1")] is True
-    assert snap.has_pairs[("key1", "value2")] is True
-    assert snap.has_pairs[("key1", "other")] is False
-    assert snap.has_pairs[("missing", "value1")] is False
-    assert snap.get_alls["missing"] == ()
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_has_by_key_and_value(language: str) -> None:
-    key = unique_token()
-    first = unique_token()
-    second = unique_token()
-    third = unique_token()
-    snap = run_search_params(
-        "",
-        (("append", key, first), ("append", key, second)),
-        language=language,
-        lookup_keys=(key,),
-        lookup_pairs=((key, first), (key, third)),
-    )
-    _print_snap("runtime-has", snap, language=language)
-    assert snap.has_keys[key] is True
-    assert snap.has_pairs[(key, first)] is True
-    assert snap.has_pairs[(key, third)] is False
+def test_runtime_root_pair_binary_matches_string():
+    key = runtime_token()
+    n = runtime_int()
+    extra = runtime_token()
+    src = f"{key} = {n}\n{extra} = '{extra}'\n"
+    mapping = _binary_mapping_buffer(src)
+    require_int(require_path(mapping, key), n)
+    require_str(require_path(mapping, extra), extra)
+    assert set(mapping) == {key, extra}
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
 # ---------------------------------------------------------------------------
-# B. Set
+# B. Empty file is an empty mapping (L171, L182)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_set_collapses_duplicate_key(language: str) -> None:
-    snap = run_search_params(
-        "key1=value1&key1=value2",
-        (("set", "key1", "hello"),),
-        language=language,
-        lookup_keys=("key1",),
+def test_empty_binary_file_is_empty_mapping(isolated_ws):
+    empty = _binary_mapping_disk(isolated_ws, "empty.toml", b"")
+    assert len(empty) == 0, f"expected empty mapping, got {empty!r}"
+    _require_same_mapping(empty, _string_mapping(""))
+
+    key = runtime_token()
+    n = runtime_int()
+    baseline = _binary_mapping_disk(
+        isolated_ws, "baseline.toml", f"{key} = {n}\n"
     )
-    _print_snap("set-collapse", snap, language=language)
-    assert snap.serialize == "key1=hello"
-    assert snap.size == 1
-    _require_present(snap, "key1", "hello")
-    assert snap.get_alls["key1"] == ("hello",)
+    require_int(require_path(baseline, key), n)
+    assert len(baseline) != 0
 
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_set_preserves_later_other_key(language: str) -> None:
-    snap = run_search_params(
-        "key1=value1&key1=value2&key2=value1",
-        (("set", "key1", "value3"),),
-        language=language,
-        lookup_keys=("key1", "key2"),
-    )
-    _print_snap("set-later-other", snap, language=language)
-    assert snap.serialize == "key1=value3&key2=value1"
-    _require_present(snap, "key1", "value3")
-    _require_present(snap, "key2", "value1")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_set_keeps_first_pair_position(language: str) -> None:
-    front = run_search_params(
-        "key2=keep&key1=value1&key1=value2",
-        (("set", "key1", "hello"),),
-        language=language,
-        lookup_keys=("key1", "key2"),
-    )
-    _print_snap("set-front-neighbor", front, language=language)
-    assert [k for k, _ in front.entries] == ["key2", "key1"]
-    assert front.entries[1] == ("key1", "hello")
-    assert sum(1 for k, _ in front.entries if k == "key1") == 1
-    _require_present(front, "key2", "keep")
-
-    mid = run_search_params(
-        "key1=value1&key2=mid&key1=value2",
-        (("set", "key1", "hello"),),
-        language=language,
-        lookup_keys=("key1", "key2"),
-    )
-    _print_snap("set-sandwich", mid, language=language)
-    assert [k for k, _ in mid.entries] == ["key1", "key2"]
-    assert mid.entries[0] == ("key1", "hello")
-    assert mid.entries[1] == ("key2", "mid")
-    assert sum(1 for k, _ in mid.entries if k == "key1") == 1
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_set_collapses_and_keeps_neighbor(language: str) -> None:
-    key = unique_token()
-    neighbor = unique_token()
-    first = unique_token()
-    second = unique_token()
-    neigh_val = unique_token()
-    new_val = unique_token()
-    init = f"{key}={first}&{neighbor}={neigh_val}&{key}={second}"
-    set_snap = run_search_params(
-        init,
-        (("set", key, new_val),),
-        language=language,
-        lookup_keys=(key, neighbor),
-    )
-    append_snap = run_search_params(
-        init,
-        (("append", key, new_val),),
-        language=language,
-        lookup_keys=(key, neighbor),
-    )
-    _print_snap("runtime-set", set_snap, language=language)
-    _print_snap("runtime-append-contrast", append_snap, language=language)
-    assert set_snap.get_alls[key] == (new_val,)
-    _require_present(set_snap, neighbor, neigh_val)
-    set_keys = [k for k, _ in set_snap.entries]
-    assert set_keys.index(key) < set_keys.index(neighbor)
-    assert append_snap.size > set_snap.size
-    assert append_snap.get_alls[key] == (first, second, new_val)
+    buf_empty = _binary_mapping_buffer(b"")
+    assert len(buf_empty) == 0, f"empty buffer is not empty: {buf_empty!r}"
 
 
 # ---------------------------------------------------------------------------
-# C. Remove
+# C. Bytes as UTF-8; CRLF is one line feed (L171, L182)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_remove_by_key_then_by_key_and_value(language: str) -> None:
-    after_key = run_search_params(
-        "key1=value1&key1=value2&key2=value2",
-        (("remove", "key2"),),
-        language=language,
-        lookup_keys=("key1", "key2"),
-    )
-    _print_snap("remove-by-key", after_key, language=language)
-    assert after_key.serialize == "key1=value1&key1=value2"
-    assert after_key.has_keys["key2"] is False
-    assert after_key.get_alls["key1"] == ("value1", "value2")
+def test_crlf_between_keys_binary(isolated_ws):
+    crlf_map = _binary_mapping_disk(isolated_ws, "crlf.toml", _NAMED_CRLF)
+    require_int(require_path(crlf_map, "one"), 1)
+    require_str(require_path(crlf_map, "two"), "two")
+    assert set(crlf_map) == {"one", "two"}
+    _require_same_mapping(crlf_map, _string_mapping(_NAMED_CRLF))
 
-    after_val = run_search_params(
-        "key1=value1&key1=value2&key2=value2",
-        (("remove", "key2"), ("remove-value", "key1", "value2")),
-        language=language,
-        lookup_keys=("key1",),
-    )
-    _print_snap("remove-by-value", after_val, language=language)
-    assert after_val.serialize == "key1=value1"
-    _require_present(after_val, "key1", "value1")
-    assert after_val.get_alls["key1"] == ("value1",)
+    lf_map = _binary_mapping_disk(isolated_ws, "lf.toml", _NAMED_LF)
+    require_int(require_path(lf_map, "one"), 1)
+    require_str(require_path(lf_map, "two"), "two")
+    _require_same_mapping(crlf_map, lf_map)
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_remove_by_key_deletes_every_pair(language: str) -> None:
-    other = unique_token()
-    other_val = unique_token()
-    snap = run_search_params(
-        f"dup=one&{other}={other_val}&dup=two",
-        (("remove", "dup"),),
-        language=language,
-        lookup_keys=("dup", other),
-    )
-    _print_snap("remove-every-pair", snap, language=language)
-    assert snap.has_keys["dup"] is False
-    assert snap.get_alls["dup"] == ()
-    _require_absent(snap, "dup")
-    _require_present(snap, other, other_val)
+def test_runtime_crlf_between_keys(isolated_ws):
+    first, second = runtime_token(), runtime_token()
+    a, b = runtime_int(), runtime_int()
+    src = f"{first} = {a}\r\n{second} = {b}\n"
+    mapping = _binary_mapping_disk(isolated_ws, "runtime-crlf.toml", src)
+    require_int(require_path(mapping, first), a)
+    require_int(require_path(mapping, second), b)
+    assert set(mapping) == {first, second}
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_remove_by_value_leaves_other_duplicate(language: str) -> None:
-    key = unique_token()
-    token_a = unique_token()
-    token_b = unique_token()
-    snap = run_search_params(
-        "",
-        (
-            ("append", key, token_a),
-            ("append", key, token_b),
-            ("remove-value", key, token_a),
-        ),
-        language=language,
-        lookup_keys=(key,),
-        lookup_pairs=((key, token_a), (key, token_b)),
-    )
-    _print_snap("runtime-remove-value", snap, language=language)
-    assert snap.get_alls[key] == (token_b,)
-    assert snap.has_pairs[(key, token_a)] is False
-    assert snap.has_pairs[(key, token_b)] is True
+def test_non_ascii_utf8_bytes_match_string(isolated_ws):
+    src, key, letter = _non_ascii_document()
+    mapping = _binary_mapping_disk(isolated_ws, "non-ascii.toml", src)
+    require_str(require_path(mapping, key), letter)
+    _require_same_mapping(mapping, _string_mapping(src))
+
+
+def test_non_ascii_utf8_via_binary_buffer():
+    src, key, letter = _non_ascii_document()
+    mapping = _binary_mapping_buffer(src)
+    require_str(require_path(mapping, key), letter)
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
 # ---------------------------------------------------------------------------
-# D. Sort
+# D. FP-01 / FP-02 representative documents (L172, L182)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_sort_stable_ascii_named_order(language: str) -> None:
-    before = run_search_params(NAMED_SORT, language=language)
-    after = run_search_params(
-        NAMED_SORT, (("sort",),), language=language
-    )
-    _print_snap("sort-before", before, language=language)
-    _print_snap("sort-after", after, language=language)
-    assert before.keys == ("z", "a", "z", "a")
-    assert before.values == ("b", "b", "a", "a")
-    assert after.keys == ("a", "a", "z", "z")
-    assert after.values == ("b", "a", "b", "a")
-    assert after.entries == (("a", "b"), ("a", "a"), ("z", "b"), ("z", "a"))
-    assert before.entries != after.entries
+def test_two_players_tables_binary_matches_string(isolated_ws):
+    mapping = _binary_mapping_disk(isolated_ws, "players.toml", _PLAYERS)
+    players = require_sequence(require_path(mapping, "players"))
+    assert len(players) == 2, f"players length {len(players)} != 2"
+    first, second = players[0], players[1]
+    assert is_mapping(first) and is_mapping(second)
+    require_str(require_path(first, "name"), "Lehtinen")
+    require_int(require_path(first, "number"), 26)
+    require_str(require_path(second, "name"), "Numminen")
+    require_int(require_path(second, "number"), 27)
+    _require_same_mapping(mapping, _string_mapping(_PLAYERS))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_sort_utf16_named_code_points(language: str) -> None:
-    rainbow_first = f"{KEY_U1F308}=x&{KEY_UFB03}=y"
-    ligature_first = f"{KEY_UFB03}=y&{KEY_U1F308}=x"
-    for init in (rainbow_first, ligature_first):
-        snap = run_search_params(
-            init, (("sort",),), language=language
-        )
-        _print_snap(f"utf16-sort init={init!r}", snap, language=language)
-        assert snap.keys[0] == KEY_U1F308, (
-            f"U+1F308 must sort before U+FB03; keys={list(snap.keys)}"
-        )
-        assert snap.keys[1] == KEY_UFB03
-        assert snap.keys == (KEY_U1F308, KEY_UFB03)
+def test_runtime_array_of_tables_binary_matches_string(isolated_ws):
+    table = runtime_token()
+    key = runtime_token()
+    a, b = runtime_int(), runtime_int()
+    src = f"[[{table}]]\n{key} = {a}\n[[{table}]]\n{key} = {b}\n"
+    mapping = _binary_mapping_disk(isolated_ws, "runtime-aot.toml", src)
+    items = require_sequence(require_path(mapping, table))
+    assert len(items) == 2, f"{table} length {len(items)} != 2"
+    assert is_mapping(items[0]) and is_mapping(items[1])
+    require_int(require_path(items[0], key), a)
+    require_int(require_path(items[1], key), b)
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
-# ---------------------------------------------------------------------------
-# E. Serialize
-# ---------------------------------------------------------------------------
+def test_runtime_dotted_table_binary_matches_string(isolated_ws):
+    prefix, leaf = runtime_token(), runtime_token()
+    n = runtime_int()
+    src = f"{prefix}.{leaf} = {n}\n"
+    mapping = _binary_mapping_disk(isolated_ws, "runtime-dotted.toml", src)
+    require_int(require_path(mapping, prefix, leaf), n)
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_serialize_no_leading_question_mark(language: str) -> None:
-    snap = run_search_params(
-        "?a=b", language=language, lookup_keys=("a", "?a")
-    )
-    _print_snap("no-leading-q", snap, language=language)
-    assert snap.serialize == "a=b"
-    assert not snap.serialize.startswith("?")
-    _require_present(snap, "a", "b")
-    _require_absent(snap, "?a")
+def test_fp02_scalar_representative_binary_matches_string(isolated_ws):
+    mapping = _binary_mapping_disk(isolated_ws, "escape-e.toml", _NAMED_ESCAPE)
+    value = require_path(mapping, "k")
+    require_str(value, chr(27))
+    assert ord(value) == 27
+    _require_same_mapping(mapping, _string_mapping(_NAMED_ESCAPE))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_serialize_space_as_plus_get_keeps_space(language: str) -> None:
-    snap = run_search_params(
-        "",
-        (("append", "a", "b c"),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    _print_snap("space-plus", snap, language=language)
-    assert snap.serialize == "a=b+c"
-    _require_present(snap, "a", "b c")
+def test_runtime_fp02_scalar_binary_matches_string(isolated_ws):
+    key = runtime_token()
+    code = 0x41 + (runtime_int() % 26)
+    assert code != 27
+    src = f'{key} = "\\x{code:02x}"\n'
+    mapping = _binary_mapping_disk(isolated_ws, "runtime-x.toml", src)
+    require_str(require_path(mapping, key), chr(code))
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_serialize_plus_percent2b(language: str) -> None:
-    snap = run_search_params(
-        "",
-        (("append", "a", "b+c"),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    _print_snap("plus-percent", snap, language=language)
-    assert "%2B" in snap.serialize
-    _require_present(snap, "a", "b+c")
+def test_v11_inline_table_binary_matches_string(isolated_ws):
+    mapping = _binary_mapping_disk(isolated_ws, "inline.toml", _NAMED_INLINE)
+    table = require_path(mapping, "t")
+    assert is_mapping(table)
+    require_int(require_path(mapping, "t", "c"), 1)
+    assert set(table) == {"c"}
+    _require_same_mapping(mapping, _string_mapping(_NAMED_INLINE))
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_serialize_ampersand_in_key_and_value(language: str) -> None:
-    key_amp = run_search_params(
-        "",
-        (("append", "a&b", "c"),),
-        language=language,
-        lookup_keys=("a&b",),
-    )
-    val_amp = run_search_params(
-        "",
-        (("append", "a", "b&c"),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    _print_snap("amp-key", key_amp, language=language)
-    _print_snap("amp-val", val_amp, language=language)
-    assert "%26" in key_amp.serialize
-    assert "%26" in val_amp.serialize
-    _require_present(key_amp, "a&b", "c")
-    _require_present(val_amp, "a", "b&c")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_serialize_empty_value_and_empty_key(language: str) -> None:
-    empty_val = run_search_params(
-        "",
-        (("append", "a", ""),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    empty_key = run_search_params(
-        "",
-        (("append", "a", ""), ("append", "", ""), ("append", "", "b")),
-        language=language,
-        lookup_keys=("a", ""),
-    )
-    _print_snap("empty-value", empty_val, language=language)
-    _print_snap("empty-key", empty_key, language=language)
-    assert "a=" in empty_val.serialize
-    _require_present(empty_val, "a", "")
-    assert empty_key.serialize == "a=&=&=b"
-    _require_present(empty_key, "a", "")
-    _require_present(empty_key, "", "")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_non_ascii_value_round_trip(language: str) -> None:
-    snap = run_search_params(
-        "",
-        (("append", "a", "é"),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    _print_snap("e-acute", snap, language=language)
-    assert "%C3%A9" in snap.serialize
-    _require_present(snap, "a", "é")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_space_and_plus_in_value(language: str) -> None:
-    left = unique_token()
-    right = unique_token()
-    space_val = f"{left} {right}"
-    plus_tok = unique_token()
-    plus_val = f"{plus_tok}+z"
-    space = run_search_params(
-        "",
-        (("append", "a", space_val),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    plus = run_search_params(
-        "",
-        (("append", "a", plus_val),),
-        language=language,
-        lookup_keys=("a",),
-    )
-    _print_snap("runtime-space", space, language=language)
-    _print_snap("runtime-plus", plus, language=language)
-    assert left in space.serialize and right in space.serialize
-    assert "+" in space.serialize
-    assert "%20" not in space.serialize
-    _require_present(space, "a", space_val)
-    assert "%2B" in plus.serialize
-    assert plus_tok in plus.serialize
-    _require_present(plus, "a", plus_val)
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_runtime_ampersand_and_e_acute(language: str) -> None:
-    tok = unique_token()
-    key_amp = f"{tok}&"
-    val_amp = f"{tok}&"
-    left = unique_token()
-    right = unique_token()
-    e_val = f"{left}é{right}"
-    as_key = run_search_params(
-        "",
-        (("append", key_amp, "v"),),
-        language=language,
-        lookup_keys=(key_amp,),
-    )
-    as_val = run_search_params(
-        "",
-        (("append", "k", val_amp),),
-        language=language,
-        lookup_keys=("k",),
-    )
-    e_snap = run_search_params(
-        "",
-        (("append", "k", e_val),),
-        language=language,
-        lookup_keys=("k",),
-    )
-    _print_snap("runtime-amp-key", as_key, language=language)
-    _print_snap("runtime-amp-val", as_val, language=language)
-    _print_snap("runtime-e-acute", e_snap, language=language)
-    assert "%26" in as_key.serialize and tok in as_key.serialize
-    _require_present(as_key, key_amp, "v")
-    assert "&" in key_amp
-    assert "%26" in as_val.serialize and tok in as_val.serialize
-    _require_present(as_val, "k", val_amp)
-    assert "&" in as_val.gets["k"].value
-    assert "%C3%A9" in e_snap.serialize
-    assert left in e_snap.serialize and right in e_snap.serialize
-    _require_present(e_snap, "k", e_val)
+def test_runtime_v11_inline_table_binary_matches_string(isolated_ws):
+    key, inner = runtime_token(), runtime_token()
+    n = runtime_int()
+    src = f"{key} = {{\n{inner} = {n},\n}}\n"
+    mapping = _binary_mapping_disk(isolated_ws, "runtime-inline.toml", src)
+    table = require_path(mapping, key)
+    assert is_mapping(table)
+    require_int(require_path(mapping, key, inner), n)
+    assert set(table) == {inner}
+    _require_same_mapping(mapping, _string_mapping(src))
 
 
 # ---------------------------------------------------------------------------
-# F. Iterators
+# E. Text-mode file object: type error, not decode error (L176, L183)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_iterators_walk_current_list_in_order(language: str) -> None:
-    snap = run_search_params(
-        NAMED_THREE,
-        (("append", "g", "h"),),
-        language=language,
-    )
-    _print_snap("iter-order", snap, language=language)
-    assert snap.keys == ("a", "c", "e", "g")
-    assert snap.values == ("b", "d", "f", "h")
-    assert snap.entries == (("a", "b"), ("c", "d"), ("e", "f"), ("g", "h"))
-    assert len(snap.keys) == snap.size
+def test_text_mode_file_refused_as_type_error(isolated_ws):
+    baseline = _binary_mapping_disk(isolated_ws, "named.bin.toml", _NAMED_ROOT)
+    _assert_named_root(baseline)
 
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_iterators_repeat_duplicate_keys(language: str) -> None:
-    key = unique_token()
-    v1 = unique_token()
-    v2 = unique_token()
-    snap = run_search_params(
-        NAMED_THREE,
-        (("append", key, v1), ("append", key, v2)),
-        language=language,
-        lookup_keys=(key,),
-    )
-    collapsed = run_search_params(
-        NAMED_THREE,
-        (("append", key, v1), ("append", key, v2), ("set", key, v1)),
-        language=language,
-        lookup_keys=(key,),
-    )
-    _print_snap("iter-dup", snap, language=language)
-    _print_snap("iter-after-set", collapsed, language=language)
-    assert snap.keys.count(key) == len(snap.get_alls[key])
-    assert snap.keys.count(key) == 2
-    assert snap.get_alls[key] == (v1, v2)
-    assert snap.values[-2:] == (v1, v2)
-    assert snap.entries[-2:] == ((key, v1), (key, v2))
-    assert collapsed.keys.count(key) == 1
-    assert collapsed.get_alls[key] == (v1,)
-
-
-# ---------------------------------------------------------------------------
-# G. Reset, length cap, missing vs empty, no '=', leading '?'
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_reset_replaces_list(language: str) -> None:
-    named = run_search_params(
-        "a=b",
-        (("reset", "c=d&e=f"),),
-        language=language,
-        lookup_keys=("a", "c"),
-    )
-    _print_snap("reset-named", named, language=language)
-    _require_present(named, "c", "d")
-    _require_absent(named, "a")
-    assert named.size == 2
-
-    tok_key = unique_token()
-    tok_val = unique_token()
-    runtime = run_search_params(
-        "old=gone",
-        (("reset", f"{tok_key}={tok_val}"),),
-        language=language,
-        lookup_keys=("old", tok_key),
-    )
-    _print_snap("reset-runtime", runtime, language=language)
-    _require_present(runtime, tok_key, tok_val)
-    _require_absent(runtime, "old")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_overlength_construct_leaves_empty(language: str) -> None:
-    key = unique_token()
-    token = unique_token()
-    query = _query_of_length(40, key, token)
-    assert "?" not in query
-    live_cap = len(query) + 8
-    over_cap = len(query) - 5
-    assert over_cap < len(query) < live_cap
-
-    live = run_search_params(
-        query,
-        language=language,
-        max_length=live_cap,
-        lookup_keys=(key,),
-    )
-    empty = run_search_params(
-        query,
-        language=language,
-        max_length=over_cap,
-        lookup_keys=(key,),
-    )
-    _print_snap("overlength-live", live, language=language)
-    _print_snap("overlength-empty", empty, language=language)
-    assert live.size > 0
-    _require_present(live, key, token + ("x" * (40 - len(f"{key}={token}"))))
-    _require_empty_object(empty, key, which="over-length construct")
-
-    eq_cap = 36
-    eq_query = _query_of_length(eq_cap, key, token)
-    plus_query = _query_of_length(eq_cap + 1, key, token)
-    at_cap = run_search_params(
-        eq_query,
-        language=language,
-        max_length=eq_cap,
-        lookup_keys=(key,),
-    )
-    over_by_one = run_search_params(
-        plus_query,
-        language=language,
-        max_length=eq_cap,
-        lookup_keys=(key,),
-    )
-    _print_snap("eq-cap", at_cap, language=language)
-    _print_snap("cap-plus-one", over_by_one, language=language)
-    assert at_cap.size > 0
-    _require_present(at_cap, key)
-    _require_empty_object(over_by_one, key, which="cap+1 construct")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_overlength_reset_clears_existing(language: str) -> None:
-    key = "k"
-    token = unique_token()
-    short = f"{key}={token}"
-    cap = len(short) + 4
-    long_q = _query_of_length(cap + 8, "z", unique_token())
-    assert "?" not in long_q
-    snap = run_search_params(
-        short,
-        (("reset", long_q),),
-        language=language,
-        max_length=cap,
-        lookup_keys=(key,),
-    )
-    _print_snap("overlength-reset", snap, language=language)
-    assert snap.construct_size > 0
-    _require_present_construct = snap.construct_gets[key]
-    assert _require_present_construct.present
-    _require_empty_object(snap, key, which="over-length reset")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_append_set_not_length_capped(language: str) -> None:
-    old_key = "k"
-    old_tok = unique_token()
-    prefix = f"{old_key}={old_tok}"
-    cap = len(prefix)
-    long_init = _query_of_length(cap + 10, old_key, old_tok)
-    new_key = unique_token()
-    new_val = unique_token() * 4
-    set_val = unique_token() * 4
-    empty_construct = run_search_params(
-        long_init,
-        language=language,
-        max_length=cap,
-        lookup_keys=(old_key,),
-    )
-    appended = run_search_params(
-        long_init,
-        (("append", new_key, new_val),),
-        language=language,
-        max_length=cap,
-        lookup_keys=(old_key, new_key),
-    )
-    mutated = run_search_params(
-        long_init,
-        (("append", new_key, new_val), ("set", new_key, set_val)),
-        language=language,
-        max_length=cap,
-        lookup_keys=(old_key, new_key),
-    )
-    _print_snap("cap-construct-empty", empty_construct, language=language)
-    _print_snap("cap-append", appended, language=language)
-    _print_snap("cap-append-set", mutated, language=language)
-    _require_empty_object(
-        empty_construct, old_key, which="same-cap over-length construct"
-    )
-    assert appended.construct_size == 0
-    assert not appended.construct_gets[old_key].present
-    assert appended.size == 1
-    _require_present(appended, new_key, new_val)
-    _require_absent(appended, old_key)
-    assert mutated.construct_size == 0
-    assert not mutated.construct_gets[old_key].present
-    assert mutated.size == 1
-    _require_present(mutated, new_key, set_val)
-    _require_absent(mutated, old_key)
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_missing_key_distinguishable_from_empty_value(language: str) -> None:
-    snap = run_search_params(
-        "",
-        (("append", "k", ""),),
-        language=language,
-        lookup_keys=("k", "missing"),
-    )
-    _print_snap("absent-vs-empty", snap, language=language)
-    present = snap.gets["k"]
-    missing = snap.gets["missing"]
-    assert present.present
-    assert present.value == ""
-    assert not missing.present
-    assert missing.value is None
-    assert present != missing
-    assert snap.has_keys["k"] is True
-    assert snap.has_keys["missing"] is False
-    assert snap.get_alls["missing"] == ()
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_key_without_equals_has_empty_value(language: str) -> None:
-    named = run_search_params(
-        "bbb&bb",
-        language=language,
-        lookup_keys=("bbb", "bb"),
-    )
-    t1 = unique_token()
-    t2 = unique_token()
-    runtime = run_search_params(
-        f"{t1}&{t2}",
-        language=language,
-        lookup_keys=(t1, t2),
-    )
-    _print_snap("no-eq-named", named, language=language)
-    _print_snap("no-eq-runtime", runtime, language=language)
-    _require_present(named, "bbb", "")
-    _require_present(named, "bb", "")
-    _require_present(runtime, t1, "")
-    _require_present(runtime, t2, "")
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_leading_question_mark_not_part_of_key(language: str) -> None:
-    snap = run_search_params(
-        "?a=b",
-        language=language,
-        lookup_keys=("a", "?a"),
-    )
-    _print_snap("leading-q-key", snap, language=language)
-    _require_present(snap, "a", "b")
-    _require_absent(snap, "?a")
-    assert "?" not in snap.serialize
-
-
-# ---------------------------------------------------------------------------
-# H. Feed a URL search component
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_construct_from_url_search_component(language: str) -> None:
-    inspected = inspect_url(GOOGLE_SEARCH_URL, language=language)
+    print(f"text disk source={_NAMED_ROOT!r}", flush=True)
+    with isolated_ws.text_source("named.txt", _NAMED_ROOT) as fp:
+        result = parse_binary(fp)
     print(
-        f"url-search language={language} search={inspected.search!r}"
+        f"text disk exception={type(result.exception).__name__ if result.exception else None}",
+        flush=True,
     )
-    snap = run_search_params(
-        inspected.search,
-        language=language,
-        lookup_keys=("query", "?query"),
-    )
-    _print_snap("from-url-search", snap, language=language)
-    _require_present(snap, "query", "true")
-    _require_absent(snap, "?query")
+    require_type_error(result)
 
 
-@pytest.mark.parametrize("language", BOTH_LANGS)
-def test_construct_from_url_search_runtime_token(language: str) -> None:
-    key = unique_token()
-    val = unique_token()
-    url = f"https://www.example.com/p?{key}={val}"
-    inspected = inspect_url(url, language=language)
+def test_runtime_text_mode_file_refused_as_type_error(isolated_ws):
+    key = runtime_token()
+    n = runtime_int()
+    src = f"{key} = {n}\n"
+    baseline = _binary_mapping_disk(isolated_ws, "runtime.bin.toml", src)
+    require_int(require_path(baseline, key), n)
+
+    print(f"text disk source={src!r}", flush=True)
+    with isolated_ws.text_source("runtime.txt", src) as fp:
+        result = parse_binary(fp)
     print(
-        f"runtime-url-search language={language} search={inspected.search!r} "
-        f"key={key} val={val}"
+        f"text disk exception={type(result.exception).__name__ if result.exception else None}",
+        flush=True,
     )
-    snap = run_search_params(
-        inspected.search,
-        language=language,
-        lookup_keys=(key,),
+    _assert_text_mode_type_error(result)
+
+
+def test_text_buffer_refused_as_type_error():
+    baseline = _binary_mapping_buffer(_NAMED_ROOT)
+    _assert_named_root(baseline)
+
+    print(f"text buffer source={_NAMED_ROOT!r}", flush=True)
+    result = parse_binary(text_buffer(_NAMED_ROOT))
+    print(
+        f"text buffer exception={type(result.exception).__name__ if result.exception else None}",
+        flush=True,
     )
-    _print_snap("from-url-search-token", snap, language=language)
-    _require_present(snap, key, val)
+    require_type_error(result)
+
+
+def test_runtime_text_buffer_refused_as_type_error():
+    key = runtime_token()
+    n = runtime_int()
+    src = f"{key} = {n}\n"
+    baseline = _binary_mapping_buffer(src)
+    require_int(require_path(baseline, key), n)
+
+    print(f"text buffer source={src!r}", flush=True)
+    result = parse_binary(text_buffer(src))
+    print(
+        f"text buffer exception={type(result.exception).__name__ if result.exception else None}",
+        flush=True,
+    )
+    _assert_text_mode_type_error(result)
 
 
 # ---------------------------------------------------------------------------
-# I. Negative control (C++ only)
+# F. Non-UTF-8 bytes: call does not succeed, no mapping (L177, L183)
 # ---------------------------------------------------------------------------
 
 
-def test_search_params_fail_when_library_absent_from_link_path() -> None:
-    baseline = run_search_params(
-        NAMED_THREE,
-        (("append", "g", "h"),),
-        lookup_keys=("g",),
-    )
-    _print_snap("unlink-baseline", baseline, language="c++")
-    assert baseline.size == 4
-    _require_present(baseline, "g", "h")
-    kind, result = try_search_params_without_linked_library()
-    print(f"absent-library kind={kind}")
-    assert result is not None
-    if kind == "link_failed":
-        assert result.returncode != 0
-        print(f"link stderr={result.stderr_text[:800]!r}")
-        return
-    produced = search_params_probe_has_named_append_success(result)
-    assert not produced, (
-        "search-params without the recipe library still produced "
-        "get g==h and size 4"
-    )
+def test_invalid_utf8_does_not_succeed(isolated_ws):
+    _valid_utf8_baseline_disk(isolated_ws, "valid.toml")
+
+    prefix = runtime_token()
+    raw = lax_success_invalid_utf8(key_prefix=prefix, kind="high_byte")
+    print(f"invalid utf8 high_byte={raw!r}", flush=True)
+    _lax_invariant(raw)
+
+    with isolated_ws.binary_source("invalid.toml", raw) as fp:
+        result = parse_binary(fp)
+    _assert_non_utf8_unsuccessful(result)
+
+
+def test_invalid_utf8_sibling_does_not_succeed(isolated_ws):
+    _valid_utf8_baseline_disk(isolated_ws, "valid-sibling.toml")
+
+    prefix = runtime_token()
+    raw = lax_success_invalid_utf8(key_prefix=prefix, kind="incomplete_c3")
+    print(f"invalid utf8 incomplete_c3={raw!r}", flush=True)
+    _lax_invariant(raw)
+
+    with isolated_ws.binary_source("invalid-c3.toml", raw) as fp:
+        result = parse_binary(fp)
+    _assert_non_utf8_unsuccessful(result)
+
+
+def test_invalid_utf8_via_binary_buffer():
+    _valid_utf8_baseline_buffer()
+
+    prefix = runtime_token()
+    raw = lax_success_invalid_utf8(key_prefix=prefix, kind="high_byte")
+    print(f"invalid utf8 buffer={raw!r}", flush=True)
+    _lax_invariant(raw)
+
+    result = parse_binary(binary_buffer(raw))
+    _assert_non_utf8_unsuccessful(result)

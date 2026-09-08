@@ -11,8 +11,7 @@ tests** (binary reward: `1.0` / `0.0`). No LLM-as-judge.
 
 This repository ships:
 
-- **6 released cases** under `benchmark/cases/`, spanning Python, Go, C++,
-  and TypeScript/JavaScript
+- **2 released cases** under `benchmark/cases/` (Python): Tomlparse and PathSel
 - The **`cbrun`** harness (recommended)
 - An optional **Harbor** adapter
 
@@ -60,7 +59,7 @@ the agent cannot simply recall the upstream repository.
 ### Language-agnostic by construction
 
 The authoring process makes no assumptions about language, build system or test
-framework. This release covers C++, Go, Python, and TypeScript/JavaScript.
+framework. This release currently ships two Python cases.
 New ecosystems are a matter of adding seed repositories, not rewriting the
 harness.
 

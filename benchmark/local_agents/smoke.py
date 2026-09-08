@@ -29,6 +29,7 @@ from cbrun.agent_spec import (  # noqa: E402
     CONTAINER_WORKDIR,
     resolve_agent,
 )
+from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 from cbrun.assets import load_case  # noqa: E402
 from cbrun.denylist import GITHUB_BLOCK_HOSTS  # noqa: E402
 from cbrun.docker_env import Container, docker_available  # noqa: E402
@@ -40,7 +41,6 @@ from cbrun.steps import discover_steps  # noqa: E402
 
 LOCAL_AGENTS = Path(__file__).resolve().parent
 BACKENDS = ("codex", "opencode", "claude-code", "cursor")
-SMOKE_CASE = "case001"
 SMOKE_INSTRUCTION = (
     "Smoke test only. Create the file /app/smoke_probe.txt whose entire content "
     "is exactly AGENT_OK (no quotes, no extra lines). Do not modify any other "
@@ -50,6 +50,20 @@ PROBE_PATH = f"{CONTAINER_WORKDIR}/smoke_probe.txt"
 AGENT_TIMEOUT_SEC = 600.0
 STALL_WINDOW_SEC = 300.0
 JUDGE_TIMEOUT_SEC = 300.0
+
+
+def _cases_root(cases_root: Path | None = None) -> Path:
+    if cases_root is not None:
+        return Path(cases_root)
+    return BENCHMARK_ROOT / "cases"
+
+
+def _default_smoke_case(cases_root: Path | None = None) -> str:
+    root = _cases_root(cases_root)
+    dirs = iter_benchmark_case_dirs(root)
+    if not dirs:
+        raise FileNotFoundError(f"no cases with source/manifest.json under {root}")
+    return dirs[0].name
 
 
 def _case_dir(case_id: str, cases_root: Path | None = None) -> Path:
@@ -144,9 +158,10 @@ def run_smoke(
     *,
     cache_root: Path,
     out_root: Path,
-    case_id: str = SMOKE_CASE,
+    case_id: str | None = None,
     cases_root: Path | None = None,
 ) -> int:
+    case_id = case_id or _default_smoke_case(cases_root)
     env_path = LOCAL_AGENTS / f"{backend}.env"
     env_file = _load_env_file(env_path)
     model = _apply_env(env_file)
@@ -271,8 +286,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--case",
-        default=SMOKE_CASE,
-        help=f"Case id whose :agent image to smoke (default: {SMOKE_CASE}).",
+        default=None,
+        help="Case id whose :agent image to smoke (default: first case under cases/).",
     )
     parser.add_argument("--cases-root", type=Path)
     args = parser.parse_args(argv)

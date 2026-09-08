@@ -46,7 +46,7 @@ def test_run_argv_blocks_github_hosts() -> None:
 def test_agent_dockerfile_clears_app_workspace() -> None:
     from cbrun.images import _build_dockerfile  # noqa: WPS433
 
-    df = _build_dockerfile("codingbench-benchmark/case002:deliverable", None)
+    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", None)
     assert "rm -rf /app" in df
     assert "/opt/codingbench/repo" in df
     assert "/opt/cb-warm" in df
@@ -58,7 +58,7 @@ def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
     from cbrun.images import _build_dockerfile, agent_tag  # noqa: WPS433
 
     df = _build_dockerfile(
-        "codingbench-benchmark/case001:deliverable",
+        "codingbench-benchmark/sample:deliverable",
         None,
         backend="cursor",
     )
@@ -67,8 +67,8 @@ def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
     assert "opencode-ai" not in df
     assert "@anthropic-ai/claude-code" not in df
     assert "setup_22.x" not in df
-    assert agent_tag("case001", "cursor") == "codingbench-benchmark/case001:agent-cursor"
-    assert agent_tag("case001") == "codingbench-benchmark/case001:agent"
+    assert agent_tag("sample", "cursor") == "codingbench-benchmark/sample:agent-cursor"
+    assert agent_tag("sample") == "codingbench-benchmark/sample:agent"
 
 
 # --- judge wiring: report parsing and judge_error classification -------------

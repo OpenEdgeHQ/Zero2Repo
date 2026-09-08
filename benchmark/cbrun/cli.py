@@ -4,11 +4,11 @@ Examples
 --------
 Run one case with one backend::
 
-    cbrun --case case001 --backend codex --model openai/gpt-5.5
+    cbrun --case <case_id> --backend codex --model openai/gpt-5.5
 
 Run with a custom local AgentSpec::
 
-    cbrun --case case001 --agent-spec ./my-agent.json --model my/model
+    cbrun --case <case_id> --agent-spec ./my-agent.json --model my/model
 """
 
 from __future__ import annotations

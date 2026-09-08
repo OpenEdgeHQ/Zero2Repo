@@ -23,7 +23,13 @@ from coding_bench_harbor.adapter import (  # noqa: E402
 from coding_bench_harbor.run_adapter import _iter_case_dirs  # noqa: E402
 
 CASES_ROOT = BENCHMARK_ROOT / "cases"
-SAMPLE_CASE_ID = "case001"
+_CASE_DIRS = iter_benchmark_case_dirs(CASES_ROOT)
+_CASE_IDS = [path.name for path in _CASE_DIRS]
+
+
+def _first_case_dir() -> Path:
+    assert _CASE_DIRS, f"no cases with source/manifest.json under {CASES_ROOT}"
+    return _CASE_DIRS[0]
 
 
 @pytest.mark.parametrize("name,expected", [
@@ -38,15 +44,28 @@ def test_parse_milestone_step_dir_name(name: str, expected: int | None) -> None:
 
 def test_iter_benchmark_case_dirs_finds_manifest_cases() -> None:
     dirs = iter_benchmark_case_dirs(CASES_ROOT)
+    assert dirs, f"no cases with source/manifest.json under {CASES_ROOT}"
     ids = {d.name for d in dirs}
-    assert SAMPLE_CASE_ID in ids
     assert "source" not in ids
-    assert len(ids) == 6
+    for path in dirs:
+        assert not path.name.startswith("_")
+        assert (path / "source" / "manifest.json").is_file()
+
+
+def test_iter_benchmark_case_dirs_skips_underscore_prefix(tmp_path: Path) -> None:
+    hidden = tmp_path / "_draft"
+    (hidden / "source").mkdir(parents=True)
+    (hidden / "source" / "manifest.json").write_text("{}\n", encoding="utf-8")
+    visible = tmp_path / "visiblecase"
+    (visible / "source").mkdir(parents=True)
+    (visible / "source" / "manifest.json").write_text("{}\n", encoding="utf-8")
+    assert [path.name for path in iter_benchmark_case_dirs(tmp_path)] == ["visiblecase"]
 
 
 def test_discover_benchmark_case() -> None:
-    assets = discover_case(CASES_ROOT / SAMPLE_CASE_ID, require_gt=False)
-    assert assets.case_id == SAMPLE_CASE_ID
+    case_dir = _first_case_dir()
+    assets = discover_case(case_dir, require_gt=False)
+    assert assets.case_id == case_dir.name
     assert assets.acceptance.acceptance_dir.name == "final"
     assert assets.acceptance.test_files
     assert (assets.acceptance.acceptance_dir / "test_manifest.json").is_file()
@@ -61,7 +80,7 @@ def test_build_task_uses_single_prd_document(tmp_path: Path) -> None:
     from coding_bench_harbor.adapter import build_task
 
     task_dir = build_task(
-        CASES_ROOT / SAMPLE_CASE_ID,
+        _first_case_dir(),
         tmp_path / "out",
         force=True,
         allow_leakage=True,
@@ -73,7 +92,13 @@ def test_build_task_uses_single_prd_document(tmp_path: Path) -> None:
     prd_body = full_prd.read_text(encoding="utf-8")
     assert prd_body in instruction
     assert "# Interface Contract" in instruction
-    assert "cmake -G Ninja -B build" in instruction
+    assets = discover_case(_first_case_dir(), require_gt=False)
+    cmd = assets.runner.build_command.strip()
+    if cmd:
+        assert cmd in instruction
+        assert "no build step" not in instruction
+    else:
+        assert "no build step" in instruction
     assert "does **not** run any install or build" in instruction
     assert "/tests/final" not in instruction
 
@@ -143,10 +168,7 @@ def test_build_task_rejects_leak_in_build_command(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["case001", "case002", "case003", "case004", "case005", "case006"],
-)
+@pytest.mark.parametrize("case_id", _CASE_IDS)
 def test_harbor_instruction_surfaces_case_build_command(case_id: str) -> None:
     from coding_bench_harbor.adapter import _build_instruction
 
@@ -167,7 +189,7 @@ def test_build_task_creates_final_tests_and_acceptance_script(tmp_path: Path) ->
     from coding_bench_harbor.adapter import build_task
 
     task_dir = build_task(
-        CASES_ROOT / SAMPLE_CASE_ID,
+        _first_case_dir(),
         tmp_path / "out",
         force=True,
         allow_leakage=True,
@@ -179,7 +201,7 @@ def test_build_task_creates_final_tests_and_acceptance_script(tmp_path: Path) ->
 
 
 def test_harbor_manifest_rewrites_test_paths() -> None:
-    acceptance_dir = CASES_ROOT / SAMPLE_CASE_ID / "milestones" / "final"
+    acceptance_dir = _first_case_dir() / "milestones" / "final"
     manifest = json.loads((acceptance_dir / "test_manifest.json").read_text(encoding="utf-8"))
     out = _harbor_manifest(manifest, acceptance_dir, "/tests/final")
     cmd = out["test_command"]

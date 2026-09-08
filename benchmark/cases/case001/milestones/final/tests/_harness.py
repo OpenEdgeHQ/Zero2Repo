@@ -2,99 +2,113 @@
 """Shared machinery for driving the product through its public surface.
 
 Suites import from this module (``from _harness import ...``). Importing it
-performs no I/O, starts no processes, and opens no sockets. Compilation,
-process spawn, filesystem writes, and environment replacement happen only
-when a caller invokes a function or enters a context manager below.
+performs no I/O, starts no processes, and opens no sockets. Stream capture,
+environment replacement, cwd changes, file opens, and child processes
+happen only when a caller invokes a function or enters a context manager
+below.
 
-The product is an embeddable C++20 library with a matching C interface,
-not an importable Python package. A convenience CLI may also be present
-when tools were built; it is the same parse-and-inspect surface, not a
-separate product. Python tests reach the library by compiling a short C
-or C++ probe against the recipe-built archive (or shared object) and
-running that probe as a child process.
+The product is an importable Python library (src layout). There is no
+command-line program and no network service. This module is the one
+canonical way to reach the public entries. It does not import the
+product and does not know what any feature expects.
 
 Surfaces
 --------
-* Library probe — :func:`invoke` / :func:`compile_probe`. Caller supplies
-  source that includes the public headers and links the recipe-built
-  library. Stdin, argv, cwd, and environment of the resulting binary are
-  caller-controlled. Each probe is a fresh process, so a process-wide
-  length cap set inside one probe cannot leak into another.
-* CLI — :func:`run_cli`. Spawns the recipe-built convenience binary when
-  it exists. Missing CLI is a substrate gap (the default recipe does not
-  build tools), reported as :class:`FileNotFoundError`, never as a
-  classified product refusal.
+* Library call — :func:`call` runs a caller-supplied public callable
+  (imported by the suite from the package root) with caller-controlled
+  arguments, stdin, environment, and working directory. A product
+  exception is a classified outcome on :class:`CallResult`, not a
+  harness failure. Extra keyword arguments (for example a float
+  converter) are forwarded unchanged.
+* Binary / text file objects — :func:`binary_buffer` and
+  :func:`text_buffer` build in-memory streams; :meth:`Workspace.open_binary`
+  / :meth:`Workspace.open_text` and :meth:`Workspace.binary_source` /
+  :meth:`Workspace.text_source` open real files. The binary-file parse
+  entry takes a file object, not a path; a text-mode file is a different
+  Python type from a binary-mode file.
+* Child interpreter — :func:`run_python` / :func:`run_script` /
+  :func:`run_command` for observations that need a separate process,
+  including the library-substrate negative control (package removed
+  from the import path).
 
-Missing substrate (no public header, no built library, no compiler)
-raises :class:`FileNotFoundError` or :class:`HarnessError`. A product
-non-zero exit recorded on :class:`RunResult` is a classified outcome,
-not a harness failure. Observation failures this module cannot classify
-raise :class:`HarnessError`.
+Each isolated call starts from a whitelist of substrate environment
+keys. Names that are not on that list are dropped so an incidental
+parent variable cannot fill a condition the suite did not name.
+
+A failure this module cannot classify raises :class:`HarnessError`.
 """
 
 from __future__ import annotations
 
-import atexit
-import hashlib
+import io
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from types import TracebackType
+from typing import Any, BinaryIO, Callable, Iterator, Mapping, Sequence, TextIO
+from warnings import WarningMessage, catch_warnings, simplefilter
 
 # ---------------------------------------------------------------------------
-# Public defaults / recipe artifact names
+# Public defaults
 # ---------------------------------------------------------------------------
 
 DEFAULT_CHARSET = "utf-8"
 DEFAULT_TIMEOUT = 30.0
-DEFAULT_CXX_STD = "c++20"
 
-# Public headers shipped by the library (relative to include_dir()).
-CXX_HEADER = "hrefparse.h"
-C_HEADER = "hrefparse_c.h"
+# Isolated child / in-process environments start from this Unicode locale.
+_DEFAULT_LOCALE = "C.UTF-8"
 
-# CMake target name / lib prefix. Archive is libhrefparse.a; shared is libhrefparse.so.
-LIBRARY_STEM = "hrefparse"
-
-# Environment overrides (absolute paths). Never fall back to PATH for the
-# library or CLI — a system-installed copy would hide a recipe shortfall.
-PRODUCT_ROOT_ENV = "PRODUCT_ROOT"
-PRODUCT_LIB_ENV = "PRODUCT_LIB"
-PRODUCT_INCLUDE_ENV = "PRODUCT_INCLUDE"
-PRODUCT_BIN_ENV = "PRODUCT_BIN"
-CXX_ENV = "CXX"
-
-# Convenience CLI relative to the repository root. Absent unless tools
-# were enabled at configure time.
-_CLI_RELPATHS = (
-    Path("build") / "tools" / "cli" / "hrefparsec",
-    Path("build") / "hrefparsec",
+# Substrate keys copied from the caller when building an isolated env.
+# Everything else is dropped so an incidental parent variable cannot
+# fill a condition the suite did not name.
+_KEEP_ENV_KEYS = (
+    "PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSAFEPATH",
+    "PYTHONNOUSERSITE",
+    "PYTHONHASHSEED",
+    "PYTHONUNBUFFERED",
+    "PYTHONWARNINGS",
+    "PYTHONDONTWRITEBYTECODE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "USER",
+    "LOGNAME",
+    "USERNAME",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TERM",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "PATHEXT",
 )
 
-# Known CMake output locations for the library target, relative to root.
-_LIB_RELPATHS = (
-    Path("build") / "src" / f"lib{LIBRARY_STEM}.a",
-    Path("build") / "src" / f"lib{LIBRARY_STEM}.so",
-    Path("build") / f"lib{LIBRARY_STEM}.a",
-    Path("build") / f"lib{LIBRARY_STEM}.so",
-    Path("build") / "lib" / f"lib{LIBRARY_STEM}.a",
-    Path("build") / "lib" / f"lib{LIBRARY_STEM}.so",
-)
-
-# Recipe testing builds expose the standard-library regex provider as a
-# public compile definition on the library target. Probes that compile
-# against that build need the same define to see the provider type.
-_DEFAULT_CXX_DEFINES = ("HREFPARSE_USE_UNSAFE_STD_REGEX_PROVIDER",)
-
-# Keys stripped so a child does not inherit the caller's locale / proxy /
-# build-tree side channels unless the caller puts them back.
+# TTY / pager / editor / proxy side-channels stripped even if kept above.
 _ISOLATE_UNSET = (
     "COLUMNS",
     "LINES",
+    "PAGER",
+    "EDITOR",
+    "VISUAL",
+    "BROWSER",
+    "NO_COLOR",
+    "FORCE_COLOR",
+    "CLICOLOR",
+    "CLICOLOR_FORCE",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "http_proxy",
@@ -103,33 +117,6 @@ _ISOLATE_UNSET = (
     "all_proxy",
     "NO_PROXY",
     "no_proxy",
-    "FTP_PROXY",
-    "ftp_proxy",
-)
-
-_KEEP_ENV_KEYS = (
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "USERNAME",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "TZ",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LC_MESSAGES",
-    "TERM",
-    "LD_LIBRARY_PATH",
-    "LIBRARY_PATH",
-    "CPATH",
-    "CPLUS_INCLUDE_PATH",
-    "C_INCLUDE_PATH",
-    "CC",
-    "CXX",
-    "COMPILER_PATH",
 )
 
 
@@ -141,11 +128,83 @@ _KEEP_ENV_KEYS = (
 class HarnessError(RuntimeError):
     """Raised when an observation cannot be classified.
 
-    Used for a missing compiler, a probe that failed to compile or link,
-    a workspace path that escapes its root, a timeout, and I/O failures
-    that are not a documented product outcome. Never used to mean "the
-    product returned a non-zero exit the PRD describes".
+    Used for a missing substrate, a path that escapes its workspace, a
+    timeout, a stream that is not valid in the requested encoding, and
+    I/O failures that are not a documented product outcome. Never used
+    to mean "the product raised the exception the PRD describes".
     """
+
+
+def _decode_utf8(data: bytes, *, stream: str) -> str:
+    """Decode *data* as UTF-8.
+
+    Raises:
+        HarnessError: if *data* is not valid UTF-8. Never replaces
+            undecodable bytes with a sentinel that could pass for text.
+    """
+    try:
+        return data.decode(DEFAULT_CHARSET)
+    except UnicodeDecodeError as exc:
+        raise HarnessError(f"{stream} is not valid UTF-8: {exc}") from exc
+
+
+def as_bytes(content: str | bytes, *, encoding: str = DEFAULT_CHARSET) -> bytes:
+    """Return *content* as bytes.
+
+    ``bytes`` is returned unchanged. ``str`` is encoded with *encoding*.
+    Raises :class:`HarnessError` if the text cannot be encoded — never
+    replaces unencodable characters with a sentinel.
+    """
+    if isinstance(content, bytes):
+        return content
+    try:
+        return content.encode(encoding)
+    except (LookupError, UnicodeEncodeError) as exc:
+        raise HarnessError(f"cannot encode text as {encoding}: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class CallResult:
+    """Outcome of one in-process library call.
+
+    Attributes:
+        value: Whatever the callable returned. ``None`` when an
+            exception was captured — never a stand-in for "the call
+            could not be performed".
+        exception: The exception that ended the call, if any. ``None``
+            when the callable returned. ``SystemExit`` is recorded here
+            the same way as any other product exception.
+        exc_info: ``sys.exc_info()`` triple matching ``exception``, or
+            ``None``.
+        stdout: Raw standard output bytes captured for the duration.
+        stderr: Raw standard error bytes captured for the duration.
+        cwd: Working directory used for the call, as a string.
+        environ: Process environment mapping as it stood when the
+            callable returned or raised, still inside the isolated
+            environment. Always a dict — never ``None``. Absence of a
+            name is ``name not in environ``, not a failed observation.
+        warnings: Warning records captured for the duration of the call.
+            Empty when none were emitted — never ``None``.
+    """
+
+    value: Any
+    exception: BaseException | None
+    exc_info: tuple[type[BaseException], BaseException, TracebackType] | None
+    stdout: bytes
+    stderr: bytes
+    cwd: str
+    environ: dict[str, str]
+    warnings: tuple[WarningMessage, ...] = field(default_factory=tuple)
+
+    @property
+    def stdout_text(self) -> str:
+        """Stdout decoded as UTF-8. Raises :class:`HarnessError` if not."""
+        return _decode_utf8(self.stdout, stream="stdout")
+
+    @property
+    def stderr_text(self) -> str:
+        """Stderr decoded as UTF-8. Raises :class:`HarnessError` if not."""
+        return _decode_utf8(self.stderr, stream="stderr")
 
 
 @dataclass(frozen=True)
@@ -153,12 +212,14 @@ class RunResult:
     """Outcome of one subprocess invocation.
 
     Attributes:
-        returncode: Process exit status. ``0`` is POSIX success; the
-            harness does not interpret any other code.
-        stdout: Raw standard output bytes (no decoding applied).
-        stderr: Raw standard error bytes (no decoding applied).
+        returncode: Process exit status. The harness does not interpret it.
+        stdout: Raw standard output bytes.
+        stderr: Raw standard error bytes.
         argv: Exact argument vector that was executed.
         cwd: Working directory used for the process, as a string.
+        environ: Environment mapping passed to the child. Always a dict
+            — never ``None``. This is the mapping the child started
+            with, not a probe of the child's later state.
     """
 
     returncode: int
@@ -166,41 +227,35 @@ class RunResult:
     stderr: bytes
     argv: tuple[str, ...]
     cwd: str
+    environ: dict[str, str]
 
     @property
     def stdout_text(self) -> str:
-        """Stdout decoded as UTF-8.
-
-        Raises:
-            HarnessError: if stdout is not valid UTF-8. Never replaces
-                undecodable bytes — replacement would turn a decode
-                failure into a legitimate-looking string.
-        """
-        return decode_utf8(self.stdout, what="stdout")
+        """Stdout decoded as UTF-8. Raises :class:`HarnessError` if not."""
+        return _decode_utf8(self.stdout, stream="stdout")
 
     @property
     def stderr_text(self) -> str:
-        """Stderr decoded as UTF-8.
-
-        Raises:
-            HarnessError: if stderr is not valid UTF-8.
-        """
-        return decode_utf8(self.stderr, what="stderr")
+        """Stderr decoded as UTF-8. Raises :class:`HarnessError` if not."""
+        return _decode_utf8(self.stderr, stream="stderr")
 
 
 @dataclass
 class Workspace:
     """Ephemeral work directory plus the isolated environment bound to it.
 
-    ``path`` is the working directory for invokes. ``home`` is used as
-    ``HOME`` (and the XDG roots live under it) so ``~`` expansion cannot
-    see the caller's home. Both trees are removed when the allocating
-    context exits.
+    ``path`` is the working directory for calls and child processes.
+    ``home`` is used as ``HOME`` so ``~`` expansion cannot see the
+    caller's home. ``root`` is the built repository root used to locate
+    ``src/`` (captured when the workspace was allocated, not looked up
+    from the then-current cwd). All workspace trees are removed when
+    the allocating context exits.
     """
 
     path: Path
     home: Path
     env: dict[str, str]
+    root: Path
 
     def resolve(self, relpath: str | Path) -> Path:
         """Return *relpath* resolved under this workspace.
@@ -225,24 +280,25 @@ class Workspace:
 
         Returns the absolute path written. Raises ``OSError`` on I/O
         failure and :class:`HarnessError` if *relpath* escapes the
-        workspace.
+        workspace or text cannot be encoded.
         """
         dest = self.resolve(relpath)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(content, bytes):
             dest.write_bytes(content)
         else:
-            dest.write_text(content, encoding=encoding)
+            dest.write_bytes(as_bytes(content, encoding=encoding))
         return dest
 
     def read(self, relpath: str | Path, *, encoding: str = DEFAULT_CHARSET) -> str:
         """Read a text file under this workspace.
 
         Raises:
-            HarnessError: if *relpath* escapes the workspace, or if the
-                path exists but is not a regular file.
-            FileNotFoundError: if the file does not exist — never returns
-                an empty string or ``None`` to mean "missing".
+            HarnessError: if *relpath* escapes the workspace, if the
+                path exists but is not a regular file, or if the bytes
+                are not valid in *encoding*.
+            FileNotFoundError: if the file does not exist — never
+                returns an empty string or ``None`` to mean "missing".
             OSError: on other I/O failures.
         """
         return read_file(self.resolve(relpath), encoding=encoding)
@@ -256,80 +312,96 @@ class Workspace:
         """
         return read_bytes(self.resolve(relpath))
 
-    def compile_probe(
-        self,
-        source: str | bytes,
-        *,
-        language: str = "c++",
-        extra_args: Sequence[str] | None = None,
-        output: str | Path = "probe",
-        root: Path | None = None,
-    ) -> Path:
-        """Compile *source* into this workspace and return the binary path."""
-        return compile_probe(
-            source,
-            language=language,
-            extra_args=extra_args,
-            output=self.resolve(output),
-            root=root,
-        )
+    def mkdir(self, relpath: str | Path) -> Path:
+        """Create a directory under this workspace (parents included)."""
+        dest = self.resolve(relpath)
+        dest.mkdir(parents=True, exist_ok=True)
+        return dest
 
-    def invoke(
-        self,
-        source: str | bytes,
-        args: Sequence[str] | None = None,
-        *,
-        language: str = "c++",
-        stdin: bytes | str | None = None,
-        timeout: float | None = DEFAULT_TIMEOUT,
-        env_updates: Mapping[str, str | None] | None = None,
-        extra_args: Sequence[str] | None = None,
-        root: Path | None = None,
-    ) -> RunResult:
-        """Compile *source* and run it with this workspace as cwd and env.
+    @contextmanager
+    def open_binary(self, relpath: str | Path) -> Iterator[BinaryIO]:
+        """Open an existing workspace file for binary reading.
 
-        Does not raise on a non-zero product exit.
+        Raises ``FileNotFoundError`` if the file does not exist — never
+        yields an empty buffer to mean "missing". Raises
+        :class:`HarnessError` if the path exists but is not a regular
+        file, or on an ``OSError`` other than classified absence.
         """
-        env = _apply_updates(self.env, env_updates)
-        return invoke(
-            source,
-            args,
-            language=language,
-            cwd=self.path,
-            env=env,
-            stdin=stdin,
-            timeout=timeout,
-            extra_args=extra_args,
-            root=root,
-            isolate=False,
-        )
+        with open_binary(self.resolve(relpath)) as fp:
+            yield fp
 
-    def run_cli(
+    @contextmanager
+    def open_text(
         self,
-        args: Sequence[str] | None = None,
+        relpath: str | Path,
         *,
-        stdin: bytes | str | None = None,
-        timeout: float | None = DEFAULT_TIMEOUT,
-        env_updates: Mapping[str, str | None] | None = None,
-        root: Path | None = None,
-        binary: str | Path | None = None,
-    ) -> RunResult:
-        """Run the convenience CLI with this workspace as cwd and env.
+        encoding: str = DEFAULT_CHARSET,
+    ) -> Iterator[TextIO]:
+        """Open an existing workspace file for text reading.
 
-        Does not raise on a non-zero product exit. Raises
-        ``FileNotFoundError`` if the CLI binary is not in the recipe
-        build.
+        Raises ``FileNotFoundError`` if the file does not exist — never
+        yields an empty buffer to mean "missing". Raises
+        :class:`HarnessError` if the path exists but is not a regular
+        file, if the bytes are not valid in *encoding*, or on an
+        ``OSError`` other than classified absence.
         """
-        env = _apply_updates(self.env, env_updates)
-        return run_cli(
-            args,
-            cwd=self.path,
-            env=env,
+        with open_text(self.resolve(relpath), encoding=encoding) as fp:
+            yield fp
+
+    @contextmanager
+    def binary_source(
+        self,
+        relpath: str | Path,
+        content: str | bytes,
+        *,
+        encoding: str = DEFAULT_CHARSET,
+    ) -> Iterator[BinaryIO]:
+        """Write *content* under this workspace and open it for binary reading.
+
+        ``str`` is encoded with *encoding* before writing. Empty
+        *content* writes an empty file; that is a real empty source,
+        not a stand-in for "the write failed".
+        """
+        self.write(relpath, content, encoding=encoding)
+        with self.open_binary(relpath) as fp:
+            yield fp
+
+    @contextmanager
+    def text_source(
+        self,
+        relpath: str | Path,
+        content: str,
+        *,
+        encoding: str = DEFAULT_CHARSET,
+    ) -> Iterator[TextIO]:
+        """Write *content* under this workspace and open it for text reading."""
+        self.write(relpath, content, encoding=encoding)
+        with self.open_text(relpath, encoding=encoding) as fp:
+            yield fp
+
+    def call(
+        self,
+        fn: Callable[..., Any],
+        /,
+        *args: Any,
+        stdin: str | bytes | None = None,
+        env: Mapping[str, str | None] | None = None,
+        catch: bool = True,
+        charset: str = DEFAULT_CHARSET,
+        **kwargs: Any,
+    ) -> CallResult:
+        """Call *fn* with this workspace as cwd and environment."""
+        merged = _apply_updates(self.env, env)
+        return call(
+            fn,
+            *args,
             stdin=stdin,
-            timeout=timeout,
-            root=root,
-            binary=binary,
+            env=merged,
+            cwd=self.path,
             isolate=False,
+            catch=catch,
+            charset=charset,
+            **kwargs,
         )
 
     def run_command(
@@ -338,21 +410,88 @@ class Workspace:
         *,
         stdin: bytes | str | None = None,
         timeout: float | None = DEFAULT_TIMEOUT,
-        env_updates: Mapping[str, str | None] | None = None,
+        env: Mapping[str, str | None] | None = None,
         cwd: str | Path | None = None,
     ) -> RunResult:
-        """Run *argv* with this workspace as cwd and env.
-
-        Does not raise on a non-zero child exit.
-        """
-        env = _apply_updates(self.env, env_updates)
+        """Run *argv* with this workspace as cwd and environment."""
+        merged = _apply_updates(self.env, env)
         return run_command(
             argv,
             cwd=cwd if cwd is not None else self.path,
-            env=env,
+            env=merged,
             stdin=stdin,
             timeout=timeout,
         )
+
+    def run_python(
+        self,
+        *,
+        code: str | None = None,
+        argv: Sequence[str] | None = None,
+        stdin: bytes | str | None = None,
+        timeout: float | None = DEFAULT_TIMEOUT,
+        env: Mapping[str, str | None] | None = None,
+        cwd: str | Path | None = None,
+        include_product: bool = True,
+    ) -> RunResult:
+        """Run this process's interpreter with this workspace as cwd/env."""
+        merged = _apply_updates(self.env, env)
+        if not include_product:
+            merged = _environ_without_product(merged, root=self.root)
+        return run_python(
+            code=code,
+            argv=argv,
+            cwd=cwd if cwd is not None else self.path,
+            env=merged,
+            stdin=stdin,
+            timeout=timeout,
+            isolate=False,
+            root=self.root,
+            include_product=include_product,
+        )
+
+    def run_script(
+        self,
+        source: str,
+        *,
+        relpath: str = "caller.py",
+        stdin: bytes | str | None = None,
+        timeout: float | None = DEFAULT_TIMEOUT,
+        env: Mapping[str, str | None] | None = None,
+        cwd: str | Path | None = None,
+        include_product: bool = True,
+    ) -> RunResult:
+        """Write *source* under this workspace and run it as a script."""
+        merged = _apply_updates(self.env, env)
+        if not include_product:
+            merged = _environ_without_product(merged, root=self.root)
+        script = self.write(relpath, source)
+        work = cwd if cwd is not None else self.path
+        return run_python(
+            argv=[str(script)],
+            cwd=work,
+            env=merged,
+            stdin=stdin,
+            timeout=timeout,
+            isolate=False,
+            root=self.root,
+            include_product=include_product,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stream helpers
+# ---------------------------------------------------------------------------
+
+
+class _KeepOpenTextIO(io.TextIOWrapper):
+    """TextIOWrapper that does not close its underlying buffer."""
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -382,14 +521,12 @@ def _apply_updates(
     return merged
 
 
-def _normalize_args(args: Sequence[str] | None) -> tuple[str, ...]:
-    if args is None:
-        return ()
-    return tuple(str(a) for a in args)
-
-
 def _read_regular_file(src: Path) -> None:
-    """Raise a classified error when *src* is missing or not a regular file."""
+    """Raise a classified error when *src* is missing or not a regular file.
+
+    Follows a symlink to a regular file (the same as ``open()``). A
+    directory or other non-file is a harness failure, not an empty read.
+    """
     try:
         if not src.exists():
             raise FileNotFoundError(f"file does not exist: {src}")
@@ -403,40 +540,119 @@ def _read_regular_file(src: Path) -> None:
         raise HarnessError(f"cannot stat {src}: {exc}") from exc
 
 
-def _as_bytes(data: str | bytes, *, encoding: str = DEFAULT_CHARSET) -> bytes:
-    if isinstance(data, bytes):
-        return data
-    return data.encode(encoding)
+def _require_callable(fn: Any, *, label: str) -> Callable[..., Any]:
+    if not callable(fn):
+        raise HarnessError(f"{label} is not callable; got {type(fn)!r}")
+    return fn
 
 
-def decode_utf8(data: bytes, *, what: str = "bytes") -> str:
-    """Decode *data* as UTF-8.
+def _capture_exc_info() -> (
+    tuple[type[BaseException], BaseException, TracebackType] | None
+):
+    info = sys.exc_info()
+    if info[0] is not None and info[1] is not None and info[2] is not None:
+        return (info[0], info[1], info[2])
+    return None
 
-    Raises:
-        HarnessError: if *data* is not valid UTF-8. Never returns a
-            replacement-character string that could be mistaken for a
-            successful decode.
+
+def _open_text(buffer: Any, *, charset: str) -> _KeepOpenTextIO:
+    return _KeepOpenTextIO(
+        buffer,
+        encoding=charset,
+        line_buffering=True,
+        write_through=True,
+    )
+
+
+def _python() -> str:
+    python = sys.executable
+    if not python:
+        raise HarnessError("sys.executable is empty; cannot spawn an interpreter")
+    return python
+
+
+# ---------------------------------------------------------------------------
+# In-memory file objects (binary-file / text-file parse entries)
+# ---------------------------------------------------------------------------
+
+
+def binary_buffer(
+    content: str | bytes = b"",
+    *,
+    encoding: str = DEFAULT_CHARSET,
+) -> io.BytesIO:
+    """Return an in-memory binary file object positioned at the start.
+
+    ``str`` is encoded with *encoding*. Empty *content* is a real empty
+    binary source, not a stand-in for "the buffer could not be built".
+    Does not touch the filesystem.
     """
+    return io.BytesIO(as_bytes(content, encoding=encoding))
+
+
+def text_buffer(content: str = "") -> io.StringIO:
+    """Return an in-memory text-mode file object positioned at the start.
+
+    Empty *content* is a real empty text source. Does not touch the
+    filesystem. The binary-file parse entry is specified to refuse a
+    text-mode file; this is the in-memory form of that type.
+    """
+    return io.StringIO(content)
+
+
+@contextmanager
+def open_binary(path: str | Path) -> Iterator[BinaryIO]:
+    """Open *path* for binary reading.
+
+    Raises ``FileNotFoundError`` if the file does not exist — never
+    yields an empty buffer to mean "missing". Raises :class:`HarnessError`
+    if the path exists but is not a regular file, or on an ``OSError``
+    other than classified absence.
+    """
+    src = Path(path)
+    _read_regular_file(src)
     try:
-        return data.decode(DEFAULT_CHARSET)
+        fp = src.open("rb")
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise HarnessError(f"cannot open {src} for binary reading: {exc}") from exc
+    try:
+        yield fp
+    finally:
+        fp.close()
+
+
+@contextmanager
+def open_text(
+    path: str | Path,
+    *,
+    encoding: str = DEFAULT_CHARSET,
+) -> Iterator[TextIO]:
+    """Open *path* for text reading.
+
+    Raises ``FileNotFoundError`` if the file does not exist — never
+    yields an empty buffer to mean "missing". Raises :class:`HarnessError`
+    if the path exists but is not a regular file, if the bytes are not
+    valid in *encoding*, or on an ``OSError`` other than classified
+    absence.
+    """
+    src = Path(path)
+    _read_regular_file(src)
+    try:
+        fp = src.open("r", encoding=encoding, newline="")
+    except FileNotFoundError:
+        raise
+    except LookupError as exc:
+        raise HarnessError(f"unknown text encoding {encoding!r}: {exc}") from exc
     except UnicodeDecodeError as exc:
-        raise HarnessError(
-            f"{what} is not valid UTF-8 ({exc}); inspect the raw bytes"
-        ) from exc
-
-
-def _diagnostic_text(data: bytes) -> str:
-    """Decode for harness logs only; replacement is not a test observation."""
-    return data.decode(DEFAULT_CHARSET, errors="replace")
-
-
-def _normalize_language(language: str) -> str:
-    key = language.strip().lower()
-    if key in ("c++", "cpp", "cxx", "cc"):
-        return "c++"
-    if key == "c":
-        return "c"
-    raise ValueError(f"unsupported probe language: {language!r} (use 'c++' or 'c')")
+        raise HarnessError(f"cannot decode {src} as {encoding}: {exc}") from exc
+    except OSError as exc:
+        raise HarnessError(f"cannot open {src} for text reading: {exc}") from exc
+    try:
+        yield fp
+    finally:
+        fp.close()
 
 
 # ---------------------------------------------------------------------------
@@ -447,156 +663,150 @@ def _normalize_language(language: str) -> str:
 def repo_root() -> Path:
     """Return the built repository root.
 
-    Tests run with the repository root as the pytest process cwd (recipe
-    build artifacts such as ``build/src/libhrefparse.a`` are available there).
-    ``PRODUCT_ROOT`` overrides cwd. Does not search parents.
+    Tests run with the repository root as the pytest process cwd. Returns
+    ``Path.cwd()`` resolved; does not search the filesystem.
     """
-    override = os.environ.get(PRODUCT_ROOT_ENV)
-    if override:
-        return Path(override).expanduser().resolve()
     return Path.cwd().resolve()
 
 
-def include_dir(*, root: Path | None = None) -> Path:
-    """Return the public include directory.
-
-    Resolution order:
-      1. ``PRODUCT_INCLUDE`` if set.
-      2. ``<root>/include`` containing the C++ public header.
+def product_src_dir(*, root: Path | None = None) -> Path:
+    """Return the importable ``src`` directory of the built repository.
 
     Raises:
-        FileNotFoundError: when the directory or public header is missing.
-            That is a substrate gap, not a product-behavior judgment.
+        HarnessError: when ``<root>/src`` is not a directory. That is a
+            substrate gap, not a product-behavior judgment.
     """
-    override = os.environ.get(PRODUCT_INCLUDE_ENV)
-    if override:
-        path = Path(override).expanduser().resolve()
-        if path.is_file():
-            path = path.parent
-        header = path / CXX_HEADER
-        if not header.is_file():
-            raise FileNotFoundError(
-                f"{PRODUCT_INCLUDE_ENV} does not contain {CXX_HEADER}: {path}"
-            )
-        return path
-
     base = root if root is not None else repo_root()
-    path = (Path(base) / "include").resolve()
-    header = path / CXX_HEADER
-    if not header.is_file():
-        raise FileNotFoundError(
-            f"public header not found at {header}; the repository include "
-            "tree must be present before tests run"
-        )
-    return path
+    src = (Path(base) / "src").resolve()
+    try:
+        if not src.is_dir():
+            raise HarnessError(
+                f"product src directory not found at {src}; "
+                "the runner must expose the package on PYTHONPATH=src"
+            )
+    except HarnessError:
+        raise
+    except OSError as exc:
+        raise HarnessError(f"cannot stat product src directory {src}: {exc}") from exc
+    return src
 
 
-def library_file(*, root: Path | None = None) -> Path:
-    """Locate the recipe-built library archive or shared object.
+def product_package_dir(*, root: Path | None = None) -> Path:
+    """Return the single top-level package directory under ``src/``.
 
-    Resolution order:
-      1. ``PRODUCT_LIB`` if set.
-      2. Known CMake output paths under ``<root>/build``.
-
-    Does not fall back to a system-installed library.
+    Discovery is filesystem-only and does not import the product.
 
     Raises:
-        FileNotFoundError: when no library file exists at a resolved path.
+        HarnessError: when zero or several candidate package directories
+            exist. That is a substrate gap, not a product-behavior
+            judgment.
     """
-    override = os.environ.get(PRODUCT_LIB_ENV)
-    if override:
-        path = Path(override).expanduser().resolve()
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"{PRODUCT_LIB_ENV} does not point to a file: {path}"
-            )
-        return path
-
-    base = Path(root) if root is not None else repo_root()
-    searched: list[str] = []
-    for rel in _LIB_RELPATHS:
-        path = (base / rel).resolve()
-        searched.append(str(path))
-        if path.is_file():
-            return path
-
-    src_dir = (base / "build" / "src").resolve()
-    if src_dir.is_dir():
+    src = product_src_dir(root=root)
+    skip = {"tests", "test", "docs", "doc", "examples", "build", "dist"}
+    candidates: list[Path] = []
+    try:
+        children = list(src.iterdir())
+    except OSError as exc:
+        raise HarnessError(f"cannot list {src}: {exc}") from exc
+    for child in children:
         try:
-            matches = sorted(
-                p
-                for p in src_dir.iterdir()
-                if p.is_file()
-                and (
-                    p.name == f"lib{LIBRARY_STEM}.a"
-                    or p.name.startswith(f"lib{LIBRARY_STEM}.so")
-                )
-            )
+            if not child.is_dir() or child.name.startswith(".") or child.name in skip:
+                continue
+            if child.name.startswith("_"):
+                continue
+            marker = child / "__init__.py"
+            if marker.is_file():
+                candidates.append(child)
         except OSError as exc:
-            raise HarnessError(f"cannot list {src_dir}: {exc}") from exc
-        if matches:
-            return matches[0].resolve()
+            raise HarnessError(f"cannot stat {child}: {exc}") from exc
+    if len(candidates) != 1:
+        names = [c.name for c in candidates]
+        raise HarnessError(
+            "expected exactly one top-level package directory under "
+            f"{src}; found {names!r}"
+        )
+    return candidates[0].resolve()
 
-    raise FileNotFoundError(
-        "recipe-built library not found; searched "
-        + ", ".join(searched)
-        + ". The runner build must produce the library before tests run."
-    )
+
+def product_package_name(*, root: Path | None = None) -> str:
+    """Return the importable package name (the directory under ``src/``)."""
+    return product_package_dir(root=root).name
 
 
-def cli_bin(*, root: Path | None = None) -> Path:
-    """Locate the recipe-built convenience CLI and return its path.
+def _pythonpath_parts(env: Mapping[str, str]) -> list[str]:
+    raw = env.get("PYTHONPATH", "")
+    return [part for part in raw.split(os.pathsep) if part]
 
-    Resolution order:
-      1. ``PRODUCT_BIN`` if set.
-      2. Known CMake output paths under ``<root>/build``.
 
-    Raises:
-        FileNotFoundError: when the binary is missing. The default recipe
-            does not enable tools, so this is a substrate / recipe gap
-            unless the caller built the CLI.
+def _environ_with_product(env: Mapping[str, str], *, root: Path) -> dict[str, str]:
+    merged = dict(env)
+    src = product_src_dir(root=root)
+    src_s = str(src)
+    parts = [src_s]
+    parts.extend(part for part in _pythonpath_parts(merged) if part != src_s)
+    merged["PYTHONPATH"] = os.pathsep.join(parts)
+    return merged
+
+
+def _environ_without_product(
+    env: Mapping[str, str], *, root: Path | None = None
+) -> dict[str, str]:
+    merged = dict(env)
+    base = (root if root is not None else repo_root()).resolve()
+    try:
+        src = product_src_dir(root=base)
+    except HarnessError:
+        src = None
+    try:
+        package = product_package_dir(root=base)
+    except HarnessError:
+        package = None
+    blocked = {base}
+    if src is not None:
+        blocked.add(src)
+    if package is not None:
+        blocked.add(package)
+    kept: list[str] = []
+    for part in _pythonpath_parts(merged):
+        try:
+            resolved = Path(part).resolve()
+        except OSError:
+            kept.append(part)
+            continue
+        if resolved in blocked:
+            continue
+        kept.append(part)
+    if kept:
+        merged["PYTHONPATH"] = os.pathsep.join(kept)
+    else:
+        merged.pop("PYTHONPATH", None)
+    return merged
+
+
+def _product_scrub_preamble(*, root: Path | None = None) -> str:
+    """Python source that drops the product tree from ``sys.path``.
+
+    Used only in a child interpreter so the library-substrate negative
+    control does not accidentally import through cwd or a leftover
+    ``PYTHONPATH`` entry. Does not run at harness import time.
     """
-    override = os.environ.get(PRODUCT_BIN_ENV)
-    if override:
-        path = Path(override).expanduser().resolve()
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"{PRODUCT_BIN_ENV} does not point to a file: {path}"
-            )
-        if not os.access(path, os.X_OK):
-            raise FileNotFoundError(f"{PRODUCT_BIN_ENV} is not executable: {path}")
-        return path
-
-    base = Path(root) if root is not None else repo_root()
-    searched: list[str] = []
-    for rel in _CLI_RELPATHS:
-        path = (base / rel).resolve()
-        searched.append(str(path))
-        if path.is_file() and os.access(path, os.X_OK):
-            return path
-    raise FileNotFoundError(
-        "convenience CLI not found; searched "
-        + ", ".join(searched)
-        + ". The default recipe does not build tools."
+    base = (root if root is not None else repo_root()).resolve()
+    src = product_src_dir(root=base)
+    package = product_package_dir(root=base)
+    return (
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"_ROOT = Path({str(base)!r}).resolve()\n"
+        f"_SRC = Path({str(src)!r}).resolve()\n"
+        f"_PKG = Path({str(package)!r}).resolve()\n"
+        "def _keep(entry):\n"
+        "    try:\n"
+        "        p = Path(entry).resolve()\n"
+        "    except OSError:\n"
+        "        return True\n"
+        "    return p not in {_ROOT, _SRC, _PKG}\n"
+        "sys.path[:] = [e for e in sys.path if _keep(e)]\n"
     )
-
-
-def cxx_compiler() -> str:
-    """Return the C++ compiler used to link probes.
-
-    Uses ``$CXX`` when set, otherwise ``c++``. Does not spawn the
-    compiler. A missing binary is reported when :func:`compile_probe`
-    runs, not here.
-    """
-    override = os.environ.get(CXX_ENV)
-    if override:
-        return override
-    return "c++"
-
-
-def _is_shared_library(path: Path) -> bool:
-    name = path.name
-    return name.endswith(".so") or ".so." in name
 
 
 # ---------------------------------------------------------------------------
@@ -610,14 +820,16 @@ def isolated_environ(
     updates: Mapping[str, str | None] | None = None,
     base: Mapping[str, str] | None = None,
     root: Path | None = None,
+    include_product: bool = True,
 ) -> dict[str, str]:
-    """Build an environment that does not inherit the caller's home/proxy state.
+    """Build an environment that does not inherit the caller's extras.
 
-    Starts from a small keep-list of substrate keys (PATH, locale, compiler,
-    loader) taken from *base* or ``os.environ``, points ``HOME`` and the
-    XDG dirs at *home*, unsets proxy / TTY keys, and applies *updates*
-    last (``None`` unsets). When the recipe library is shared, prepends
-    its directory to ``LD_LIBRARY_PATH``. Does not mutate ``os.environ``.
+    Copies a whitelist of substrate keys from *base* (or ``os.environ``),
+    points ``HOME`` and the XDG dirs at *home*, prepends or strips the
+    product ``src/`` directory on ``PYTHONPATH`` according to
+    *include_product*, unsets pager/editor/proxy side-channels, sets a
+    Unicode locale, and applies *updates* last (``None`` unsets). Does
+    not mutate ``os.environ``.
 
     Returns a new ``dict``.
     """
@@ -625,7 +837,8 @@ def isolated_environ(
     cfg_dir = home_path / ".config"
     cache_dir = home_path / ".cache"
     data_dir = home_path / ".local" / "share"
-    for directory in (home_path, cfg_dir, cache_dir, data_dir):
+    state_dir = home_path / ".local" / "state"
+    for directory in (home_path, cfg_dir, cache_dir, data_dir, state_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     source = base if base is not None else os.environ
@@ -637,28 +850,20 @@ def isolated_environ(
     for key in _ISOLATE_UNSET:
         env.pop(key, None)
 
+    repo = (root if root is not None else repo_root()).resolve()
+    if include_product:
+        env = _environ_with_product(env, root=repo)
+    else:
+        env = _environ_without_product(env, root=repo)
+
     env["HOME"] = str(home_path)
     env["XDG_CONFIG_HOME"] = str(cfg_dir)
     env["XDG_CACHE_HOME"] = str(cache_dir)
     env["XDG_DATA_HOME"] = str(data_dir)
-    env.setdefault("LANG", "C.UTF-8")
-    env.setdefault("LC_ALL", "C.UTF-8")
-    env["TMPDIR"] = str(home_path / "tmp")
-    Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
-
-    try:
-        lib = library_file(root=root)
-    except FileNotFoundError:
-        lib = None
-    if lib is not None and _is_shared_library(lib):
-        libdir = str(lib.parent)
-        existing = env.get("LD_LIBRARY_PATH", "")
-        parts = [libdir]
-        if existing:
-            parts.extend(
-                part for part in existing.split(os.pathsep) if part and part != libdir
-            )
-        env["LD_LIBRARY_PATH"] = os.pathsep.join(parts)
+    env["XDG_STATE_HOME"] = str(state_dir)
+    env.setdefault("LANG", _DEFAULT_LOCALE)
+    env.setdefault("LC_ALL", _DEFAULT_LOCALE)
+    env.setdefault("TERM", "dumb")
 
     if updates:
         env = _apply_updates(env, updates)
@@ -684,23 +889,74 @@ def in_directory(path: str | Path) -> Iterator[Path]:
 
 
 @contextmanager
+def _push_environ(new_env: Mapping[str, str]) -> Iterator[None]:
+    """Replace ``os.environ`` with *new_env* and restore it on exit."""
+    old = os.environ.copy()
+    os.environ.clear()
+    os.environ.update(new_env)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+
+
+@contextmanager
+def isolated_filesystem(
+    path: str | Path | None = None,
+    *,
+    prefix: str = "harness-fs-",
+) -> Iterator[Path]:
+    """Temporarily ``chdir`` into an empty directory.
+
+    When *path* is omitted, a new directory is created and removed on
+    exit (including on exception). A caller-supplied *path* is created
+    if missing and is left in place.
+    """
+    if path is None:
+        dest = Path(tempfile.mkdtemp(prefix=prefix))
+        remove = True
+    else:
+        dest = Path(path)
+        dest.mkdir(parents=True, exist_ok=True)
+        dest = dest.resolve()
+        if not dest.is_dir():
+            raise HarnessError(f"isolated_filesystem target is not a directory: {dest}")
+        remove = False
+    try:
+        with in_directory(dest):
+            yield dest
+    finally:
+        if remove:
+            shutil.rmtree(dest, ignore_errors=True)
+
+
+@contextmanager
 def workspace(
     *,
     updates: Mapping[str, str | None] | None = None,
     prefix: str = "harness-ws-",
     root: Path | None = None,
+    include_product: bool = True,
 ) -> Iterator[Workspace]:
     """Allocate an ephemeral work directory and isolated HOME; clean up.
 
     Yields a :class:`Workspace`. Both directory trees are removed when
     the context exits, including on exception. The product tree is never
-    used as the default cwd.
+    used as the default cwd. *root* is captured now, while the process
+    cwd is still the repository root.
     """
+    repo = (root if root is not None else repo_root()).resolve()
     work = Path(tempfile.mkdtemp(prefix=prefix))
     home = Path(tempfile.mkdtemp(prefix="harness-home-"))
     try:
-        env = isolated_environ(home, updates=updates, root=root)
-        yield Workspace(path=work, home=home, env=env)
+        env = isolated_environ(
+            home,
+            updates=updates,
+            root=repo,
+            include_product=include_product,
+        )
+        yield Workspace(path=work, home=home, env=env, root=repo)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
@@ -714,14 +970,15 @@ def write_file(
 ) -> Path:
     """Write *content* to *path*, creating parent directories.
 
-    Returns the resolved path. Raises ``OSError`` on I/O failure.
+    Returns the resolved path. Raises ``OSError`` on I/O failure and
+    :class:`HarnessError` if text cannot be encoded.
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(content, bytes):
         dest.write_bytes(content)
     else:
-        dest.write_text(content, encoding=encoding)
+        dest.write_bytes(as_bytes(content, encoding=encoding))
     return dest.resolve()
 
 
@@ -731,7 +988,8 @@ def read_file(path: str | Path, *, encoding: str = DEFAULT_CHARSET) -> str:
     Raises ``FileNotFoundError`` if the file does not exist — never
     returns an empty string or ``None`` to mean "missing". Raises
     :class:`HarnessError` if the path exists but is not a regular file,
-    or on an ``OSError`` other than classified absence.
+    if the bytes are not valid in *encoding*, or on an ``OSError`` other
+    than classified absence.
     """
     src = Path(path)
     _read_regular_file(src)
@@ -739,6 +997,10 @@ def read_file(path: str | Path, *, encoding: str = DEFAULT_CHARSET) -> str:
         return src.read_text(encoding=encoding)
     except FileNotFoundError:
         raise
+    except LookupError as exc:
+        raise HarnessError(f"unknown text encoding {encoding!r}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise HarnessError(f"cannot decode {src} as {encoding}: {exc}") from exc
     except OSError as exc:
         raise HarnessError(f"cannot read {src}: {exc}") from exc
 
@@ -770,13 +1032,185 @@ def path_is_file(path: str | Path) -> bool:
     """
     src = Path(path)
     try:
-        return src.is_file()
+        return src.is_file() and not src.is_symlink()
     except OSError as exc:
         raise HarnessError(f"cannot stat {src}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# Process invocation
+# In-process library call
+# ---------------------------------------------------------------------------
+
+
+def _run_captured(
+    body: Callable[[], Any],
+    *,
+    stdin: str | bytes | None,
+    env: Mapping[str, str],
+    cwd: Path,
+    charset: str,
+    catch: bool,
+) -> tuple[
+    Any,
+    BaseException | None,
+    tuple | None,
+    bytes,
+    bytes,
+    dict[str, str],
+    tuple[WarningMessage, ...],
+]:
+    if stdin is None:
+        input_bytes = b""
+    elif isinstance(stdin, str):
+        input_bytes = as_bytes(stdin, encoding=charset)
+    else:
+        input_bytes = stdin
+
+    stdout_buf = io.BytesIO()
+    stderr_buf = io.BytesIO()
+    raw_in: Any = io.BytesIO(input_bytes)
+
+    old_stdin = sys.stdin
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+
+    value: Any = None
+    exception: BaseException | None = None
+    exc_info: tuple | None = None
+    captured: list[WarningMessage] = []
+    environ_after: dict[str, str] = {}
+
+    try:
+        sys.stdin = _open_text(raw_in, charset=charset)
+        sys.stdout = _open_text(stdout_buf, charset=charset)
+        sys.stderr = _open_text(stderr_buf, charset=charset)
+        with _push_environ(env), in_directory(cwd):
+            with catch_warnings(record=True) as captured:
+                simplefilter("always")
+                try:
+                    value = body()
+                except (KeyboardInterrupt, GeneratorExit):
+                    raise
+                except BaseException as exc:
+                    if not catch:
+                        raise
+                    exception = exc
+                    exc_info = _capture_exc_info()
+                finally:
+                    environ_after = dict(os.environ)
+                    try:
+                        sys.stdout.flush()
+                    except OSError:
+                        pass
+                    try:
+                        sys.stderr.flush()
+                    except OSError:
+                        pass
+    finally:
+        sys.stdin = old_stdin
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+
+    return (
+        value,
+        exception,
+        exc_info,
+        stdout_buf.getvalue(),
+        stderr_buf.getvalue(),
+        environ_after,
+        tuple(captured),
+    )
+
+
+def call(
+    fn: Callable[..., Any],
+    /,
+    *args: Any,
+    stdin: str | bytes | None = None,
+    env: Mapping[str, str | None] | None = None,
+    cwd: str | Path | None = None,
+    isolate: bool = True,
+    catch: bool = True,
+    charset: str = DEFAULT_CHARSET,
+    **kwargs: Any,
+) -> CallResult:
+    """Call a public library entry and capture its outcome.
+
+    This is the canonical in-process path for a function or bound method
+    the suite imported from the public surface. Extra positional and
+    keyword arguments are forwarded to *fn* unchanged. A file object the
+    binary-file parse entry should read is passed as an argument of
+    *fn*, not as harness *stdin*; *stdin* only replaces ``sys.stdin``
+    for the duration of the call.
+
+    When *isolate* is true (the default) the call runs in a fresh
+    :func:`workspace` so it cannot see the caller's cwd, HOME, or
+    incidental environment variables. Pass ``isolate=False`` (and
+    optionally *cwd* / *env*) to inherit the caller's process state, or
+    to reuse a :class:`Workspace`. *env* is a complete mapping when
+    supplied with ``isolate=False``; with ``isolate=True`` it is applied
+    as updates on the isolated environment (``None`` unsets).
+
+    A product exception is recorded on the result when *catch* is true
+    (the default) and is never turned into ``value is None`` as a
+    success. ``KeyboardInterrupt`` and ``GeneratorExit`` always
+    propagate. Does not raise on a product exception when *catch* is
+    true.
+    """
+    target = _require_callable(fn, label="call target")
+
+    def _run(child_cwd: Path, child_env: Mapping[str, str]) -> CallResult:
+        print(
+            f"[harness] call fn={getattr(target, '__qualname__', type(target).__name__)!r} "
+            f"cwd={str(child_cwd)!r}",
+            flush=True,
+        )
+        value, exception, exc_info, stdout, stderr, environ_after, warns = _run_captured(
+            lambda: target(*args, **kwargs),
+            stdin=stdin,
+            env=child_env,
+            cwd=child_cwd,
+            charset=charset,
+            catch=catch,
+        )
+        result = CallResult(
+            value=value if exception is None else None,
+            exception=exception,
+            exc_info=exc_info,
+            stdout=stdout,
+            stderr=stderr,
+            cwd=str(child_cwd),
+            environ=environ_after,
+            warnings=warns,
+        )
+        print(
+            f"[harness] call_done exception="
+            f"{type(result.exception).__name__ if result.exception else None} "
+            f"stdout_len={len(result.stdout)} stderr_len={len(result.stderr)} "
+            f"environ_keys={len(result.environ)}",
+            flush=True,
+        )
+        if result.exception is not None and 0 < len(result.stderr) <= 2000:
+            print(f"[harness] stderr={result.stderr_text!r}", flush=True)
+        return result
+
+    if isolate:
+        with workspace(updates=env) as ws:
+            work = Path(cwd).resolve() if cwd is not None else ws.path
+            return _run(work, ws.env)
+
+    if env is not None:
+        child_env = {k: v for k, v in env.items() if v is not None}
+    else:
+        child_env = dict(os.environ)
+    work = Path(cwd).resolve() if cwd is not None else Path.cwd()
+    if not work.is_dir():
+        raise HarnessError(f"call cwd is not a directory: {work}")
+    return _run(work, child_env)
+
+
+# ---------------------------------------------------------------------------
+# Subprocess invocation
 # ---------------------------------------------------------------------------
 
 
@@ -793,22 +1227,21 @@ def run_command(
     *stdin* may be ``str`` (encoded as UTF-8) or ``bytes``. ``None`` is
     treated as empty stdin (EOF), not as inheriting the caller's stream.
     When *env* is ``None``, the current process environment is inherited.
-    When *cwd* is ``None``, the current process cwd is used.
-
-    Raises:
-        FileNotFoundError: if the executable cannot be found.
-        HarnessError: on timeout or an OSError other than classified
-            absence. Does not interpret the exit status.
+    When *cwd* is ``None``, the current process cwd is used. Raises
+    :class:`HarnessError` if the executable cannot be found or the child
+    times out. Does not interpret the exit status.
     """
     if not argv:
-        raise ValueError("argv must be non-empty")
+        raise HarnessError("argv must be non-empty")
     workdir = str(Path(cwd).resolve()) if cwd is not None else str(repo_root())
     if stdin is None:
         input_bytes: bytes = b""
     elif isinstance(stdin, str):
-        input_bytes = stdin.encode(DEFAULT_CHARSET)
+        input_bytes = as_bytes(stdin)
     else:
         input_bytes = stdin
+
+    child_env = dict(env) if env is not None else dict(os.environ)
 
     print(
         f"[harness] run cwd={workdir!r} argv={list(argv)!r}",
@@ -818,28 +1251,26 @@ def run_command(
         completed = subprocess.run(
             list(argv),
             cwd=workdir,
-            env=dict(env) if env is not None else None,
+            env=child_env,
             input=input_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
         )
-    except FileNotFoundError:
-        raise
+    except FileNotFoundError as exc:
+        raise HarnessError(f"executable not found: {argv[0]!r}: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
         raise HarnessError(
             f"command timed out after {timeout}s: {list(argv)!r}"
         ) from exc
-    except OSError as exc:
-        raise HarnessError(f"failed to execute {argv[0]!r}: {exc}") from exc
-
     result = RunResult(
         returncode=completed.returncode,
         stdout=completed.stdout or b"",
         stderr=completed.stderr or b"",
         argv=tuple(str(a) for a in argv),
         cwd=workdir,
+        environ=child_env,
     )
     print(
         f"[harness] exit={result.returncode} "
@@ -847,223 +1278,67 @@ def run_command(
         flush=True,
     )
     if result.returncode != 0 and 0 < len(result.stderr) <= 2000:
-        print(f"[harness] stderr={_diagnostic_text(result.stderr)!r}", flush=True)
+        print(f"[harness] stderr={result.stderr_text!r}", flush=True)
     return result
 
 
-# ---------------------------------------------------------------------------
-# Library probes (canonical public entry)
-# ---------------------------------------------------------------------------
-
-_PROBE_CACHE: Path | None = None
-
-
-def _probe_cache_dir() -> Path:
-    """Return a process-lifetime directory for compiled probes.
-
-    Created on first compile, not at import. Removed at interpreter exit.
-    """
-    global _PROBE_CACHE
-    if _PROBE_CACHE is None:
-        _PROBE_CACHE = Path(tempfile.mkdtemp(prefix="libprobe-"))
-        atexit.register(shutil.rmtree, _PROBE_CACHE, True)
-    return _PROBE_CACHE
-
-
-def _compile_argv(
-    source_path: Path,
-    output: Path,
+def run_python(
     *,
-    language: str,
-    include: Path,
-    lib: Path,
-    extra_args: Sequence[str],
-) -> list[str]:
-    compiler = cxx_compiler()
-    argv = [
-        compiler,
-        f"-std={DEFAULT_CXX_STD}",
-        f"-I{include}",
-    ]
-    if language == "c++":
-        for define in _DEFAULT_CXX_DEFINES:
-            argv.append(f"-D{define}")
-    argv.extend(str(a) for a in extra_args)
-    argv.extend([str(source_path), str(lib), "-o", str(output)])
-    if os.name != "nt":
-        argv.append("-pthread")
-    return argv
-
-
-def compile_probe(
-    source: str | bytes,
-    *,
-    language: str = "c++",
-    extra_args: Sequence[str] | None = None,
-    output: str | Path | None = None,
-    root: Path | None = None,
-    timeout: float | None = DEFAULT_TIMEOUT,
-) -> Path:
-    """Compile *source* against the recipe-built library and return the binary.
-
-    *language* is ``c++`` (public C++ headers) or ``c`` (C interface
-    header). Extra compiler/linker tokens go in *extra_args*. When
-    *output* is omitted, the binary is written to a process-lifetime
-    cache keyed by source, language, flags, and library identity.
-
-    This is compile-and-link of a caller-supplied probe, not a product
-    rebuild: it does not run cmake, ninja, make, or fetch.
-
-    Raises:
-        FileNotFoundError: missing header, library, or compiler.
-        HarnessError: compiler non-zero exit, timeout, or I/O failure.
-            Compiler stderr is included in the message. A compile failure
-            is never returned as a :class:`RunResult`.
-    """
-    lang = _normalize_language(language)
-    extra = tuple(str(a) for a in extra_args) if extra_args else ()
-    base = root if root is not None else repo_root()
-    include = include_dir(root=base)
-    lib = library_file(root=base)
-    src_bytes = _as_bytes(source)
-
-    if output is None:
-        try:
-            st = lib.stat()
-        except OSError as exc:
-            raise HarnessError(f"cannot stat library {lib}: {exc}") from exc
-        digest = hashlib.sha256()
-        digest.update(src_bytes)
-        digest.update(b"\0")
-        digest.update(lang.encode())
-        digest.update(b"\0")
-        digest.update(str(lib).encode())
-        digest.update(b"\0")
-        digest.update(str(st.st_mtime_ns).encode())
-        digest.update(b"\0")
-        digest.update(str(st.st_size).encode())
-        digest.update(b"\0")
-        digest.update(b"\0".join(a.encode() for a in extra))
-        digest.update(b"\0")
-        digest.update(cxx_compiler().encode())
-        out_path = _probe_cache_dir() / f"probe-{digest.hexdigest()[:20]}"
-        if out_path.is_file() and os.access(out_path, os.X_OK):
-            print(f"[harness] reuse probe {out_path}", flush=True)
-            return out_path
-    else:
-        out_path = Path(output).resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    suffix = ".cpp" if lang == "c++" else ".c"
-    work = Path(tempfile.mkdtemp(prefix="libprobe-src-"))
-    try:
-        source_path = work / f"probe{suffix}"
-        source_path.write_bytes(src_bytes)
-        argv = _compile_argv(
-            source_path,
-            out_path,
-            language=lang,
-            include=include,
-            lib=lib,
-            extra_args=extra,
-        )
-        print(f"[harness] compile argv={argv!r}", flush=True)
-        try:
-            completed = subprocess.run(
-                argv,
-                cwd=str(work),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=timeout,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                f"C++ compiler {cxx_compiler()!r} not found; a C++20 "
-                "toolchain is required to link probes against the library"
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise HarnessError(
-                f"compile timed out after {timeout}s: {argv!r}"
-            ) from exc
-        except OSError as exc:
-            raise HarnessError(f"failed to spawn compiler: {exc}") from exc
-        if completed.returncode != 0:
-            err = _diagnostic_text((completed.stderr or b"") + (completed.stdout or b""))
-            raise HarnessError(
-                f"probe failed to compile or link (exit {completed.returncode}): {err}"
-            )
-        if not out_path.is_file():
-            raise HarnessError(f"compiler exited 0 but produced no binary at {out_path}")
-        out_path.chmod(out_path.stat().st_mode | 0o111)
-        return out_path
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-
-
-def invoke(
-    source: str | bytes,
-    args: Sequence[str] | None = None,
-    *,
-    language: str = "c++",
+    code: str | None = None,
+    argv: Sequence[str] | None = None,
     cwd: str | Path | None = None,
     env: Mapping[str, str] | None = None,
     stdin: bytes | str | None = None,
     timeout: float | None = DEFAULT_TIMEOUT,
-    extra_args: Sequence[str] | None = None,
-    root: Path | None = None,
     isolate: bool = True,
+    root: Path | None = None,
+    include_product: bool = True,
 ) -> RunResult:
-    """Compile *source* against the library and run the resulting binary.
+    """Run this process's interpreter as a child.
 
-    This is the canonical way to reach the product. The probe is a child
-    process: a process-wide length cap, and any other global library
-    state, cannot leak into the pytest process or a later probe.
+    *code* is passed as ``python -c <code>``. *argv* are extra arguments
+    after ``-c`` (or, when *code* is omitted, the arguments after the
+    interpreter — for example a script path). At least one of *code* or
+    *argv* must be supplied.
+
+    When *include_product* is false, the product ``src/`` tree is removed
+    from the child's ``PYTHONPATH`` and a preamble drops that tree from
+    ``sys.path`` before *code* runs. Combined with an isolated cwd that
+    is not the product tree, this is the library-substrate negative
+    control: the package is not importable through the path. The
+    preamble is applied only when *code* is supplied.
 
     When *isolate* is true (the default) and *cwd* / *env* are omitted,
-    the process runs in a fresh :func:`workspace` so it cannot see the
-    caller's cwd or HOME. Pass ``isolate=False`` (and optionally *cwd* /
-    *env*) to inherit the caller's process state, or to reuse a
-    :class:`Workspace`.
-
-    Returns a :class:`RunResult`. Does not raise on a non-zero product
-    exit — that status is the observation. Compile/link failures raise
-    :class:`HarnessError` before the probe is started.
+    the child runs in a fresh :func:`workspace`. Does not raise on a
+    non-zero child exit.
     """
-    binary = compile_probe(
-        source,
-        language=language,
-        extra_args=extra_args,
-        root=root,
-        timeout=timeout,
-    )
-    argv = [str(binary), *_normalize_args(args)]
+    if code is None and not argv:
+        raise HarnessError("run_python requires code= or a non-empty argv")
+
+    python = _python()
+    repo = (root if root is not None else repo_root()).resolve()
+
+    child_code = code
+    if child_code is not None and not include_product:
+        child_code = _product_scrub_preamble(root=repo) + child_code
+
+    child_argv: list[str] = [python]
+    if child_code is not None:
+        child_argv.extend(["-c", child_code])
+    if argv:
+        child_argv.extend(str(a) for a in argv)
 
     if cwd is not None or env is not None or not isolate:
-        run_env = dict(env) if env is not None else None
-        if run_env is not None:
-            try:
-                lib = library_file(root=root)
-            except FileNotFoundError:
-                lib = None
-            if lib is not None and _is_shared_library(lib):
-                libdir = str(lib.parent)
-                existing = run_env.get("LD_LIBRARY_PATH", "")
-                if libdir not in existing.split(os.pathsep):
-                    run_env["LD_LIBRARY_PATH"] = (
-                        libdir if not existing else libdir + os.pathsep + existing
-                    )
+        child_env = dict(env) if env is not None else None
+        if child_env is not None and not include_product:
+            child_env = _environ_without_product(child_env, root=repo)
         return run_command(
-            argv,
-            cwd=cwd,
-            env=run_env,
-            stdin=stdin,
-            timeout=timeout,
+            child_argv, cwd=cwd, env=child_env, stdin=stdin, timeout=timeout
         )
 
-    with workspace(root=root) as ws:
+    with workspace(root=repo, include_product=include_product) as ws:
         return run_command(
-            argv,
+            child_argv,
             cwd=ws.path,
             env=ws.env,
             stdin=stdin,
@@ -1071,42 +1346,101 @@ def invoke(
         )
 
 
-def run_cli(
-    args: Sequence[str] | None = None,
+def run_script(
+    source: str,
     *,
-    cwd: str | Path | None = None,
-    env: Mapping[str, str] | None = None,
+    relpath: str = "caller.py",
     stdin: bytes | str | None = None,
     timeout: float | None = DEFAULT_TIMEOUT,
-    root: Path | None = None,
-    binary: str | Path | None = None,
+    env: Mapping[str, str | None] | None = None,
+    cwd: str | Path | None = None,
     isolate: bool = True,
+    root: Path | None = None,
+    include_product: bool = True,
 ) -> RunResult:
-    """Invoke the convenience CLI as ``<cli> *args``.
+    """Write *source* to a ``.py`` file and run it as this interpreter's program.
 
-    When *binary* is omitted, uses :func:`cli_bin`. Isolation rules match
-    :func:`invoke`. Does not raise on a non-zero product exit.
+    The child is ordinary script execution: ``__main__.__file__`` is set,
+    the session is not interactive, and no test-runner tracer is
+    attached.
 
-    Raises:
-        FileNotFoundError: if the CLI was not built.
+    When *isolate* is true the script is written inside a fresh
+    :func:`workspace`. With ``isolate=False``, *cwd* is required so the
+    script is not written into the product tree.
     """
-    exe = Path(binary) if binary is not None else cli_bin(root=root)
-    argv = [str(exe), *_normalize_args(args)]
+    repo = (root if root is not None else repo_root()).resolve()
 
-    if cwd is not None or env is not None or not isolate:
-        return run_command(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdin=stdin,
-            timeout=timeout,
-        )
+    if isolate:
+        with workspace(updates=env, root=repo, include_product=include_product) as ws:
+            script = ws.write(relpath, source)
+            work = Path(cwd).resolve() if cwd is not None else ws.path
+            merged = ws.env
+            if not include_product:
+                merged = _environ_without_product(merged, root=repo)
+            return run_python(
+                argv=[str(script)],
+                cwd=work,
+                env=merged,
+                stdin=stdin,
+                timeout=timeout,
+                isolate=False,
+                root=repo,
+                include_product=include_product,
+            )
 
-    with workspace(root=root) as ws:
-        return run_command(
-            argv,
-            cwd=ws.path,
-            env=ws.env,
-            stdin=stdin,
-            timeout=timeout,
+    if cwd is None:
+        raise HarnessError(
+            "run_script with isolate=False requires cwd so the script "
+            "is not written into the product tree"
         )
+    work = Path(cwd).resolve()
+    if not work.is_dir():
+        raise HarnessError(f"run_script cwd is not a directory: {work}")
+    script = write_file(work / relpath, source)
+    if env is not None:
+        child_env = {k: v for k, v in env.items() if v is not None}
+    else:
+        child_env = dict(os.environ)
+    if not include_product:
+        child_env = _environ_without_product(child_env, root=repo)
+    return run_python(
+        argv=[str(script)],
+        cwd=work,
+        env=child_env,
+        stdin=stdin,
+        timeout=timeout,
+        isolate=False,
+        root=repo,
+        include_product=include_product,
+    )
+
+
+__all__ = (
+    "DEFAULT_CHARSET",
+    "DEFAULT_TIMEOUT",
+    "CallResult",
+    "HarnessError",
+    "RunResult",
+    "Workspace",
+    "as_bytes",
+    "binary_buffer",
+    "call",
+    "in_directory",
+    "isolated_environ",
+    "isolated_filesystem",
+    "open_binary",
+    "open_text",
+    "path_is_file",
+    "product_package_dir",
+    "product_package_name",
+    "product_src_dir",
+    "read_bytes",
+    "read_file",
+    "repo_root",
+    "run_command",
+    "run_python",
+    "run_script",
+    "text_buffer",
+    "workspace",
+    "write_file",
+)

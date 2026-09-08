@@ -1,541 +1,364 @@
-# VCS Orbulk — Full Product Requirements Document
+# PathSel — Full Product Requirements Document
 
 ## Product overview
 
-**VCS Orbulk** (VCS Large Object Store) is a command-line Git extension and accompanying client–server specification for versioning large files alongside an ordinary Git repository. Instead of storing large file bytes as Git blobs, VCS Orbulk stores compact **pointer** blobs in Git and keeps the real content in a separate object store that is synchronized with a remote VCS Orbulk endpoint when the user fetches or pushes.
+**PathSel** (pronounced "path sel") lets a caller declaratively specify how to extract values from a JSON document. The **pathsel.py** library evaluates a PathSel expression against ordinary Python data — mappings, sequences, strings, numbers, booleans, and null — and returns the selected value.
 
-The finished product is a single compiled command-line utility named `git-orbulk`. Users interact with it as a Git extension (`git orbulk <command>`): each capability is reached by choosing a VCS Orbulk subcommand (and, for low-level filter and hook paths, by Git invoking those subcommands automatically). The client ships as a self-contained binary for Mac, Windows, Linux, and FreeBSD, and is intended to be used as that binary—not as a library API for other programs to import.
+A first-time integrator takes a document whose `foo` key holds a mapping whose `bar` key is the string `baz`, evaluates the expression `foo.bar`, and receives `baz`. Evaluating `foo.bar` on a document that has no such path yields null rather than failing. Leaving `baz` unextracted, returning the whole document, or raising on a missing path is a failure of the product.
 
-This document specifies **user- and integrator-observable behavior only**. Exact published symbol names, import paths, wire media-type tokens, and other Interface Contract details are out of scope here. Every feature point below corresponds to behavior that exists in the finished product. Feature points are ordered so foundational capabilities come first; a later feature point may refine an earlier one only when it says so explicitly.
+The library exposes two complementary ways to evaluate an expression: a one-shot search that takes the expression text and the document together, and a compile-then-search path that parses the expression once and applies the same parsed expression to many documents. Both paths produce the same result for the same expression and document. Optional evaluation options control how constructed mappings are built and let the caller attach extra language functions.
+
+This document specifies **user- and integrator-observable behavior only**. Exact published symbol names, import paths, and call spellings belong in the Interface Contract, not here. Every feature point below corresponds to behavior that exists in the finished pathsel.py product. Feature points are ordered so foundational capabilities come first; a later feature point may depend on an earlier one, never the reverse.
 
 ## Terminology
 
 | Term | Meaning in this PRD |
 | --- | --- |
-| **Pointer** | A small UTF-8 text blob stored in Git in place of a large file. It names the content hash algorithm, object id, and byte size of the real content. |
-| **LFS object** | The full file bytes identified by a pointer’s object id, stored outside Git’s object database. |
-| **Local object store** | On-disk cache under the repository’s Git directory (by default under `.git/lfs/objects`) where VCS Orbulk keeps objects locally. |
-| **Endpoint** | The remote VCS Orbulk service URL used for batch negotiation, transfers, and locking for a given Git remote. |
-| **Batch API** | The request/response exchange that asks the endpoint which objects need upload or download and how to transfer them. |
-| **Basic transfer** | The default transfer style: download via HTTP GET and upload via HTTP PUT of raw object bytes at URLs supplied by batch negotiation. |
-| **Clean** | Converting working-tree file bytes into a pointer (and storing the object locally) as Git stages content. |
-| **Smudge** | Converting a pointer back into working-tree file bytes (fetching the object if needed) as Git checks content out. |
-| **Track pattern** | A path pattern recorded in Git attributes so matching paths use the VCS Orbulk filter. |
-| **Lock** | A server-side exclusive claim on a repository-relative path that blocks other users from pushing changes to that path when lock verification is enabled. |
-| **Porcelain command** | A user-facing VCS Orbulk subcommand (track, fetch, push, and similar). |
-| **Plumbing command** | A low-level VCS Orbulk subcommand intended mainly for Git filters, hooks, or automation (clean, smudge, filter-process, pre-push, and similar). |
-| **Core capability** | A user-observable capability that reflects the product’s design goal; acceptance must prove the real behavior, not a stub. |
+| **PathSel expression** | A Unicode text in the PathSel language. One expression is evaluated against one current value at a time. |
+| **Document** | The Python value supplied as the starting current value: typically a mapping or sequence that came from JSON, but any nested combination of the six data types below is accepted. |
+| **Search entry** | The one-shot library entry: the caller supplies an expression and a document (and optionally evaluation options) and receives the selected value, or the call does not succeed. Specified in FP-01. |
+| **Compile entry** | The library entry that parses an expression once and returns a parsed expression. Specified in FP-01. |
+| **Parsed expression** | The successful result of the compile entry. It can be searched against many documents without re-supplying the expression text. |
+| **Current value** | The value the expression is looking at. Search starts with the document. Pipe, projection, and function argument evaluation change the current value for a subexpression. |
+| **Null** | The language’s missing or empty result. It is Python’s none. A missing field, an out-of-range index, and a selector applied to the wrong kind of value all yield null; they do not fail. |
+| **Object** | A mapping (JSON object). Keys are strings. |
+| **Array** | A sequence (JSON array). |
+| **Number** | An integer or a floating-point value. Host decimal values participate as numbers. A boolean is not a number. |
+| **String** | A Unicode text value. |
+| **Boolean** | The values true and false. They are not the numbers 1 and 0. |
+| **Expression reference** | A deferred subexpression, written with a leading ampersand, that a built-in function later applies to each element. Specified in FP-05 and used in FP-07. |
+| **False value** | A value the language treats as false for the and operator, the or operator, the not operator, and filter predicates. The finite set is: false, null, the empty string, the empty array, and the empty object. The number 0 and the number 0.0 are not false values. |
+| **True value** | Any value that is not a false value. |
+| **Projection** | An expression that walks every element of an array (or every value of an object) and collects the non-null results of a right-hand subexpression into a new array. Null results are dropped, not stored. |
+| **Evaluation options** | An optional object the caller attaches to a search. It may supply a mapping type for constructed objects and a custom function provider. Specified in FP-08. |
+| **Built-in function** | One of the finite set of language functions listed in FP-07. A function is invoked by name with parentheses. |
+| **Core capability** | A user-observable capability that reflects PathSel’s design goal; acceptance must prove the real library behavior, not a stub. |
 | **Discrimination** | An assertion’s ability to distinguish a faithful implementation from a hollow, skipped, or proxy one. |
 
-## Public command inventory
+## Public surface inventory
 
-The product exposes a fixed, finite set of subcommands. Porcelain commands: checkout, clone, completion, dedup, env, ext, fetch, fsck, install, lock, locks, logs, ls-files, migrate, prune, pull, push, status, track, uninstall, unlock, untrack, update, and version. Plumbing commands: clean, filter-process, merge-driver, pointer, post-checkout, post-commit, post-merge, pre-push, smudge, and standalone-file. Built-in help covers the suite and those subcommands. Feature points below group these entries by independently verifiable capability; they do not invent additional commands.
+pathsel.py is a **library**. Integrators reach it by installing the package and calling the search entry or the compile entry. A command-line helper is installed with the package; it is not a graded core capability (see Non-goals).
+
+The public, independently verifiable surfaces, grouped the way later feature points verify them, are:
+
+- Evaluate a PathSel expression against a document, either in one shot or by compiling first and searching the parsed expression; missing paths yield null; empty or ill-formed expression text does not succeed (FP-01).
+- Select fields by unquoted and quoted identifiers, including dotted subexpressions and whitespace between tokens (FP-02).
+- Select array elements by index (including negative indices), by slice, and by one-level flatten (FP-03).
+- Project through list wildcards, object wildcards, and filter predicates (FP-04).
+- Build new arrays and objects with multiselect, chain results with pipe, name the current value, write JSON literals and raw strings, and form expression references (FP-05).
+- Compare values and combine them with and, or, not, and parentheses (FP-06).
+- Call the finite set of built-in functions, including those that consume expression references (FP-07).
+- Control constructed-object type and attach custom language functions through evaluation options (FP-08).
+
+Feature points below group these entries by independently verifiable capability. They do not invent additional product surfaces.
 
 ## Non-functional constraints
 
-- **Form factor:** One command-line binary that Git can locate and invoke; not a stable embeddable library API or ABI.
-- **Platforms:** Builds and runs on Linux, macOS, Windows, and FreeBSD-class systems. This case’s acceptance targets Linux with a recent Go toolchain, GNU make, and a working Git installation (Git 2.0.0 or newer; recent Git recommended).
-- **Hardware:** CPU-only. No GPU or accelerator substrate is required or claimed. The mandatory execution substrate is a real host able to build the binary and run Git plus the VCS Orbulk CLI.
-- **Storage model:** Large content is never required to live as ordinary Git blobs for tracked paths; Git history holds pointers, and the local object store plus remotes hold objects.
-- **Empty files:** An empty working-tree file maps to an empty pointer (passthrough); empty content is not forced through the hashed-object path.
-- **Protocol hash:** Newly written pointers use SHA-256 object ids expressed as lowercase hexadecimal, prefixed by the protocol’s SHA-256 hash-method label (exact token lives in the Interface Contract). SHA-256 is the only hash method current clients write.
-- **Protocol constants:** Exact version-identifier strings, JSON media-type tokens, hash-method labels, and similar wire literals are fixed by the VCS Orbulk specification and appear in the Interface Contract. This PRD states their behavioral roles (exact string comparison, required headers) without prescribing implementer-internal encodings beyond what an outside observer must see.
+- **Form factor:** A pure-Python library with zero declared runtime third-party dependencies. No compiled extensions, native code, GPU, or accelerator are required or claimed.
+- **Language:** Python 3.9 or newer, including the CPython and PyPy implementations the project tests.
+- **Platforms:** Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter.
+- **Hardware:** CPU-only. The mandatory execution substrate is a real host that can import pathsel.py from this repository’s source tree and evaluate `foo.bar` against a nested mapping.
+- **Data model:** The six JSON types — object, array, string, number, boolean, null — plus expression references as function arguments. Host decimal numbers are numbers for comparison (FP-06), not for built-in functions: a function that requires a number refuses a host decimal as an invalid type. Host values that are not one of those types are accepted as current values; built-in functions that need a JSON type refuse them as an invalid type unless a conversion function defines another outcome (FP-07).
+- **Missing is null:** A path that does not exist yields null. That is success with a null result, not a search failure.
+- **Error text:** Wording of failure messages is informational. Graded behavior is success versus failure, that the failure is a kind of value error, and that the observer can tell the failure kinds in FP-01 apart — not a particular sentence.
 
 ## Capability discrimination (global)
 
-Every feature point below is a **core capability**. The mandatory substrate is a real CPU host with a built VCS Orbulk binary and a usable Git installation for repository operations. None of these capabilities is an accelerator-backed mandatory-substrate GPU feature.
+Every feature point below is a **core capability**. None is an accelerator-backed mandatory-substrate GPU feature.
 
 For every feature point:
 
-- **Present:** Real CLI (and, where applicable, real HTTP/SSH endpoint) behavior matches the described outcomes.
-- **Absent / hollow:** Subcommands missing; filters that pass bytes unchanged without storing objects; fetch/push that never contact an endpoint; lock commands that only print local fiction; migrate that does not rewrite history or attributes as specified.
+- **Present:** Real pathsel.py behavior matches the described outcomes when an expression is searched against a constructed document, or when invalid expression text or an invalid function call is refused.
+- **Absent / hollow:** Search always returns the document; every missing path raises; wildcards return objects instead of arrays of values; filters ignore the predicate; built-in functions are stubs; compile does not reuse.
 
-Cheaper proxies (printing fixed fixture pointers, skipping network with fabricated success, or substituting an in-memory fake Git) do **not** satisfy core capabilities. There is no approved degradation scenario that replaces the real filter, object store, or transfer protocol for a core capability.
+Cheaper proxies (a single hardcoded `foo.bar` lookup, a JSON-pointer subset, a regular-expression scrape, or a memorized fixture table) do **not** satisfy core capabilities. There is no approved degradation scenario that replaces PathSel evaluation for a core capability.
 
-**Negative control (Git / binary substrate):** When the VCS Orbulk binary is deliberately removed from the executable search path, or when Git repository prerequisites for a repo-bound command are absent, the corresponding operation must fail with a non-zero exit—not pass silently or skip.
+**Negative control (library substrate):** When pathsel.py is deliberately not importable in an isolated subprocess (removed from the import path), a search of `foo.bar` against a mapping whose `foo` holds a mapping whose `bar` is `baz` must fail to produce the string `baz` — a hard assertion, not a skip. When the interpreter is present and the package is imported from this tree, that same search yields `baz`. Output-equality alone is not proof that the real package ran.
 
 ## Non-goals
 
-- Providing a stable Go (or other language) library API or ABI for third-party imports.
-- Implementing the remote VCS Orbulk **server**; this product is the client (plus protocol documentation the client obeys).
-- Guaranteeing every forge already speaks every optional transfer style (custom agents, tus uploads, pure SSH); the client must implement the negotiation and built-in paths described here when the peer supports them.
-- Automatic undo of history rewrite after migrate; users must validate and force-push carefully themselves.
-- Enabling the text merge driver by default on every tracked path; track records the ordinary `lfs` merge attribute, and Git’s default merge of pointer text remains the default until a user separately configures a merge driver (FP-18).
+- Shipping a graded command-line product. A helper named psel.py is installed with the package and can search a JSON file or standard input, or print a parse tree, but those behaviors are not a core feature point.
+- Being a JSON encoder or decoder. The library evaluates expressions against already-loaded Python values. How a caller reads JSON text into those values is outside this product.
+- Mutating the input document. Evaluation returns a selected or constructed value; it does not write back into the caller’s document.
+- Guaranteeing a particular evaluation-throughput benchmark. The performance suite and the hypothesis suite are development tools, not graded oracles.
+- Treating compliance-sync scripts, the grammar stress helper, the parse-tree renderer, packaging scripts, or the expression-compilation cache as product capabilities. Cache presence or size is not observable through the public entries and is not graded.
+- Treating a later official language revision that this library does not implement as required. The graded language is the expression surface documented here and exercised by this repository’s compliance cases.
 
 ---
 
 ## Feature points
 
-### FP-01: Command-line entry, help, version, and environment report
+### FP-01: Search an expression and compile it for reuse
 
-**Public entry:** The `git-orbulk` binary as a Git extension top-level command (`git orbulk`), with nested subcommands; the version-reporting path (`git orbulk version`); the `git orbulk env` subcommand; and built-in help for the suite and individual subcommands (`git orbulk help` and per-command help).
-
-**Normal behavior:**
-
-- Invoking VCS Orbulk with no subcommand, or asking for help on the suite or a subcommand, yields user-facing usage information and exits successfully.
-- A version path reports that this build is VCS Orbulk and includes version identity suitable for support and diagnostics. The environment-report subcommand presents that same identity among related environment facts, distinct from dedicated per-remote server indications; a caller tells this build from another well-shaped VCS Orbulk version banner by agreement of those two presentations of that identity, not by matching an unrelated related-fact token. Wording, layout, and version-number string of that identity are not fixed.
-- The environment-report subcommand prints the effective VCS Orbulk-related configuration a user needs to debug setup: discovered endpoints for remotes, filter configuration summary, and related environment facts. For each remote, the report presents a dedicated indication of the VCS Orbulk server URL that would be used, distinct from related environment facts that merely list configuration, Git remotes, or other setup details, and distinct from other remotes’ dedicated indications. A caller confirms which server would be used for a remote from that remote’s dedicated indication. After a repository or global LFS URL override, that dedicated indication must name the override rather than the URL derived from the Git remote; an echo of the override among related facts while the dedicated indication still names the derived URL does not count as replacement. A per-remote LFS URL override is observed on that remote’s dedicated indication, not a sibling’s (FP-06). This obligation does not fix the indication’s label, wording, or layout.
-
-**Boundary / error behavior:**
-
-- An option token that the invoked entry does not define — whether given at the top-level entry or after a known subcommand — fails with a non-zero exit and a clear error on standard error, and is distinguishable from running the same entry without that token. Where a command defines mutually incompatible options, those combinations fail with the same shape. Unknown subcommands likewise fail with a non-zero exit and a clear error on standard error.
-- Environment report remains usable in a repository that has remotes but has never transferred objects yet: the dedicated indication still names the URL that would be used after derivation or override.
-
-**Verifiable oracle:**
-
-- Success: the built binary reports version identity that agrees with the environment report’s related-fact presentation of this build, and that agreement is of that identity rather than of an unrelated related-fact token; help for the suite and for at least one porcelain subcommand is available; the environment report presents, for each remote, a dedicated indication of the VCS Orbulk server URL that would be used, distinct from related environment facts; after a repository or global LFS URL override that dedicated indication names the override rather than the derived URL; a related-facts echo of an override while the dedicated indication still names the derived URL does not satisfy the report.
-- Failure / absence: no runnable CLI; version cannot be reported, or the version path’s identity disagrees with the environment report’s related-fact presentation of this build; undefined option tokens are accepted as success; environment report omits that dedicated indication, invents unrelated output, or treats a related-facts echo of an override as replacement while the dedicated indication still names the derived URL.
-
----
-
-### FP-02: Install, uninstall, and repository hook update
-
-**Public entry:** The `git orbulk install`, `git orbulk uninstall`, and `git orbulk update` subcommands.
+**Public entry:** The search entry and the compile entry of the pathsel.py library. The caller supplies expression text. The search entry also supplies a document and may supply evaluation options (FP-08). The compile entry returns a parsed expression; searching that parsed expression against a document (with optional evaluation options) is the second path. Field selection, indexing, projections, constructors, logic, and functions are specified in FP-02 through FP-07. This feature point is the two entries, the missing-path-is-null rule, and the failures that prevent any evaluation.
 
 **Normal behavior:**
 
-- Install configures Git’s clean and smudge filters under the filter name `lfs` (and the long-running process-filter equivalent that modern Git prefers) in the chosen Git configuration scope so Git will invoke VCS Orbulk for attributed paths. By default it writes to the user’s global Git configuration and does not overwrite an existing non-Orbulk filter definition unless the user forces replacement.
-- When install runs inside a repository (unless the user asks to skip repository changes), it installs VCS Orbulk’s repository hooks into the repository’s hooks directory, or into the directory named by Git’s shared hooks-path setting when that setting is in effect and the installed Git is new enough to support it (Git 2.9.0 or newer). The installed hooks are: **pre-push** (uploads LFS objects before Git refs update), **post-checkout**, **post-commit**, and **post-merge** (enforce lockable working-tree permissions—see FP-10).
-- Install supports scopes: global (default), local repository, worktree (when Git is at least 2.20.0 and worktree config is enabled), system, or an explicit configuration file path. Combining more than one of local, worktree, system, and explicit-file is invalid. It can install filters while skipping smudge downloads (so clones do not auto-download objects), and can install filters while skipping repository hook installation.
-- When an existing hook body would block automatic installation, **manual mode** leaves that hook file unchanged and emits caller-visible hook-integration guidance on that conflict path. Preserve-alone is not enough: non-force automatic install also leaves a foreign body untouched while failing the conflict, so the discriminating observation is that instructional guidance together with the unchanged foreign body. The guidance must be distinguishable from empty output, from an unknown-option or other rejection error, and from a filter-install success message that says nothing about integrating hooks; it must give the caller enough hook-integration material to finish the merge of the blocked task without the tool rewriting the foreign body. A complete dump of all four hook-integration recipes satisfies that even when only one of the four hook files is the blocking foreign body. This obligation does not require remainders after stripping foreign-body and absolute-path covariates to differ across different blocked hook types, does not pin hook-type spellings, and does not fix the exact wording of the guidance or require any particular dump of hook script text.
-- Uninstall reverses filter configuration in the chosen scope and, when run in a repository context analogous to install (and not asked to skip repository changes), removes the VCS Orbulk hooks for all four hook types above.
-- Update refreshes repository hooks for the current repository so VCS Orbulk’s hook entry points remain installed after Git or repository layout changes. For each of the four hook types above:
-  - If the hook file is missing, update installs the current standard VCS Orbulk hook body for that type (a script that invokes VCS Orbulk for that hook).
-  - If the hook file exists and its body is empty, or is already exactly the current standard body, or is exactly one of the finite predecessor standard bodies this product recognizes for that same hook type (historical VCS Orbulk-issued scripts for that hook), a non-force update leaves an already-current body unchanged and silently replaces an empty or predecessor body with the current standard body.
-  - If the hook file exists and its body matches none of those upgradeable cases (a custom or foreign hook), a non-force update leaves that file unchanged and the update fails for that conflict. Force overwrites such a file with the current standard body. Manual mode on that same conflict leaves the foreign body unchanged and emits the same class of caller-visible hook-integration guidance described above (distinguishable from empty output, rejection errors, and filter-only success chatter), instead of writing over the foreign body.
+- A search of `foo.bar` against a mapping whose `foo` key holds a mapping whose `bar` key is the string `baz` yields the string `baz`.
+- Compiling `foo.bar` and searching the parsed expression against that same document also yields `baz`. Searching that same parsed expression against a second document whose `foo.bar` is the string `other` yields `other`. The two documents do not need to be searched with a new compile.
+- A search of the same expression and document through the one-shot entry equals a compile-then-search of that pair. This holds at least for `foo.bar` on the `baz` document and for `foo.bar[0]` on a document whose `foo.bar` is the array of strings `one` then `two` (the result is `one`).
+- A search of `foo.bar.baz.bad` against a mapping whose only path is `foo.bar.baz` equal to `correct` yields null. A search of `bad` against that document yields null. A search of `one` against the array of strings `one`, `two`, `three` yields null: an identifier selects a field of an object, not an array element.
+- A search of an expression that is only spaces, tabs, line feeds, or carriage returns, with no other tokens, does not succeed. A search of a zero-length expression does not succeed. Neither call yields a document value.
 
 **Boundary / error behavior:**
 
-- Install without force that encounters pre-existing non-Orbulk filter settings leaves those settings intact and fails.
-- Worktree scope is rejected or unavailable on Git versions that lack the required worktree configuration support.
-- Uninstall outside a repository still reverses filter configuration in the non-repository scope it claims (for example global filters) and does not pretend to have modified a repository that does not exist. Update outside a repository fails and does not modify filters or hooks.
-- Non-force install or update that encounters a custom or foreign hook body fails without modifying that hook file. Force overwrites as described above. Manual mode on that conflict path preserves the foreign body and emits the hook-integration guidance described above rather than rewriting the file.
+- A zero-length expression does not succeed. That failure is a kind of value error. The observer can tell this empty-expression failure apart from a successful null (`missing` on `{}` succeeds and is null), apart from a syntax failure on a non-empty ill-formed expression such as `foo.`, and apart from an incomplete-expression failure.
+- An expression of only spaces, tabs, line feeds, or carriage returns, with no other tokens, does not succeed. That failure is the incomplete-expression kind: the observer can tell that no token was supplied. It is the same kind as an opening parenthesis with no matching close, and it is not the empty-expression kind of a zero-length expression.
+- An expression that is not well-formed does not succeed and does not yield a search result. The failure is a kind of value error. The observer can tell a failure of `foo.` apart from a failure of `.foo` as different places in the expression; wording of the report is informational. Concrete cases that fail this way include: a lone `.`; a trailing `.` such as `foo.`; a leading `.` such as `.foo`; doubled dots `foo..bar`; a lone `]`, `}`, or `)`; `foo.1` (a bare number after a dot); `foo.-11`; an unclosed double-quoted identifier; an unclosed backtick literal; an unclosed raw string; a lone `=`; a lone `-` that is not part of a number; `foo-bar` (a hyphen is not part of an unquoted identifier); `foo[*]bar` (a wildcard not followed by a continuation the grammar allows); and `foo[8:2:0:1]` (a slice with more than three colon-separated parts). A lone `[` or `{` or `(` is the incomplete-expression kind of an opening token with no matching close, not this syntax kind.
+- Those failures are distinguishable from a successful search that happens to return null. `foo.bar` on `{}` succeeds and is null. `foo.` does not succeed.
+- An incomplete expression that ends where a token is still required (for example an opening parenthesis with no matching close) does not succeed. The observer can tell the expression was not finished, and can tell that failure apart from a syntax failure on `foo.` and apart from the empty-expression failure of a zero-length expression.
 
 **Verifiable oracle:**
 
-- Success: after install, Git configuration shows `lfs` clean/smudge (and process filter) settings pointing at VCS Orbulk; a repository gains pre-push, post-checkout, post-commit, and post-merge hooks that invoke VCS Orbulk; uninstall removes those filter settings and hooks; update re-establishes missing hooks; non-force update replaces an empty hook file with the current standard body while leaving a custom/foreign body untouched and failing; force replaces a custom/foreign body; on a blocking foreign hook, manual mode leaves that file unchanged and emits hook-integration guidance distinguishable from empty output, from rejection errors, and from filter-only success chatter that says nothing about integrating hooks.
-- Failure / absence: Git never invokes VCS Orbulk on attributed paths; push does not upload LFS objects because no pre-push hook was installed; uninstall leaves filters or hooks in place; non-force update either skips empty-hook replacement or overwrites custom hooks without force; manual mode on a blocking foreign hook either rewrites the foreign body, emits nothing distinguishable from silence or rejection noise, or emits only filter-install success chatter with no hook-integration guidance.
+- Success: `foo.bar` on `{foo: {bar: baz}}` is `baz` through the search entry; the same pair through compile-then-search is `baz`; the same parsed expression on `{foo: {bar: other}}` is `other`; `foo.bar[0]` on `{foo: {bar: [one, two]}}` is `one` on both entries; `foo.bar.baz.bad` and `bad` on `{foo: {bar: {baz: correct}}}` are null; `one` on `[one, two, three]` is null; `missing` on `{}` succeeds and is null.
+- Failure / absence: the one-shot entry and compile-then-search disagree on `foo.bar`; a parsed expression cannot be applied to a second document; a missing path raises instead of returning null; a zero-length expression yields null or the document; a whitespace-only expression is treated as the same kind of failure as a zero-length expression; `foo.` succeeds; a lone `.` yields null; a successful null and a syntax failure cannot be told apart; a `foo.` failure and a `.foo` failure cannot be told apart as different places.
 
 ---
 
-### FP-03: Pointer format and pointer utility
+### FP-02: Select fields with identifiers and subexpressions
 
-**Public entry:** The `git orbulk pointer` plumbing subcommand, and every clean path that writes pointers into Git.
+**Public entry:** The search entry and the compile-then-search path of FP-01. This feature point is how an identifier names a field and how a dot chains selections. Indexing is FP-03. Wildcards are FP-04.
 
 **Normal behavior:**
 
-- A pointer is a UTF-8 text document of key/value lines. Each line is one key, one space, one value, and a Unix newline. Keys use only lowercase letters, digits, dot, and hyphen. Lines after the version line are sorted by key ascending. Values contain no carriage returns or newlines. The whole pointer must stay under 1024 bytes including any extension lines. There is exactly one canonical encoding for a given pointer payload.
-- The first key is always the version key. Its value is a fixed protocol version identifier compared by exact string equality (no URL parsing or case folding). Newly written pointers use the current VCS Orbulk v1 protocol version identifier, which is distinct from the still-readable legacy pre-release identifier. The Interface Contract names those two exact strings in those two roles. That distinction is observable on generate and check: a generated pointer passes both ordinary check and strict check; a pointer that is otherwise the same except that its version identifier is the Contract’s still-readable legacy pre-release identifier — not some other still-readable alias this build happens to accept — is accepted by ordinary check and fails strict check with the already-distinguished valid-but-not-canonical status.
-- Required keys after version include: an object-id key whose value is the hash-method label, then a colon, then a lowercase hex digest (SHA-256 for current clients), and a size key giving the object size in bytes as a decimal integer.
-- Empty file content corresponds to an empty pointer document (passthrough): empty working-tree bytes are not rewritten into a hashed pointer body.
-- Pointer blobs stored in Git preserve the executable bit of the replaced working-tree file.
-- Keys in the protocol’s extension-line form (content-extension metadata lines on the pointer) are part of a valid pointer document and of the single canonical encoding. Using the pointer check entry on such a document: when those extension lines appear together with the required version, object-id, and size keys in the product’s canonical order, both ordinary check and strict check succeed; when the same extension keys and values are present but not in that canonical order, ordinary check still succeeds while strict check fails with a status distinguishable from the canonical case.
-- The pointer subcommand can generate a pointer from a local file; compare that generated pointer to another implementation’s pointer file or to standard input; and check whether input is a valid pointer (with an optional strict mode that also requires the canonical encoding VCS Orbulk itself would write). Compare classifies the relation between the file-built pointer and the other pointer into three caller-distinguishable outcome classes: match, mismatch, and malformed-other. The class is determined by that relation, not by incidental properties of the input bytes alone: two different files each compared to their own matching other share one match class; each compared to the other file’s pointer share one mismatch class distinct from match; a non-pointer other yields a third, malformed class. The same three classes apply when the other pointer is supplied via standard input. Callers must be able to tell the classes apart without relying on input-byte covariates. This obligation does not fix the observable carrier to any particular exit status or message text.
+- An unquoted identifier starts with a Latin letter or an underscore and continues with Latin letters, decimal digits, or underscores. The expression `foo` on `{foo: {bar: {baz: correct}}}` yields that inner mapping. `foo.bar` yields `{baz: correct}`. `foo.bar.baz` yields the string `correct`. The identifier `__L` on `{__L: true}` yields true. The identifier `Y_1623` on `{Y_1623: true}` yields true.
+- Spaces, tabs, line feeds, and carriage returns may appear between tokens and do not change meaning. The expression `foo` then a line feed then `.` then a line feed then `bar` then a line feed then `.baz` on the document above yields `correct`.
+- A quoted identifier is a JSON string in double quotes. It can name a field that an unquoted identifier cannot: a space, a dot, a hyphenated token that is not a valid unquoted identifier, a Unicode character, or a key that starts with a digit. The expression `"foo.bar"` on a mapping whose key `foo.bar` is the string `dot` yields `dot`. The expression `"foo bar"` on a mapping whose key `foo bar` is the string `space` yields `space`. The expression `"foo\nbar"` on a mapping whose key is a `foo`, a line feed, and `bar` yields that field. The expression `"1"` on a mapping whose `foo` holds a mapping whose key `1` is an array selects that array when written as `foo."1"`. The expression `"☯"` on `{☯: true}` yields true.
+- Quoted identifiers interpret JSON string escapes, including a Unicode escape. The expression `"\tF\uCebb"` selects the field whose key is a tab, `F`, and that Unicode character. The expression `"foo\"bar"` on a mapping whose key is `foo` then a double quote then `bar` yields that field.
+- Chained identifiers select nested fields. `foo.bar.baz` on `{foo: {bar: {baz: correct}}}` is the string `correct`.
+- Applying a field identifier to a value that is not an object yields null. `foo.bar` on a document whose `foo` is the array of mappings `[{bar: one}, {bar: two}]` yields null — it does not project. Projecting that array is FP-04.
 
 **Boundary / error behavior:**
 
-- Check mode exits non-zero when the input is not a valid pointer; strict check exits with a distinguishable failure status when the pointer is valid-but-not-canonical (different from a merely invalid pointer).
-- Compare mode’s match, mismatch, and malformed-other outcome classes remain mutually distinguishable under the relation rules above, including when the other side is not a valid pointer document.
-- Pointer documents that exceed the size limit, omit required keys, place required keys out of order, or are not parseable as key/value pointer lines are rejected as pointers by check and by filter smudge recognition, whereas carriage-return line endings, a missing final newline, and a well-formed pointer that still uses the Contract’s still-readable legacy pre-release identifier still parse as valid-but-not-canonical (ordinary check succeeds; strict check fails with the distinguishable status).
-- Invoking check without exactly one of file-path or standard-input sources is invalid. Combining check with a compare-pointer file is invalid. Combining strict and non-strict check flags is invalid.
+- `foo.1` and `foo.-11` do not succeed (syntax). Selecting a key that looks like a number requires a quoted identifier.
+- `foo-bar` does not succeed (syntax). A hyphen is not a legal character in an unquoted identifier; a hyphenated key is selected with a quoted identifier.
+- `foo.`, `.foo`, `foo..bar`, and `foo.bar.` do not succeed.
+- An unclosed `"` does not succeed. A quoted identifier whose interior is not a legal JSON string (an illegal escape) does not succeed.
+- A missing field yields null, not a failure: `foo.bad` on `{foo: {bar: 1}}` is null; `bad.morebad.morebad` on that document is null.
 
 **Verifiable oracle:**
 
-- Success: hashing a known file yields a deterministic pointer with version, oid, and size; that generated pointer passes both ordinary check and strict check; check rejects truncated or structurally invalid forms; carriage-return line endings, a missing final newline, and a pointer that is otherwise the same as that generated document except that its version identifier is the Contract’s still-readable legacy pre-release identifier remain ordinary-check successes that fail only under strict mode with the distinguishable valid-but-not-canonical status; a pointer that includes protocol extension-line keys in canonical order passes strict check, while the same keys out of that order fail strict check while still passing ordinary check; compare on two different files yields one shared match class when each is paired with its own matching other, one shared mismatch class (distinct from match) when each is paired with the other file’s pointer, and a third malformed class for a non-pointer other—observable without depending on input-byte covariates.
-- Failure / absence: large files are stored as ordinary Git blobs; generated “pointers” are non-deterministic, binary, or missing required keys; check always succeeds; compare never makes the match class shared across two files each paired with their own matching other, or never makes the mismatch class shared across those files each paired with the other file’s pointer and distinct from both match and malformed.
+- Success: `foo.bar.baz` on `{foo: {bar: {baz: correct}}}` is `correct`; the same path written with line feeds around the dots is `correct`; `__L` and `Y_1623` select those keys; `"foo.bar"` selects the dotted key; `"foo bar"` selects the spaced key; `foo."1"` selects the key `1` under `foo`; `"☯"` selects that key; `"foo\nbar"` selects the key that contains a line feed; `"foo\"bar"` selects the key with an embedded quote; `foo.bar` on `{foo: [{bar: one}]}` is null.
+- Failure / absence: `foo.bar` on a list of objects returns `[one]` instead of null; `foo.1` succeeds; `foo-bar` succeeds; quoted identifiers are treated as literal quote characters in the key; `"foo.bar"` walks `foo` then `bar` instead of the single dotted key; a missing field raises; whitespace between `foo` and `.bar` is rejected.
 
 ---
 
-### FP-04: Track and untrack patterns
+### FP-03: Index, slice, and flatten arrays
 
-**Public entry:** The `git orbulk track` and `git orbulk untrack` porcelain subcommands.
+**Public entry:** The search and compile entries of FP-01. This feature point is bracket selection on arrays: a single index, a slice, and the flatten operator. Wildcards and filters are FP-04.
 
 **Normal behavior:**
 
-- Track with one or more patterns appends VCS Orbulk filter attributes for those patterns to the appropriate `.gitattributes` file (patterns follow Git attributes / gitignore glob rules). After track or untrack, the user must commit attribute changes themselves; VCS Orbulk does not create the Git commit.
-- Each newly written tracking line names the filter, diff, and merge attributes as `lfs`, disables Git text conversion for the pattern, and may additionally mark the pattern lockable. Those four attribute roles (filter, diff, merge, text-disabled) are the finite set written for an ordinary track; lockable is the additional optional attribute.
-- Track with no patterns lists currently tracked patterns. An **excluded pattern** is an attributes line that names the filter attribute in a form that disables or unsets filtering for that pattern (Git’s attribute negation or unset forms for the filter attribute), rather than enabling the `lfs` filter value. When such excluded patterns are present alongside tracked `lfs` filter patterns, the default listing surfaces those excluded pattern texts in a portion of the listing distinct from the tracked patterns. A mode that avoids listing excluded patterns still lists tracked patterns but omits that excluded-pattern portion. A machine-readable JSON listing mode is available when listing (and must not be combined with pattern arguments).
-- Track can treat arguments as literal filenames (escaping glob metacharacters in the attributes file), mark patterns lockable (working-tree files become read-only unless locked—see FP-10), clear lockable, or dirty matching index entries without rewriting attributes so Git will re-clean files into VCS Orbulk.
-- Dry-run reports what would change without mutating disk and implies detailed logging. Verbose still applies the track attribute mutation (unlike dry-run) while reporting in more detail which matching files would be touched; when matching previously Git-tracked files exist for the pattern, that report is distinguishable from the same track without verbose.
-- Untrack removes the matching VCS Orbulk tracking lines (those that enable the `lfs` filter for the given patterns) from attributes. Untrack does not write excluded-pattern lines; excluded patterns are arranged by placing the disabling/unsetting filter attribute forms in attributes files directly.
+- A zero-based index in square brackets selects one element. On `{foo: {bar: [zero, one, two]}}`, `foo.bar[0]` is `zero`, `foo.bar[1]` is `one`, `foo.bar[2]` is `two`.
+- A negative index counts from the end: `foo.bar[-1]` is `two`, `foo.bar[-2]` is `one`, `foo.bar[-3]` is `zero`.
+- An index past either end yields null: `foo.bar[3]` and `foo.bar[-4]` are null.
+- Indexing a value that is not an array yields null. Indexing a string yields null. `foo[0]` on `{foo: {bar: 1}}` is null. `foo.bar[0][0][0]` on `{foo: {bar: [[one, two], [three, four]]}}` is null once the current value is the string `one`.
+- On `{foo: [{bar: one}, {bar: two}, {bar: three}, {notbar: four}]}`, `foo[0].bar` is `one`, `foo[3].notbar` is `four`, and `foo[3].bar` is null. `foo.bar` on that document is null (FP-02): a field does not walk an array.
+- A slice `[start:stop:step]` selects a sub-array using the host slice rules. Omitted parts are allowed. On `{foo: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}`:
+  - `foo[0:10]`, `foo[:]`, `foo[::]`, and `foo[0:10:1]` each yield the ten numbers in order.
+  - `foo[1:9]` yields `[1, 2, 3, 4, 5, 6, 7, 8]`.
+  - `foo[0:10:2]` yields `[0, 2, 4, 6, 8]`.
+  - `foo[5:]` yields `[5, 6, 7, 8, 9]`.
+  - `foo[::-1]` yields `[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]`.
+  - `foo[8:2:-2]` yields `[8, 6, 4]`.
+  - `foo[-4:-1]` yields `[6, 7, 8]`.
+  - `foo[10:-20]` yields an empty array.
+- A slice on a non-array yields null: `bar[0:10]` on `{bar: {baz: 1}}` is null. `baz[:2].a` on a document whose `baz` is the number 50 is null.
+- A slice is a projection: `foo[:2].a` on `{foo: [{a: 1}, {a: 2}, {a: 3}]}` yields `[1, 2]`. `foo[:2].b` yields an empty array (every element’s `b` is null and is dropped). `bar[::-1].a.b` on `{bar: [{a: {b: 1}}, {a: {b: 2}}, {a: {b: 3}}]}` yields `[3, 2, 1]`.
+- A slice may be the whole expression when the document itself is an array: `[:2].a` on `[{a: 1}, {a: 2}, {a: 3}]` yields `[1, 2]`.
+- The flatten operator is empty square brackets `[]`. If the current value is an array, each element that is itself an array is spliced in one level; an element that is not an array is kept as a single item. On `{foo: [[["one", "two"], ["three", "four"]], [["five", "six"], ["seven", "eight"]], [["nine"], ["ten"]]]}`, `foo[]` yields `[["one", "two"], ["three", "four"], ["five", "six"], ["seven", "eight"], ["nine"], ["ten"]]`, and `foo[][0]` yields `["one", "three", "five", "seven", "nine", "ten"]`. Flatten on a non-array yields null: `[]` on `{type: object}` is null.
+- Flatten is a projection: `foo[].bar` on `{foo: [{bar: one}, {notbar: x}]}` yields `["one"]`. `foo[][0][0]` on the triple-nested document above yields an empty array (each first element is a string; indexing a string is null and is dropped).
 
 **Boundary / error behavior:**
 
-- Patterns must be quoted by the user in shells that expand globs; VCS Orbulk records the pattern text it is given.
-- JSON list mode combined with pattern arguments is invalid.
-- Track/untrack outside a Git repository fails.
+- A slice whose step is the number 0 does not succeed. That failure is distinguishable from a syntax failure and from a successful empty array. `foo[8:2:0]` does not succeed. `foo[10:-20]` succeeds and is `[]`.
+- A slice with four colon-separated parts, such as `foo[8:2:0:1]`, does not succeed (syntax). `foo[2:a:3]` does not succeed. `foo[8:2&]` does not succeed.
+- Out-of-range indices and slices do not fail: they yield null or an empty array as specified above.
 
 **Verifiable oracle:**
 
-- Success: after tracking a pattern such as all PSD files, `.gitattributes` contains an `lfs` filter rule for that pattern; listing shows it; when attributes also contain a pattern line that disables or unsets the filter attribute for a pattern (rather than enabling `lfs`), the default listing includes that pattern text in the excluded portion and the avoid-excluded listing omits that portion while still showing tracked patterns; untrack removes the matching `lfs` tracking lines for that pattern without adding excluded-pattern lines; lockable tracking marks paths as lockable in attributes; dry-run leaves attributes unchanged while reporting the intended change; verbose still writes the attribute rule and reports differently from non-verbose when matching files exist.
-- Failure / absence: attributes unchanged; listing empty despite prior track; default and avoid-excluded listings cannot be told apart when excluded-form attribute lines are present; Git never routes matching files through VCS Orbulk filters.
+- Success: `foo.bar[0]` / `[1]` / `[2]` / `[-1]` / `[-2]` / `[-3]` on `[zero, one, two]` match those strings; `[3]` and `[-4]` are null; `foo.bar` on a list of objects is null while `foo[0].bar` is `one`; `foo[1:9]` is `[1..8]`; `foo[::-1]` reverses `0..9`; `foo[8:2:-2]` is `[8, 6, 4]`; `foo[:2].a` is `[1, 2]` and `foo[:2].b` is `[]`; a slice of a non-array is null; `foo[]` one-level-flattens the triple-nested document; `foo[][0]` is the six first elements; `foo[].bar` on `{foo: [{bar: one}, {notbar: x}]}` is `["one"]`; `foo[][0][0]` on the triple-nested document is `[]`; `[]` on an object is null.
+- Failure / absence: negative indices raise or wrap incorrectly; `foo.bar` on a list of objects projects; a slice of an object returns that object; flatten walks more than one nesting level in a single `[]`; `foo[8:2:0]` yields an empty array; out-of-range `[3]` raises.
 
 ---
 
-### FP-05: Clean, smudge, filter-process, and local object store
+### FP-04: Wildcard and filter projections
 
-**Public entry:** The clean, smudge, and filter-process plumbing subcommands as configured by install (FP-02) and attributes (FP-04); Git add/checkout as the user-visible trigger.
+**Public entry:** The search and compile entries of FP-01. This feature point is the star wildcard on arrays and on objects, and the filter projection `[?...]`. Flatten and slices are FP-03. Filter predicates use the comparators and truthiness of FP-06; the collection rule is specified here.
 
 **Normal behavior:**
 
-- **Clean:** Git supplies file bytes on standard input. For non-empty content that is not already a pointer document, VCS Orbulk computes the SHA-256 digest of those bytes, stores the object in the local object store when absent under the repository’s LFS objects directory using the content-addressed nested path derived from the object id (first two hex digits, next two hex digits, then the full object id), and writes a canonical pointer to standard output; an already-pointer input is written through without hashing or storing a nested object. Clean does not upload to a remote.
-- **Smudge:** Git supplies blob bytes on standard input. If the content is recognized as a pointer, VCS Orbulk loads the object from the local store or downloads it from the endpoint, then writes raw object bytes to standard output. Non-pointer content is copied through unchanged.
-- **Filter-process:** Speaks Git’s long-running filter protocol and services clean and smudge requests with the same semantics; this is the preferred path when modern Git is configured to use it.
-- Smudge and filter-process honor include/exclude path settings (configuration or `.lfsconfig`): when include is set, only matching paths are smudged to real content; when exclude is set, matching paths are left as pointers. Skip modes (command flag or skip-smudge environment / install option) pass pointers through without downloading.
-- Local object store root defaults under the Git directory’s `lfs` namespace. A configured storage location replaces that default store root — the parent of the LFS objects directory — rather than replacing the objects directory itself. The LFS objects directory remains a child of the relocated root, so cleaned objects still appear under that root using the same objects-directory-plus-shard layout as the default (objects directory, then first two hex digits of the object id, next two hex digits, then the full object id) and are not written at the default Git-directory objects path. Objects are content-addressed and shared across commits that reference the same oid.
+- A list wildcard is `[*]`. It requires an array. On `{foo: [{bar: one}, {bar: two}, {bar: three}, {notbar: four}]}`, `foo[*].bar` yields `["one", "two", "three"]` and `foo[*].notbar` yields `["four"]`. Nulls from the right-hand side are dropped.
+- When the document itself is that array, `[*]` yields the four mappings and `[*].bar` yields `["one", "two", "three"]`.
+- `foo[*].bar[*].kind` on an array of mappings whose `bar` is an array of mappings with `kind` collects a nested array per left-hand element: `[["basic", "intermediate"], ["advanced", "expert"]]` for two matching parents. A parent whose `bar` is the string `string` contributes nothing to that projection (the inner wildcard on a string is null and is dropped).
+- `foo[*][0]` on `{foo: [[one, two], [three, four], [five]]}` yields `["one", "three", "five"]`. `foo[*][1]` yields `["two", "four"]`. `foo[*][2]` yields an empty array.
+- A list wildcard on a missing or non-array value yields null: `bar[*]` on a document that has no `bar` is null.
+- An object wildcard is a star in a field position: `*` or `foo.*`. It requires an object and projects over that object’s **values**. On `{foo: {bar: {baz: val}, other: {baz: val}, other2: {baz: val}, other3: {notbaz: [a, b, c]}, other4: {notbaz: [a, b, c]}}}`, `foo.*.baz` yields `["val", "val", "val"]` and `foo.*.notbaz` yields `[[a, b, c], [a, b, c]]`. `foo.*.notbaz[0]` yields `["a", "a"]`.
+- `*.bar` on `{foo: {bar: one}, other: {bar: one}, nomatch: {notbar: three}}` yields `["one", "one"]`.
+- `*` on `{top1: {sub1: {foo: one}}, top2: {sub1: {foo: one}}}` yields the two `top` mappings. `*.*.foo[]` flattens the projected arrays and yields `["one", "one"]`.
+- Object wildcard on a non-object yields null.
+- A filter is `[?predicate]`. The left-hand value must be an array; otherwise the result is null. For each element, the predicate is evaluated with that element as the current value. Elements whose predicate is a true value are kept; others are omitted. A following selector is a projection over the kept elements.
+- A filter predicate may be a field’s truthiness, without a comparator. On `{foo: [{age: 0}, {age: null}]}`, `foo[?age]` yields `[{age: 0}]`: the number 0 is a true value and null is a false value.
+- On `{foo: [{name: a}, {name: b}]}`, `foo[?name == 'a']` yields `[{name: a}]`. Comparators and and/or/not inside a filter are the operators of FP-06.
+- On `{foo: [{first: foo, last: bar}, {first: foo, last: foo}, {first: foo, last: baz}]}`, `foo[?first == last]` yields the one mapping whose first and last are both `foo`, and `foo[?first == last].first` yields `["foo"]`.
+- On `{foo: [{age: 20}, {age: 25}, {age: 30}]}`, `foo[?age > \`25\`]` yields `[{age: 30}]`, `foo[?age >= \`25\`]` yields the 25 and 30 mappings, `foo[?age < \`25\`]` yields `[{age: 20}]`, `foo[?age == \`20\`]` yields `[{age: 20}]`, and `foo[?age != \`20\`]` yields the 25 and 30 mappings. `foo[?age > \`30\`]` yields an empty array.
+- A filter predicate may use a subexpression: `foo[?top.name == 'a']` on `{foo: [{top: {name: a}}, {top: {name: b}}]}` yields the first mapping.
+- A filter predicate may compare against a JSON literal object: `foo[?top == \`{"first": "foo", "last": "bar"}\`]` keeps the matching mapping.
+- Equality in a filter does not treat the number 0 as false or the number 1 as true: on an array of mappings whose `key` values are true, false, 0, 1, `[0]`, `{bar: [0]}`, null, `[1]`, and `{a: 2}`, `foo[?key == \`true\`]` keeps only `{key: true}`, `foo[?key == \`false\`]` keeps only `{key: false}`, `foo[?key == \`0\`]` keeps only `{key: 0}`, and `foo[?key == \`1\`]` keeps only `{key: 1}`.
+- A comparison or and/or after a list wildcard compares or combines the whole projected array, not each element. On `{foo: [{bar: one}, {bar: two}, {bar: three}, {notbar: four}]}`, `foo[*].bar == \`["one", "two", "three"]\`` is true, and `foo[*].bar == 'one'` is false.
 
 **Boundary / error behavior:**
 
-- If download fails during smudge, the default is to fail the filter operation; configuration or environment may instead allow checkout to succeed while leaving pointer text in the working tree (explicit skip-download-errors behavior).
-- Modified working-tree files are never overwritten by checkout-style smudging of placeholders (see also FP-08).
-- Missing local object without a reachable endpoint causes smudge failure unless skip/smudge-disable settings apply.
+- `foo[*]bar` and `foo[*]*` do not succeed (syntax). A wildcard that continues must use a dot, a bracket, or another grammatical continuation.
+- `.*` and `*foo` and `*0` do not succeed.
+- A filter on a non-array yields null, not an empty array and not a failure. A filter whose predicate is ill-formed does not succeed.
+- Projected nulls are dropped. An implementation that stores nulls in `foo[*].bar` when some elements lack `bar` is wrong.
 
 **Verifiable oracle:**
 
-- Success: adding a tracked large file stores an object under the sharded local path and stages a pointer blob in Git; checking out that commit restores identical file bytes when the object is present or downloadable; skip-smudge leaves pointer text in the working tree; when storage is relocated to a configured directory, a cleaned object appears under that relocated store root with the same objects-directory-plus-shard layout as the default and does not appear at the default Git-directory objects path.
-- Failure / absence: `git add` stores full large blobs in Git; working tree never materializes real content from pointers; object store directory never appears; a relocated storage location still receives objects at the default Git-directory objects path, or receives the shard directly under the configured path without the objects-directory child.
+- Success: `foo[*].bar` is `["one", "two", "three"]` and `foo[*].notbar` is `["four"]`; `foo[*][0]` on nested arrays is `["one", "three", "five"]`; `bar[*]` on a missing field is null; `foo.*.baz` is three `val` strings; `*.bar` skips the mapping that has no `bar`; `foo[?age]` on `[{age: 0}, {age: null}]` is `[{age: 0}]`; `foo[?name == 'a']` is the one matching mapping; `foo[?age >= \`25\`]` is the two older mappings; `foo[?first == last].first` is `["foo"]`; `foo[?key == \`true\`]` does not also keep `{key: 1}`; `foo[*].bar` omits elements without `bar`; `foo[*].bar == \`["one", "two", "three"]\`` is true and `foo[*].bar == 'one'` is false.
+- Failure / absence: `foo[*].bar` includes nulls; object wildcard returns keys instead of values; `*.bar` includes `three`; a filter on an object walks its values; `foo[?age]` drops `{age: 0}`; `foo[?key == \`true\`]` also keeps `1`; `foo[*].bar == 'one'` is true or yields `[false, false, false]`; `foo[*]bar` succeeds; a missing-array wildcard yields `[]` instead of null.
 
 ---
 
-### FP-06: Endpoint discovery and authentication
+### FP-05: Construct results, pipe, current value, and literals
 
-**Public entry:** Implicit behavior of any transfer or lock command; visible via `git orbulk env` (FP-01); configuration keys that override discovery.
+**Public entry:** The search and compile entries of FP-01. This feature point is multiselect lists and hashes, the pipe operator, the current-value token, JSON literals, raw string literals, and expression references. Functions that consume expression references are FP-07.
 
 **Normal behavior:**
 
-- By default the client derives the VCS Orbulk endpoint from the Git remote URL by appending the conventional `.git/info/lfs` suffix (whether or not the remote URL already ended in `.git`), including translating SSH-style Git remotes into the corresponding HTTPS endpoint host/path form for HTTP API use.
-- Users may override the endpoint with repository or global LFS URL settings, per-remote LFS URL settings, and separate push URL overrides when upload must hit a different host than download. After a repository or global LFS URL override, the environment report’s dedicated indication for a remote (FP-01) must name that override rather than the URL derived from the Git remote. An echo of the override among related environment facts while the dedicated indication still names the derived URL does not count as replacement. A per-remote LFS URL override changes that remote’s dedicated indication, not a sibling remote’s; a sibling remote without the same override still shows its own discovery result on its own dedicated indication. An echo among related facts, or the sibling remaining unchanged, does not prove this remote’s selected endpoint changed. A repository or global LFS URL override replaces derivation on every remote’s dedicated indication even when that remote also has a per-remote LFS URL; the per-remote override is the selected endpoint only in the absence of that repository or global override. A separate push URL override does not replace that dedicated indication — the indication remains the download URL that would be used — and is observed on the transfer path as upload contacting a different endpoint than download. This obligation does not fix the indication’s label, wording, or layout.
-- Default remote selection follows: the current branch’s remote if set, otherwise a configured LFS default remote name, otherwise the single existing remote if there is only one, otherwise `origin`, with analogous rules for push defaults.
-- For SSH Git remotes on the hybrid HTTPS API path (not the pure SSH transfer path of FP-17), the client runs the remote helper command **git-orbulk-authenticate** over SSH with the repository path and operation (`download` or `upload`). On success, the helper’s JSON supplies authorization headers and may supply an alternate endpoint URL and expiry hints. Those headers are attached to subsequent API requests; when that JSON names an alternate endpoint URL, subsequent API requests use that URL rather than the derived HTTPS form.
-- Otherwise the client uses Git’s credential helpers and HTTP Basic authentication material, and may use credentials embedded in URLs when present (discouraged but supported). Kerberos is supported where the environment provides it. NTLM is not supported on current major versions (VCS Orbulk 3.0 and later).
+- A multiselect hash is curly braces of `key: expression` pairs. On `{foo: {bar: bar, baz: baz, qux: qux}}`, `foo.{bar: bar}` yields `{bar: bar}`, and `foo.{bar: bar, baz: baz}` yields `{bar: bar, baz: baz}`. A missing right-hand field becomes null inside the new object: `foo.{bar: bar, noexist: noexist}` yields `{bar: bar, noexist: null}`. A multiselect hash whose left-hand current value is null yields null: `foo.badkey.{nokey: nokey}` is null, not `{nokey: null}`.
+- Hash keys may be unquoted or quoted identifiers. `foo.{"foo.bar": bar}` yields a mapping whose key is the string `foo.bar`. `{"baz": baz, "qux\"": "qux\""}` on `{baz: 2, qux": 3}` yields those two keys.
+- A multiselect hash after an object wildcard builds one mapping per value: `foo.nested.*.{a: a, b: b}` yields three mappings each with `a` and `b`.
+- A multiselect list is square brackets of comma-separated expressions, written after a dot or as a top-level constructor. `foo.[includeme, bar.baz[*].common]` on a document whose `foo.includeme` is true and whose `foo.bar.baz` is an array of mappings with `common` `first` then `second` yields `[true, ["first", "second"]]`. A multiselect list on a null current value yields null.
+- Pipe `|` evaluates the left-hand expression, then evaluates the right-hand expression with that result as the current value. On `{foo: {bar: {baz: one}, other: {baz: two}}}`, `foo | bar` yields `{baz: one}` and `foo | bar | baz` yields `one`. Spaces around `|` are optional: `foo|bar| baz` is the same. `foo.*.baz | [0]` on three `baz` values of `subkey` yields `subkey`.
+- Pipe stops a projection: the right-hand side sees the whole left-hand array, not one element. `foo.*.baz | [0]` indexes the projected array.
+- The current-value token `@` is the value being searched. On `{foo: [{name: a}, {name: b}], bar: {baz: qux}}`, `@` yields that whole mapping, `@.bar` yields `{baz: qux}`, and `@.foo[0]` yields `{name: a}`.
+- A JSON literal is a JSON value written between backticks. The literal is the result, regardless of the document. `` `"foo"` `` yields the string `foo`. `` `[1, 2, 3]` `` yields that array. `` `{"a": "b"}` `` yields that object. `` `true` ``, `` `false` ``, and `` `null` `` yield those values. `` `0` `` through `` `9` `` yield those integers. A literal may be used as the start of a subexpression: `` `{"a": "b"}`.a `` yields `b`; `` `[0, 1, 2]`[1] `` yields `1`. Leading or trailing whitespace inside the backticks is allowed: `` `  {"foo": true}` `` yields `{foo: true}`.
+- A backtick literal interprets JSON Unicode escapes: `` `"\u03a6"` `` yields the character Φ. A backtick inside a literal is escaped with a backslash.
+- A raw string literal is text between single quotes. No JSON escapes are processed. `'foo'` yields `foo`. `'  foo  '` keeps the spaces. `'0'` is the string `0`, not the number 0. `'\u03a6'` is the six characters backslash, u, 0, 3, a, 6. A single quote inside a raw string is escaped as backslash then quote: `'foo\'bar'` yields `foo'bar`. A backslash not followed by a quote is kept: `'\z'` is backslash then `z`; `'\\'` is two backslashes.
+- An expression reference is an ampersand followed by an expression. It does not evaluate immediately. It is a value of type expression reference, used as an argument to `map`, `sort_by`, `min_by`, and `max_by` (FP-07). Passing a non-reference where those functions require a reference is an invalid type (FP-07).
 
 **Boundary / error behavior:**
 
-- Failed SSH authentication helper invocation surfaces the helper’s error output and fails the operation.
-- Invalid or missing credentials cause API requests to fail with a non-zero exit rather than silently skipping transfers.
-- Pure configuration mistakes (empty endpoint where one cannot be derived) fail before pretending a transfer succeeded.
+- `` `foo"bar` `` does not succeed. An unclosed backtick does not succeed. An unclosed raw string does not succeed.
+- A literal in a position the grammar does not allow does not succeed. `foo.\`"bar"\`` does not succeed (a literal is not a legal right-hand identifier after a dot).
+- A multiselect list or hash that is missing a closing bracket or brace, or that has a trailing comma the grammar does not accept, does not succeed.
+- A pipe with a missing side (`foo |` or `| foo`) does not succeed.
 
 **Verifiable oracle:**
 
-- Success: the environment report’s dedicated indication for a remote names the derived or overridden URL that would be used — a repository or global LFS URL override replaces remote derivation on that indication, including on a remote that also has a per-remote LFS URL, and a per-remote LFS URL override (with no repository or global override) changes only that remote’s indication while a sibling without the same override keeps its own discovery result on its own indication; a push URL override leaves that dedicated download indication unchanged while upload contacts a different endpoint than download; an SSH remote on the hybrid path that offers git-orbulk-authenticate can authorize batch requests without a manual credential prompt when the helper succeeds, and when the helper names an alternate endpoint URL those requests use that URL; HTTPS remotes use credential helper results.
-- Failure / absence: always requires hard-coded URLs with no derivation; a repository or global override is only echoed among related facts while the dedicated indication still names the derived URL, or is ignored on a remote that also has a per-remote LFS URL; a per-remote override does not change that remote’s dedicated indication; a push URL override is treated as replacing the dedicated download indication, or upload and download still contact the same endpoint; SSH remotes on the hybrid path never attempt git-orbulk-authenticate; transfers “succeed” with no credential path when the server requires auth.
+- Success: `foo.{bar: bar, baz: baz}` is the two-key mapping; `foo.{bar: bar, noexist: noexist}` stores null for `noexist`; `foo.badkey.{nokey: nokey}` is null; `foo.[includeme, bar.baz[*].common]` is `[true, ["first", "second"]]`; `foo | bar | baz` is `one`; `foo.*.baz | [0]` is `subkey`; `@` is the document; `` `{"a": "b"}`.a `` is `b`; `` `[1, 2, 3]` `` is that array; `'foo'` is `foo`; `'\u03a6'` is the escape text, not Φ; `'foo\'bar'` is `foo'bar`; `` `"\u03a6"` `` is Φ.
+- Failure / absence: a missing multiselect field omits the key instead of storing null; a multiselect on null yields an empty object; pipe projects element-wise so `foo.*.baz | [0]` indexes each string; `@` is rejected; raw strings interpret Unicode escapes; `` `{"a": "b"}`.a `` is rejected; `foo.\`"bar"\`` succeeds.
 
 ---
 
-### FP-07: Batch negotiation and basic object transfer
+### FP-06: Compare values and combine them with logic
 
-**Public entry:** Used internally by fetch, push, pull, clone, smudge, and related commands; exercised whenever objects move to or from an HTTP(S) endpoint.
+**Public entry:** The search and compile entries of FP-01. This feature point is `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, and parentheses. Filters in FP-04 use these operators. Truthiness is the false-value set in Terminology.
 
 **Normal behavior:**
 
-- The client posts a batch request to the endpoint’s objects batch path. Each batch request must send an Accept header that names the protocol’s designated VCS Orbulk JSON media type, and must send a Content-Type header that carries that same media type; servers must accept an optional charset parameter on Content-Type. Batch responses are expected to use that media type as well.
-- The request names the operation (`download` or `upload`), optionally advertises supported transfer adapters (servers must assume **basic** when the list is omitted), optionally includes the Git ref name for authorization schemes that need it, lists objects by oid and size (size at least zero), and may name the hash algorithm (default SHA-256).
-- The response selects a transfer adapter and, per object, either indicates the object already exists on the server, returns transfer actions with href/header/expiry metadata, or returns per-object errors.
-- **Basic download:** HTTP GET of the action href with supplied headers; response body is raw object bytes. Partial or resumable downloads may reuse HTTP range requests when applicable.
-- **Basic upload:** HTTP PUT of raw bytes to the action href with supplied headers. A verify action, when present, is performed after upload as the protocol requires. Upload content typing may be auto-detected from the object or forced to a generic binary stream via configuration.
-- When the tus transfer path is explicitly enabled in configuration and basic-transfers-only is not enabled, the client must include that advanced adapter in the batch request’s advertised transfer list (in addition to basic), not merely leave the list basic-only or omitted.
-- When basic-transfers-only is then enabled while that same advanced path remains configured, the batch request’s advertised transfer list must change so advanced adapter names are absent and only basic remains (or the list is omitted, which peers treat as basic). The discriminating observation is that on/off change of the advertised list under those two configurations — not an environment echo of the setting alone, and not a successful PUT that any always-basic client can produce.
-- Concurrent transfers are bounded by configuration (default parallelism is greater than one). Progress may be shown on a terminal or forced via configuration/environment, and may be mirrored to a progress file when requested.
+- `==` is true when the two sides are the same JSON value; `!=` is the negation. The number 0 is not equal to false. The number 1 is not equal to true. On `{one: 1, two: 2}`, `one == one` is true and `one == two` is false and `one != two` is true.
+- Ordering operators `<`, `<=`, `>`, `>=` compare two numbers or two strings. `one < two` is true, `one <= two` is true, `one > two` is false, `one >= two` is false when `one` is 1 and `two` is 2. Two strings compare in the host’s Unicode ordering: on `{a: 2016, b: 2017}` as strings, `a < b` is true. A host decimal participates as a number: `[?a >= \`1\`].a` on `[{a: <host decimal 3>}]` yields an array holding that same decimal.
+- An ordering comparison whose sides are not both numbers and not both strings yields null, not false, when at least one side is an array, an object, a boolean, or null. On `{one: 1, emptylist: [], boolvalue: false}`, `emptylist < one` is null, `emptylist < boolvalue` is null, and `one < boolvalue` is null.
+- `||` returns the first side if that side is a true value; otherwise it returns the second side. On `{outer: {foo: foo, bar: bar, baz: baz}}`, `outer.foo || outer.bar` is `foo`, `outer.bad || outer.foo` is `foo`, and `outer.bad || outer.alsobad` is null. Spaces around `||` are optional.
+- `||` treats false values as not taken: on `{outer: {foo: foo, bool: false, empty_list: [], empty_string: ""}}`, `outer.empty_string || outer.foo` is `foo`, and `outer.nokey || outer.bool || outer.empty_list || outer.empty_string || outer.foo` is `foo`.
+- The number 0 and the number 0.0 are true values. On `{Zero: 0, ZeroFloat: 0.0, Number: 5}`, `Zero || Number` is 0 and `ZeroFloat || Number` is 0.0. `!Zero` is false. `!!Zero` is true.
+- `&&` returns the first side if that side is a false value; otherwise it returns the second side. On `{True: true, False: false, Number: 5, EmptyList: []}`, `True && False` is false, `True && True` is true, `True && Number` is 5, `Number && True` is true, `Number && EmptyList` is `[]`, and `EmptyList && True` is `[]`.
+- `!` inverts truthiness: `!True` is false, `!False` is true, `!Number` is false when Number is 5, `!EmptyList` is true.
+- Parentheses group. `&&` binds tighter than `||`. On `{Number: 5}`, `Number || True && False` is 5, `(Number || True) && False` is false, and `Number || (True && False)` is 5. `!(True && False)` is true.
+- `one < two && three > one` is true when the three fields are 1, 2, and 3. `two < one || three < one` is false.
+- The same operators apply inside a filter (FP-04). On `{foo: [{a: 1, b: 2}, {a: 1, b: 3}]}`, `foo[?a == \`1\` && b == \`2\`]` yields `[{a: 1, b: 2}]`. On `{foo: [{name: a}, {name: b}]}`, `foo[?name == 'a' || name == 'b']` yields both mappings. On `{foo: [{a: 1, b: 2, c: 3}, {a: 3, b: 4}]}`, `foo[?a == \`1\` || b == \`2\` && c == \`5\`]` yields the first mapping (`&&` binds tighter than `||`), and `foo[?(a == \`1\` || b == \`2\`) && c == \`5\`]` yields an empty array. `foo[?!(a == \`1\` || b == \`2\`)]` yields `[{a: 3, b: 4}]`.
 
 **Boundary / error behavior:**
 
-- Per-object batch errors fail that object’s transfer and cause the overall command to fail when any required object cannot be transferred.
-- Expired action URLs result in visible failure (and may trigger re-auth / retry according to client policy) rather than treating missing content as success.
-- Servers that only understand basic transfer remain interoperable when the client advertises basic (or omits the transfers list so the server assumes basic): a basic-only server still completes the upload PUT for a conforming client that stays on basic.
+- A lone `=` does not succeed. Equality is the two-character token `==`.
+- A lone `&` that is not `&&` and not an expression reference, or a dangling `||`, does not succeed.
+- Ordering of a number and a boolean, of an array and a number, or of null and anything, is null, not a failure and not a boolean.
 
 **Verifiable oracle:**
 
-- Success: against a conforming endpoint, downloading an object not present locally results in a batch download request that carries both Accept and Content-Type naming the designated VCS Orbulk JSON media type, and a GET that populates the local store with bytes whose digest matches the oid; uploading a new object results in a batch upload request with the same Accept and Content-Type obligations and a PUT of those bytes; a second upload of the same oid can be omitted when the server reports the object already exists.
-- Success (adapter advertisement contrast): with the tus path explicitly enabled and basic-transfers-only off, the batch upload request’s advertised transfer list includes that advanced adapter; enabling basic-transfers-only under the same advanced configuration changes the advertisement so advanced names are gone and only basic remains (or the list is omitted). A basic-only server remains interoperable for the basic advertisement arm.
-- Failure / absence: fetch/push never perform HTTP batch calls; object bytes are fabricated locally without server round-trips; digests on disk do not match oids; enabling basic-transfers-only never changes an advanced-enabled advertisement (always-basic clients that ignore the setting are distinguishable by lacking the on/off contrast).
+- Success: `one == one` is true; `one != two` is true; `1 == true` is false; `0 == false` is false; `one < two` is true; `'2016' < '2017'` (as field values) is true; a host decimal 3 compared with `>= \`1\`` is kept; `emptylist < one` is null; `outer.foo || outer.bar` is `foo`; `outer.empty_string || outer.foo` is `foo`; `Zero || Number` is 0; `!Zero` is false; `True && Number` is 5; `EmptyList && True` is `[]`; `Number || True && False` is 5; `(Number || True) && False` is false; `foo[?a == \`1\` && b == \`2\`]` is the one matching mapping; `foo[?a == \`1\` || b == \`2\` && c == \`5\`]` is the first mapping and the parenthesized form with `c == \`5\`` is empty.
+- Failure / absence: `0 == false` is true; `Zero || Number` is 5; `!Zero` is true; `emptylist < one` is false; `&&` and `||` always return booleans instead of operands; `Number || True && False` is false; string ordering is rejected; a host decimal is refused as not a number; `foo[?a == \`1\` && b == \`2\`]` keeps both mappings; `&&` inside a filter binds looser than `||`.
 
 ---
 
-### FP-08: Fetch, pull, checkout, and clone
+### FP-07: Call built-in functions
 
-**Public entry:** The `git orbulk fetch`, `git orbulk pull`, `git orbulk checkout`, and `git orbulk clone` porcelain subcommands.
+**Public entry:** The search and compile entries of FP-01. A function call is an unquoted identifier followed by a parenthesized argument list. Arguments are expressions evaluated against the current value. Expression references from FP-05 are required by `map`, `sort_by`, `min_by`, and `max_by`. Custom functions are FP-08. This feature point is the finite built-in set and the three function-call failure kinds.
+
+The built-in function names are exactly: `abs`, `avg`, `ceil`, `contains`, `ends_with`, `floor`, `join`, `keys`, `length`, `map`, `max`, `max_by`, `merge`, `min`, `min_by`, `not_null`, `reverse`, `sort`, `sort_by`, `starts_with`, `sum`, `to_array`, `to_number`, `to_string`, `type`, `values`.
+
+Unless noted, a wrong argument count is an **invalid-arity** failure and a wrong argument type is an **invalid-type** failure. Both are kinds of value error; they do not return a search result. They are distinguishable from each other and from an **unknown-function** failure. A successful function that has nothing to compute returns null or an empty collection as specified below — that is not a failure.
 
 **Normal behavior:**
 
-- **Fetch** downloads VCS Orbulk objects for the given remote and refs into the local object store without updating the working tree. Defaults pick the usual remote and refs when omitted. It supports include/exclude path filters (CLI overrides configuration), fetching recent refs/commits per recentness settings, fetching all objects reachable from the given refs, or from all refs when none are given (backup/migration mode that ignores configured include/exclude), reading refs from standard input, pruning after fetch, refetching objects already present, dry-run, and JSON reporting of transfer plans.
-- **Checkout** materializes working-tree files from local objects for the current ref when the working tree has missing files or pointer placeholders, without downloading. Glob arguments restrict which paths are updated. Modified working-tree files are never overwritten. In merge conflicts, checkout can extract base/ours/theirs stages of an LFS path into a separate output file. On sufficiently new Git, attribute matching follows index/worktree attribute rules described in the product’s checkout documentation (including sparse/partial clone caveats).
-- **Pull** is the composition of fetch for the current ref plus checkout into the working tree, with the same include/exclude options.
-- **Clone** wraps Git clone while deferring LFS downloads during the clone, then performs an efficient pull-style batch download, and installs repository hooks unless asked to skip that installation. Skipping withholds that install obligation and is not an absence or presence observation of those four hooks. Include/exclude options apply to the download phase.
+The following hold on a document that has `foo` equal to `-1`, `zero` equal to `0`, `numbers` equal to `[-1, 3, 4, 5]`, `array` equal to `[-1, 3, 4, 5, "a", "100"]`, `strings` equal to `["a", "b", "c"]`, `decimals` equal to `[1.01, 1.2, -1.5]`, `str` equal to `Str`, `false` equal to false, `empty_list` equal to `[]`, `empty_hash` equal to `{}`, `objects` equal to `{foo: bar, bar: baz}`, and `null_key` equal to null — except where a case names another document.
+
+- `abs` takes one number and returns its absolute value. `abs(foo)` is 1. `abs(\`-24\`)` is 24.
+- `avg` takes one array of numbers and returns their arithmetic mean. `avg(numbers)` is 2.75. `avg(empty_list)` is null.
+- `ceil` takes one number and returns the smallest integer that is not less than it. `ceil(\`1.2\`)` is 2. `ceil` of `-1.5` is `-1`.
+- `floor` takes one number and returns the largest integer that is not greater than it. `floor(\`1.2\`)` is 1. `floor(foo)` is `-1`.
+- `contains` takes a string or array, then any value, and returns whether the second is in the first. `contains('abc', 'a')` is true. `contains('abc', 'd')` is false. `contains(strings, 'a')` is true. `contains(decimals, \`1.2\`)` is true. `contains(decimals, \`false\`)` is false.
+- `ends_with` takes two strings and returns whether the first ends with the second. `ends_with(str, 'r')` is true. `ends_with(str, 'SStr')` is false.
+- `starts_with` takes two strings and returns whether the first starts with the second. `starts_with(str, 'S')` is true. `starts_with(str, 'String')` is false.
+- `length` takes a string, an array, or an object and returns how many characters, elements, or keys it has. `length('abc')` is 3. `length('✓foo')` is 4. `length('')` is 0. `length(array)` is 6. `length(objects)` is 2. `length` of the twelve-key document above as `@` is 12.
+- `reverse` takes an array or a string. `reverse(numbers)` is `[5, 4, 3, -1]`. `reverse('hello world')` is `dlrow olleh`. `reverse(\`[]\`)` is `[]`. `reverse('')` is `''`.
+- `join` takes a string separator and an array of strings and concatenates the elements. `join(', ', strings)` is `a, b, c`. `join(',', \`["a", "b"]\`)` is `a,b`. `join('|', empty_list)` is the empty string. `join('|', decimals[].to_string(@))` is `1.01|1.2|-1.5`.
+- `keys` takes an object and returns an array of its keys. `keys(empty_hash)` is `[]`. `sort(keys(objects))` is `["bar", "foo"]`.
+- `values` takes an object and returns an array of its values. `sort(values(objects))` is `["bar", "baz"]`.
+- `type` takes one value and returns one of the strings `string`, `number`, `boolean`, `array`, `object`, `null`. `type('abc')` is `string`. `type(\`1.0\`)` and `type(\`2\`)` are `number`. `type(\`true\`)` and `type(\`false\`)` are `boolean`. `type(\`null\`)` is `null`. `type(\`[0]\`)` is `array`. `type(\`{"a": "b"}\`)` is `object`.
+- `to_array` takes one value. If it is already an array, that array is returned; otherwise a one-element array holding the value is returned. `to_array('foo')` is `["foo"]`. `to_array(\`[1, 2, 3]\`)` is `[1, 2, 3]`. `to_array(false)` is `[false]`.
+- `to_string` takes one value. A string is returned unchanged. Any other JSON value is returned as compact JSON text with no extra spaces: `to_string(\`1.2\`)` is `1.2`; `to_string(\`[0, 1]\`)` is `[0,1]`. A host value that is not a JSON type is converted with the host’s ordinary text conversion, then that text is returned as compact JSON string encoding (quoted).
+- `to_number` takes one value. A number is returned unchanged. A string is parsed as an integer if the whole string is an integer, otherwise as a floating-point number, including scientific notation: `to_number('4')` is the integer 4; `to_number('1.1')` is 1.1; `to_number('1e21')` is `1e21`. A boolean, null, array, object, or a string that is not a number yields null: `to_number('notanumber')`, `to_number(\`false\`)`, `to_number(\`null\`)`, `to_number(\`[0]\`)`, and `to_number(\`{"foo": 0}\`)` are null.
+- `max` takes an array of only numbers or only strings and returns the greatest element. `max(numbers)` is 5. `max(decimals)` is 1.2. `max(strings)` is `c`. `max(empty_list)` is null.
+- `min` takes an array of only numbers or only strings and returns the least element. `min(numbers)` is `-1`. `min(strings)` is `a`. `min(empty_list)` is null.
+- `sort` takes an array of only numbers or only strings and returns a new array in ascending order. `sort(numbers)` is `[-1, 3, 4, 5]`. `sort(strings)` is `["a", "b", "c"]`. `sort(decimals)` is `[-1.5, 1.01, 1.2]`. `sort(empty_list)` is `[]`.
+- `sum` takes an array of numbers and returns their sum. `sum(numbers)` is 11. `sum(\`[]\`)` is 0. `sum(array[].to_number(@))` is 111.
+- `merge` takes one or more objects and returns a new object, applying each argument in order so a later key overwrites an earlier one. `merge(\`{"a": 1}\`, \`{"b": 2}\`)` is `{a: 1, b: 2}`. `merge(\`{"a": 1}\`, \`{"a": 2}\`)` is `{a: 2}`. `merge(\`{}\`)` is `{}`.
+- `not_null` takes one or more arguments and returns the first that is not null. `not_null(unknown_key, str)` is `Str`. `not_null(unknown_key, foo.bar, empty_list, str)` is `[]` (the empty list is not null). `not_null(all, expressions, are_null)` is null.
+- `map` takes an expression reference and an array, applies the referenced expression to each element, and returns the array of results, **including** nulls. On `{people: [{a: 10, b: 1, c: z}, {a: 10, b: 2, c: null}, {a: 10, b: 3}, {a: 10, b: 4, c: z}, {a: 10, b: 5, c: null}, {a: 10, b: 6}, {a: 10, b: 7, c: z}, {a: 10, b: 8, c: null}, {a: 10, b: 9}]}`, `map(&a, people)` is nine tens, and `map(&c, people)` is `["z", null, null, "z", null, null, "z", null, null]`. `map(&foo, empty)` on `{empty: []}` is `[]`. `map(&foo.bar, array)` on three mappings, two of which have `foo.bar` and one of which does not, is `["yes1", "yes2", null]`. `map(&[], array)` on `[[1, 2, 3, [4]], [5, 6, 7, [8, 9]]]` is `[[1, 2, 3, 4], [5, 6, 7, 8, 9]]`.
+- `sort_by` takes an array and an expression reference. It returns a new array ordered by the referenced expression, which must resolve to a number or a string, and the same kind for every element. The sort is stable: on eleven mappings that all have `age` 10 and `order` `"1"` through `"11"`, `sort_by(people, &age)` keeps that input order. On people with ages 20, 40, 30, 50, 10, `sort_by(people, &age)` orders them 10, 20, 30, 40, 50, and `sort_by(people, &age)[].name` is `[3, a, c, b, d]` for the names in that document. `sort_by(\`[]\`, &age)` is `[]`.
+- `max_by` takes an array and an expression reference and returns the element whose referenced value is greatest. On those people, `max_by(people, &age)` is the mapping whose age is 50. `max_by(\`[]\`, &age)` is null.
+- `min_by` takes an array and an expression reference and returns the element whose referenced value is least. `min_by(people, &age)` is the mapping whose age is 10. `min_by(\`[]\`, &age)` is null.
+- A projection may feed a function: `numbers[].to_string(@)` is `["-1", "3", "4", "5"]`. `array[].to_number(@)` is `[-1, 3, 4, 5, 100]` (the string `a` becomes null and is dropped by the projection; the string `100` becomes the number 100).
 
 **Boundary / error behavior:**
 
-- Fetch/pull fail when the remote endpoint is unreachable or authentication fails (FP-06/FP-07).
-- Checkout in a bare repository has no effect.
-- All-mode fetch cannot be combined with recent or include/exclude flags.
-- When the LFS download phase of clone fails, the caller must be able to tell that outcome apart from a clone whose download completed: the command ends in a non-success outcome distinguishable from success, while a usable Git repository produced by the underlying clone may still remain.
-- When repository hook installation during clone cannot succeed and was not intentionally skipped, the caller must be able to tell that outcome apart from a clone that completed hook installation or intentionally skipped it: the command ends in a non-success outcome distinguishable from success, while the Git repository produced by the underlying clone may still remain.
+- A name that is not in the built-in set (and not supplied as a custom function in FP-08) is an unknown-function failure. `unknown_function(\`1\`, \`2\`)` does not succeed.
+- Wrong arity: `abs(\`1\`, \`2\`)` and `abs()` do not succeed. `length(@, @)` does not succeed. `not_null()` does not succeed (at least one argument is required). `sort_by(people)` does not succeed.
+- Wrong type: `abs(str)` and `abs(\`false\`)` do not succeed. `avg(array)` (mixed types), `avg('abc')`, and `avg(foo)` do not succeed. `length(\`false\`)` and `length(foo)` do not succeed. `join(',', \`["a", 0]\`)` does not succeed. `join(\`2\`, strings)` does not succeed. `max(array)` and `sort(array)` (mixed types) do not succeed. `keys(foo)` when `foo` is a number does not succeed. `map(&a, badkey)` when `badkey` is missing (null) does not succeed. `sort_by(people, name)` (a string, not an expression reference) does not succeed. `sort_by(people, &bool)` and `sort_by(people, &extra)` (a boolean, or a key missing on some elements so types mix) do not succeed. `max_by(people, &bool)` and `min_by(people, &extra)` do not succeed.
+- A quoted identifier is not a legal function name: `"to_string"(\`1.0\`)` does not succeed (syntax), even though `to_string` is a built-in.
+- `starts_with(str, \`0\`)` and `ends_with(str, \`0\`)` do not succeed (the second argument must be a string).
+- These failures are distinguishable: unknown-function versus invalid-arity versus invalid-type versus a successful null (`avg(empty_list)`, `max(empty_list)`, `to_number('notanumber')`).
 
 **Verifiable oracle:**
 
-- Success: fetch populates `.git/lfs/objects` for pointers in the requested ref without changing working-tree bytes; checkout then replaces pointer placeholders with real content; pull does both; clone of a VCS Orbulk-enabled repo yields real content for tracked files after its download phase (unless skip-smudge style settings apply) and, when repository-hook installation was not skipped, leaves the repository hooks installed. Skipping that installation is not an absence or presence observation of those hooks.
-- Failure / absence: pull leaves only pointers with no objects fetched; clone smudges file-by-file only and never batch-fetches; checkout overwrites dirty user edits; a clone whose LFS download phase fails ends indistinguishably from success; a clone whose hook installation cannot succeed (and was not skipped) ends indistinguishably from success.
+- Success: `abs(foo)` is 1; `avg(numbers)` is 2.75; `avg(empty_list)` is null; `ceil(\`1.2\`)` is 2; `contains('abc', 'a')` is true; `length('✓foo')` is 4; `length(objects)` is 2; `join(', ', strings)` is `a, b, c`; `type(\`true\`)` is `boolean`; `to_array('foo')` is `["foo"]`; `to_string(\`[0, 1]\`)` is `[0,1]`; `to_number('1e21')` is `1e21`; `to_number('notanumber')` is null; `max(numbers)` is 5; `min(empty_list)` is null; `sort(decimals)` is `[-1.5, 1.01, 1.2]`; `sum(\`[]\`)` is 0; `merge` of `{a: 1}` then `{a: 2}` is `{a: 2}`; `not_null(unknown_key, str)` is `Str`; `map(&c, people)` keeps nulls; `sort_by(people, &age)` is stable and orders by age; `max_by(people, &age)` is the age-50 mapping; `min_by(\`[]\`, &age)` is null; `array[].to_number(@)` is `[-1, 3, 4, 5, 100]`.
+- Failure / absence: `unknown_function(\`1\`, \`2\`)` returns null; `abs()` returns 0; `avg(empty_list)` fails; `length('✓foo')` is 6 or 3; `to_string(\`[0, 1]\`)` includes spaces; `to_number('1e21')` is null; `map` drops nulls; `sort_by` is unstable so eleven equal keys permute; `sort_by(people, name)` succeeds; `"to_string"(\`1.0\`)` succeeds; `0 == false` inside a function argument is treated as true; invalid-type and invalid-arity cannot be told apart from unknown-function.
 
 ---
 
-### FP-09: Push and pre-push hook
+### FP-08: Evaluation options for constructed objects and custom functions
 
-**Public entry:** The `git orbulk push` porcelain subcommand; the `git orbulk pre-push` plumbing subcommand installed as a Git hook (FP-02); ordinary `git push` as the user-visible trigger.
+**Public entry:** The search entry and the parsed-expression search of FP-01, when the caller supplies evaluation options. Without options, constructed objects use the host’s ordinary mapping type and only the built-in functions of FP-07 are available. **This feature point refines FP-01 and FP-07:** the no-options path is unchanged; options add a mapping type and an extra function set.
 
 **Normal behavior:**
 
-- **Push** uploads locally referenced LFS objects for the given remote and refs (or for object ids when object-id mode is selected). By default it considers only objects not already referenced by the local clone of that remote; **push-all** considers every object reachable from the given refs, or from all local refs when none are given. It also supports dry-run and reading refs or oids from standard input.
-- **Pre-push** reads Git’s pre-push stdin lines (local ref, local sha, remote ref, remote sha). For non-delete updates, it uploads LFS objects required by the commits being pushed. Branch deletion pushes do not upload objects.
-- **Dry-run** (push and pre-push): when pending objects would be uploaded, the command prints a caller-visible plan that identifies those objects and does not transfer their bytes. A report that names a pending object by any designation of that same object is distinguishable from generic non-empty chatter that names none of them, and from a live upload of those same objects. The designation form, the wording, and the layout of the plan are not fixed.
-- An environment skip-push setting makes the pre-push hook do nothing, allowing Git push to proceed without LFS uploads when explicitly requested.
-- A successful push that uploaded the objects required for the pushed refs leaves those objects available at the endpoint so a subsequent clone or pull of those refs can restore the corresponding tracked files as working-tree bytes (materialization itself is specified under FP-08; the cross-cutting end-to-end happy path is the same install → track → commit → push → fresh clone/pull sequence).
+- The caller may supply a mapping type. Every **multiselect hash** the evaluation constructs is built with that type. Built-in functions that return a new object, including `merge`, still return the host’s ordinary mapping; they do not use the caller-supplied type. On a document `{c: c, b: b, a: a, d: d}`, searching `{a: a, b: b, c: c}.*` with an order-preserving mapping type yields `["a", "b", "c"]` — the values in **key-declaration order**, not the document’s key order. The same expression searched through a parsed expression that is then given those options yields the same array.
+- The caller may supply a custom function provider together with the options. A custom function is a named language function with declared argument types. After attaching a provider that defines `custom_add` of two numbers and `my_subtract` of two numbers, `custom_add(\`1\`, \`2\`)` yields 3 and `my_subtract(\`10\`, \`3\`)` yields 7.
+- A provider that extends the built-in set still implements every FP-07 function. `length(\`[1, 2]\`)` on a search that uses that provider yields 2.
+- A custom function on one options object does not change a later search that does not attach that provider. After evaluating `custom_add` with options, a search of `length(\`[1, 2]\`)` **without** options still yields 2, and `custom_add(\`1\`, \`2\`)` without options is an unknown-function failure.
+- Custom argument types are enforced the same way as built-ins. A custom function declared to accept a string, an array, an object, or null may return 0 for null and the host length otherwise: on `{a: {b: [1, 2, 3]}}`, that function applied to `a.b` yields 3 and applied to `a.c` (null) yields 0.
 
 **Boundary / error behavior:**
 
-- If required uploads fail, pre-push fails and Git aborts the push.
-- When lock verification is enabled (FP-10), pushes that would update paths locked by others are rejected.
-- Push to a remote without a workable endpoint fails visibly.
+- A custom name that is not on the attached provider and not built-in is an unknown-function failure.
+- A custom function given the wrong number of arguments is an invalid-arity failure. A custom function given a value outside its declared types is an invalid-type failure.
+- Options that do not include a custom provider do not make `custom_add` exist. Options that do not include a mapping type do not promise declaration-order keys on a mapping type that does not preserve insertion order.
 
 **Verifiable oracle:**
 
-- Success: after committing a new tracked large file, `git push` triggers VCS Orbulk upload before Git refs update on the server; the endpoint receives the object; a second push of the same commit does not re-upload unnecessarily; a dry-run with pending objects prints a caller-visible plan that identifies those objects and does not transfer them, so that plan is distinguishable from generic non-empty chatter that names none of them and from a live upload of those same objects (designation form, wording, and layout are not fixed); after that successful push, a fresh clone or pull of the pushed ref restores those tracked files as working-tree bytes matching what was pushed (unless skip-smudge style settings apply).
-- Failure / absence: Git push succeeds while the endpoint never receives objects; pre-push ignores stdin commit ranges; skip-push cannot be distinguished because uploads never happened anyway; a client that only uploaded fiction or left only pointers so a subsequent clone/pull cannot restore the pushed working-tree bytes; a dry-run with pending objects either still transfers those objects or emits only generic chatter that names none of them.
-
----
-
-### FP-10: File locking
-
-**Public entry:** The `git orbulk lock`, `git orbulk unlock`, and `git orbulk locks` porcelain subcommands; the `git orbulk post-checkout`, `git orbulk post-commit`, and `git orbulk post-merge` plumbing commands installed as Git hooks (FP-02); lock verification during push/pre-push; lockable attributes from track (FP-04).
-
-**Normal behavior:**
-
-- **Lock** creates a server-side lock for a repository-relative path. The path need not already exist in the working tree (locking a locally missing path still requests creation of a server-side lock). JSON output mode is available on success.
-- **Unlock** removes a lock by path or by lock id (exactly one of those two selectors). A force mode asks the server to remove the lock even when another user owns it, when the server permits that, and also skips the local clean-status check described below. Optional remote selection chooses which endpoint’s locks are targeted.
-- **Locks** lists locks from the server with filters by id or path, local-only cache listing, cached listing from the last server fetch, verification marking of locks owned by the current user, and JSON output.
-- Lockable-tracked files are set read-only in the working tree when not locked by the user (controllable via configuration / environment), and become writable when locked.
-- After checkout, commit, or merge, the corresponding post-* hooks re-apply read-only permissions on lockable paths that the local user does not currently hold a lock for. Post-commit focuses on paths changed in HEAD (especially newly added lockable files). Post-merge examines the broader working-copy set of lockable paths. Post-checkout examines that broader set on a file checkout or on an initial checkout; on an ordinary branch, tag, or commit checkout it focuses on paths that changed between the previous and new revisions.
-- Push paths consult the locking API’s verify capability when locks-verify is enabled for the endpoint, refusing pushes that violate foreign locks. Configuration can force verification on, off, or prompt on unknown server support.
-
-**Boundary / error behavior:**
-
-- Locking a path that resolves to a directory in the working copy fails.
-- Creating a lock when one already exists for that path fails with a conflict outcome from the server.
-- Unlock by path without force fails when that path has uncommitted working-tree changes, or when the path cannot be resolved for a status check (including a missing path that makes that check fail). Unlock by lock id does not apply that local check. Force skips that local check and still requests the server-side unlock.
-- Unlock invoked with both a path and a lock id, or with neither, is invalid.
-- Lock commands fail when the endpoint lacks locking support or authentication fails.
-- Local-only / cached listing modes must not claim live server truth when they intentionally skip or reuse network results.
-- Invoking a post-* plumbing command outside the Git hook context may warn that the user should run update to install hooks.
-
-**Verifiable oracle:**
-
-- Success: lock then locks-list shows the path (including when the locked path is absent from the working tree); unlock clears it; a second user (or simulated foreign lock) causes push verification to fail when verification is on; after tracking a lockable pattern and committing, an unlocked lockable file is read-only in the working tree and becomes writable after lock; locking a directory path fails observably; unlock by path without force of a dirty path fails while the same unlock with force proceeds to the server request; unlock by lock id of a dirty path still proceeds to the server request without force.
-- Failure / absence: lock only writes local markers with no server round-trip; push never checks locks; lockable files remain writable always; post-* hooks are never installed; unlock by path without force of a dirty path always succeeds, or force never reaches the server.
-
----
-
-### FP-11: Status and ls-files inspection
-
-**Public entry:** The `git orbulk status` and `git orbulk ls-files` porcelain subcommands.
-
-**Normal behavior:**
-
-- **Status** (non-bare repositories only) lists paths that are not yet pushed (VCS Orbulk objects reachable from the current ref but not from the current branch’s remote-tracking ref), differ between index and HEAD, or differ between working tree and index—mirroring the intuition of what would be uploaded, committed, or staged. The unpushed listing names only VCS Orbulk-related paths. Of the index/HEAD and working-tree/index listings, the default human listing and porcelain name ordinary Git paths that differ in those slots as well as VCS Orbulk-related ones; JSON names only VCS Orbulk-related paths. Porcelain and JSON scripting modes cover the index/HEAD and working-tree/index listings only, not the unpushed set.
-- **Ls-files** lists VCS Orbulk files at a ref (when no ref is given: the current branch including the index, which takes precedence for a path also in the tree; an explicit ref is that ref’s tree and ignores the index), or the VCS Orbulk files changed between two refs (deletions omitted in the two-ref form). Options include long oid, size, debug, entire-history listing, include deleted history objects, include/exclude path filters, name-only, and JSON.
-- On the default named-path listing line, each entry presents a dedicated checkout indication of whether the working-tree file is the full object or only a pointer, distinct from the path, the object id, and from a dump of working-tree size or file contents. That indication must differ between those two checkout states and be stable across two observations of the same checkout state. Holding the working-tree file fixed and varying only whether the object bytes exist in the local store is not this default-line duty: both store-present and store-missing then share one checkout indication. This obligation does not fix mark characters, field names, or layout.
-- JSON listing separately indicates local-store presence on the named entry. When the working-tree file is a pointer, store-present versus store-missing remain distinct on that named entry. When the working-tree file is the full object, store-present versus store-missing remain distinct on that named entry.
-
-**Boundary / error behavior:**
-
-- Status in a bare repository fails.
-- Ls-files with invalid refs fails; entire-history listing cannot be combined with an explicit ref; include-deleted listing cannot be combined with the two-ref form.
-- When both machine-readable JSON and a mutually overriding human format are requested: status prefers the porcelain human format over JSON; ls-files prefers debug over JSON, and when JSON is selected the long/size/name-only options have no effect.
-
-**Verifiable oracle:**
-
-- Success: after committing a tracked file that is not on the current branch’s remote-tracking ref, the default human status lists it among unpushed LFS content; after an ordinary Git path differs in index/HEAD or working-tree/index, the default human listing and porcelain name that path while JSON does not; on the default named-path listing line, the dedicated checkout indication differs when the working-tree file is the full object versus only a pointer, is stable across two observations of the same checkout state, and is distinct from the path, the object id, and a dump of working-tree size or file contents; holding the working-tree file fixed and varying only local-store presence is not this default-line duty; JSON listing indicates local-store presence on the named entry when the working-tree file is a pointer (store-present versus store-missing distinct on that entry), and store-present versus store-missing remain distinct on that named entry when the working-tree file is the full object.
-- Failure / absence: status always empty; default human or porcelain index/HEAD or working-tree/index listings omit ordinary Git paths that differ in those slots, or JSON names those ordinary Git paths; the default named-path listing cannot tell a working-tree full-object checkout from a pointer-only checkout, or that distinction is only a dump of working-tree size or file contents; JSON listing does not indicate local-store presence on the named entry when the working-tree file is a pointer.
-
----
-
-### FP-12: Local object pruning
-
-**Public entry:** The `git orbulk prune` porcelain subcommand (also invocable after fetch via fetch’s prune option).
-
-**Normal behavior:**
-
-- Prune deletes local objects that are not retained by: the current checkout, stashes, recent branches/commits per recentness configuration, unpushed commits, or other worktree checkouts. Objects only reachable from orphaned commits are deleted. The reflog is not a retention root.
-- Paths matching fetch-exclude rules may be pruned more aggressively unless retained by stash or unpushed commits.
-- Options include dry-run, force (prune even objects needed by current checkouts, implying recent), recent, verify-remote before delete, verify unreachable objects on the remote, when-unverified halt or continue after remote verification fails, and verbose reporting.
-
-**Boundary / error behavior:**
-
-- Prune must not delete the only copy of an unpushed object.
-- Users sharing one custom storage directory across multiple repositories are warned (via documentation and config notes) not to prune unsafely; prune still applies retention rules inside the invoked repository context.
-- When remote verification is enabled and at least one prune candidate fails verification on the remote: under when-unverified halt, every prune candidate from that run remains in the local store (neither the unverified object nor other candidates from the same run are deleted); under when-unverified continue, only objects that verified successfully on the remote are deleted and objects that failed verification remain in the local store. Halt versus continue is distinguished by those retention-versus-deletion outcomes on the local store.
-
-**Verifiable oracle:**
-
-- Success: an object only referenced by an old, pushed, non-recent commit disappears from the local store after prune while objects for HEAD remain; dry-run reports without deleting; with verify-remote, when-unverified halt leaves all prune candidates from a run that had a remote verification failure in the local store, while when-unverified continue deletes only successfully verified prune candidates and leaves failed ones in the local store.
-- Failure / absence: prune deletes unpushed objects; prune never deletes anything even when retention rules say it should; force still leaves unreachable stale data forever without a way to reclaim space; under halt, a run with remote verification failures still deletes some prune candidates from that run; under continue, objects that failed remote verification are deleted.
-
----
-
-### FP-13: Object and pointer integrity check
-
-**Public entry:** The `git orbulk fsck` porcelain subcommand.
-
-**Normal behavior:**
-
-- Fsck checks VCS Orbulk files for consistency for HEAD by default (and, for object checks, the index in that omitted-revision default), or for a single committish, or for a two-dot range form only. Object checks and pointer checks both run by default and may be requested independently.
-- Object checks verify each object’s hash matches its oid and that the file exists on disk.
-- Pointer checks verify pointers are canonical and that files that should be stored as VCS Orbulk objects are actually stored that way.
-- Hash-mismatched local object files are moved aside into the repository’s LFS `bad` quarantine directory unless dry-run is set; pointer defects are reported and are not moved into that quarantine.
-- Fetch-exclude path patterns skip object checks for matching paths; they do not skip pointer checks.
-
-**Boundary / error behavior:**
-
-- Hash mismatches, missing objects, and pointer defects cause non-zero exit.
-- A single revision argument which cannot be resolved as a committish or as both ends of a two-dot range causes a non-zero exit and does not complete a successful integrity check of the default revision. A three-dot range token is such an unresolvable single-argument form.
-- Dry-run reports problems without moving files.
-
-**Verifiable oracle:**
-
-- Success: a bit-flipped local object is detected and (without dry-run) moved to the bad quarantine; a non-canonical pointer is reported under pointer checking and is not quarantined; an omitted-revision default object check covers a staged index path that an explicit HEAD check does not; fetch-exclude matching paths are omitted from object checks while still subject to pointer checks; requesting object checks alone does not treat a pointer-only defect as a finding; requesting pointer checks alone does not treat object corruption as a finding; a clean repository with omitted HEAD, a single resolvable committish, or a two-dot range exits successfully.
-- Failure / absence: corruption is ignored; fsck always exits zero; quarantine never receives bad objects; pointer defects are quarantined as if they were local object files; an omitted-revision default object check ignores a staged index-only path; fetch-exclude matching paths are also skipped for pointer checks; requesting one check kind still treats the other kind’s defects as findings; a single revision argument that cannot be resolved as a committish or as both ends of a two-dot range, including a three-dot range token, completes a successful integrity check of the default revision.
-
----
-
-### FP-14: History migration
-
-**Public entry:** The `git orbulk migrate` porcelain subcommand with modes info, import, and export.
-
-**Normal behavior:**
-
-- **Info** summarizes counts and sizes by file type for the selected ref set to help users decide what to migrate. Each file-type summary presents a count figure and a size figure as separately identifiable fields on that type's report, so a caller can tell which figure is the count and which is the size without relying on a particular punctuation, column order, or unit spelling. When only the blob payload bytes for that type change while the number of matching files stays the same, the size figure must change and the count figure must not. Pointer objects are handled by exactly one of three pointer modes: **follow** (default: report referenced object sizes separately), **ignore** (omit pointers), or **no-follow** (treat pointer documents as ordinary files).
-- **Import** rewrites local history so matching Git blobs become VCS Orbulk pointers, stores objects locally, and updates `.gitattributes` on rewritten commits as if track had been run for those patterns (unless fixup mode only converts files that attributes already say should be VCS Orbulk but are not yet). A no-rewrite import mode creates a new commit that migrates matching objects into VCS Orbulk without rewriting prior published history; that mode uses its own argument list and ignores the ordinary migrate rewrite options.
-- **Export** rewrites local history in the reverse direction: matching VCS Orbulk pointers become ordinary Git blobs again, fetching missing objects from a remote when needed (default remote `origin`), and inserts excluded-pattern attribute entries (FP-04 disabling/unsetting filter forms) for the exported patterns rather than removing tracking lines or deleting attribute files.
-- By default migrate considers the current branch and commits not present on remotes; options expand to chosen refs, exclude refs, or everything. After rewrite, only local refs are updated even when everything was read—remote-tracking refs stay aligned with remotes until the user force-pushes.
-- Migrate refuses to proceed when `.gitattributes` is a symbolic link. Attribute files it writes use non-executable permissions.
-
-**Boundary / error behavior:**
-
-- Export requires at least one include pathspec.
-- Import/export are destructive history rewrites (except no-rewrite import, which adds a new commit instead of rewriting prior history); they do not update remotes automatically.
-- Uncommitted work should be committed or stashed first; migrate fails or risks data loss if the working tree is unsafe for rewrite—users are expected to validate before force-push.
-- By default, when migrate selects the unpushed commit set using remote refs, it refreshes those remote refs over the network first. An unreachable configured remote makes that default migrate path fail observably before any history rewrite completes.
-- With skip-fetch, the same unreachable remote still allows import to succeed when objects are already local: matching blobs become pointers and objects are stored locally. The discriminating observation is success with skip-fetch versus failure of the identical import without skip-fetch under that unreachable remote—not a particular fetch error string. Export or import may still need a reachable remote when objects themselves are missing locally.
-
-**Verifiable oracle:**
-
-- Success: import with an include glob rewrites commits so those paths are pointers, objects exist locally, and those rewritten commits carry tracking lines for the pattern; info names extensions and presents separately identifiable count and size figures per type such that a same-type size-only payload change moves the size figure while the count figure stays the same; export restores blob contents for included paths, those rewritten commits carry excluded-pattern attribute entries for the exported patterns, and history no longer depends on those pointers; with skip-fetch, import succeeds under an unreachable remote when objects are already local.
-- Failure / absence: migrate only changes working tree without rewriting commits; attributes never updated; import writes tracking lines only at a first-appearance commit while leaving other rewritten commits untouched; export leaves pointers in history or updates attributes only by removing tracking lines; under an unreachable remote, the default (non-skip-fetch) path that refreshes remote refs for unpushed-commit selection fails observably while the skip-fetch arm of the same import succeeds.
-
----
-
-### FP-15: Configuration surface and repository `.lfsconfig`
-
-**Public entry:** Git configuration keys under the `lfs` namespace, per-remote overrides, the environment variables that skip smudge, skip push, skip download errors, force progress, or set lockable read-only behavior, and an optional `.lfsconfig` file at the repository root.
-
-**Normal behavior:**
-
-- VCS Orbulk reads all files Git’s config machinery supports. A restricted subset of settings may also live in `.lfsconfig` at the repo root (same format as Git config files) so teams can ship endpoint and access defaults. Git config overrides `.lfsconfig`. If `.lfsconfig` is missing from the work tree, VCS Orbulk looks in the index, then HEAD (bare repositories: HEAD only).
-- The finite set of keys accepted in `.lfsconfig` is: the LFS URL, the LFS push URL, per-remote LFS URLs, fetch include, fetch exclude, skip-download-errors, allow-incomplete-push, locks-verify, URL-scoped access, and the Git protocol setting used for LFS. Other keys in that file are ignored for security.
-- Users can configure at least: endpoint and push endpoint URLs; default remotes; dial/TLS/activity/keepalive timeouts; concurrent transfers; fetch include/exclude; transfer and locking behavior; lock verification; pure SSH transfer mode (`negotiate`, `always`, or `never`); storage location; skip download errors; progress forcing; lockable read-only behavior; prune recentness and verify defaults; optional tus uploads; basic-transfers-only; and standalone/custom transfer agent bindings (FP-16).
-- Environment variables can skip smudge, skip push, and skip download errors, matching the documented boolean truthy/falsey conventions. On/off contrasts against the same transfer paths: skip-smudge leaves pointer text in the working tree on checkout/filter instead of materializing; skip-push makes the pre-push path perform no LFS uploads; skip-download-errors lets a checkout/smudge that cannot download leave pointers rather than failing the whole operation.
-- Environment or Git configuration can force progress, matching the documented boolean truthy/falsey conventions. When a transferring command runs with standard output not a terminal, enabling progress forcing must produce caller-visible in-progress transfer reporting that is absent when the same command runs with progress forcing off. A completion or summary line that appears on both arms is not that contrast. The discriminating observation is that on/off change of in-progress reporting — not whole-stream byte inequality, not mere nonempty output, and not a particular meter punctuation such as carriage-return rewrites or percent signs. This obligation does not fix the reporting channel or the exact progress text.
-- Environment or Git configuration can enable or disable lockable read-only behavior (default enabled). Construct the contrast with FP-04 lockable marking and FP-10 permission outcomes: after tracking a pattern as lockable and committing a matching file that the local user does not hold a lock for, with lockable read-only enabled a checkout, commit, or merge that runs the corresponding post-* permission path leaves that unlocked lockable working-tree path read-only; with the same path state but lockable read-only disabled (falsey environment or configuration), the same Git operation leaves that unlocked lockable path writable.
-
-**Boundary / error behavior:**
-
-- A boolean value that is not a documented truthy token is falsey under those conventions: skip and progress-forcing stay off, and lockable read-only is disabled rather than left at its default-enabled state.
-- Unknown keys in `.lfsconfig` do not crash the client; they are ignored for unrecognized names.
-
-**Verifiable oracle:**
-
-- Success: setting an explicit LFS URL changes the environment report’s dedicated endpoint indication (FP-01/FP-06) and causes transfers to target that URL; `.lfsconfig` endpoint applies until Git config overrides it; skip-smudge, skip-push, and skip-download-errors environment flags produce the on/off contrasts above on the same checkout/filter and pre-push paths; when a transferring command runs with standard output not a terminal, enabling progress forcing produces caller-visible in-progress transfer reporting that is absent with progress forcing off (a completion or summary line that appears on both arms is not that contrast); lockable read-only enabled versus disabled produces the read-only versus writable contrast on an unlocked lockable working-tree path prepared via FP-04 and observed through the FP-10 post-* permission path.
-- Failure / absence: `.lfsconfig` never read; overrides ignored; environment skip flags have no effect; progress forcing on versus off cannot be told apart by in-progress transfer reporting when standard output is not a terminal; lockable read-only enabled and disabled cannot be told apart on unlocked lockable paths after the post-* permission path.
-
----
-
-### FP-16: Custom transfers, standalone file URLs, and clean/smudge extensions
-
-**Public entry:** Custom transfer configuration; the standalone-file plumbing adapter; the `git orbulk ext` subcommand; extension registration in Git config.
-
-**Normal behavior:**
-
-- **Custom transfer agents:** Named agents registered in config specify a process path, arguments, whether concurrent instances are allowed, and direction (download, upload, or both). During batch negotiation the client advertises these transfer names; when the server selects one, VCS Orbulk launches the process and speaks the documented JSON stdin/stdout protocol to move bytes via paths the agent understands (no file bytes on the control stream). Built-in adapter names such as basic and ssh always override a custom agent registered under the same name.
-- **Standalone transfer without API:** Configuration may name a standalone agent (including the built-in standalone file adapter) so VCS Orbulk skips contacting the batch API and drives transfers directly when the endpoint URL matches.
-- **Standalone file adapter:** Handles `file://` URLs / local paths as a transfer backend, speaking the standalone JSON transfer protocol. End users do not invoke it manually for routine workflows; the client selects it when appropriate. When that adapter uploads to a file:// or local-path Git remote that uses the default store location, the object appears in that destination Git directory’s LFS object store using the same objects-directory-plus-shard layout as the local store: store root under that Git directory’s lfs namespace, the objects-directory child, then the shard (first two hex digits of the object id, next two hex digits, then the full object id). It is not written only at an unrelated path beside the destination. This obligation does not name a particular configuration key and does not pin a relocated destination storage path.
-- **Content extensions (experimental):** Registered extensions supply clean and smudge external commands with priority ordering. On clean, registered extensions are applied in ascending priority-number order: a smaller priority number runs before a larger one, so two transforming extensions produce one stored-object result at those numbers and swapping only those numbers produces the reverse pipeline’s stored-object result, distinguishable from each other and from applying only one of the two. Smudge reverses that clean order. The client records per-extension metadata lines on the pointer so smudge can reverse the pipeline. Extensions do not edit the pointer directly. The ext subcommand lists registered extension details. This obligation does not fix pointer metadata key spelling, append-token text, or any particular pair of numeric values beyond the smaller-before-larger contrast.
-
-**Boundary / error behavior:**
-
-- A selected custom agent whose process path cannot be launched fails that transfer. An unknown name selected as the standalone agent is ignored, so ordinary batch transfer still proceeds rather than inventing success without a transfer.
-- Extension failures during clean/smudge fail the filter operation; buggy extensions can corrupt repositories—hence experimental status—but when registered they are still applied on clean in ascending priority-number order (a smaller number before a larger one) and on smudge in the reverse of that clean order.
-
-Non-binding background (not graded here): content-extension registration can interact with dedup; the graded refusal when extensions are configured is owned by FP-18 (dedup’s public entry), not by this feature’s suite.
-
-**Verifiable oracle:**
-
-- Success: a registered custom agent is advertised in batch requests and is invoked when the server selects it; when the standalone file adapter uploads to a file:// or local-path Git remote that uses the default store location, that destination Git directory’s LFS object store receives the object under the same objects-directory-plus-shard layout as the local store, without an HTTP batch exchange; on clean, two transforming extensions at two different priority numbers produce one stored-object result and swapping only those numbers produces the reverse pipeline’s stored-object result, distinguishable from each other and from applying only one of the two, while smudge reverses that clean order and restores working-tree bytes, preserving extension metadata on the pointer; ext lists the registration.
-- Failure / absence: custom transfer config never launches a process; a file:// upload never appears in that destination Git directory’s default LFS object store; extensions are ignored while still claiming success, or swapping only priority numbers leaves the stored-object result indistinguishable from the original pair (including an inverted-order client).
-
----
-
-### FP-17: Pure SSH transfer protocol
-
-**Public entry:** Automatic when talking to SSH remotes that implement the pure SSH VCS Orbulk transfer service; controlled by the ssh-transfer configuration triad negotiate/always/never.
-
-**Normal behavior:**
-
-- The client attempts to run **git-orbulk-transfer** over SSH with the repository path and operation (`download` or `upload`). On success it speaks a pkt-line capability-oriented protocol: the server advertises capabilities including protocol version 1; the client selects version 1; further batch-like download/upload and optional locking commands proceed on the SSH channel without requiring HTTPS for the object bytes. After object bytes have been sent on the SSH upload channel, the client must still complete a post-upload verification round-trip on that same channel. Treating a successful byte put as finishing the upload is not enough: a conforming peer can still reject the object on that verification step after already storing the bytes. This obligation does not pin the verification command’s token, packet wording, or a numeric status code.
-- Default mode is negotiate: try pure SSH first, then fall back to the hybrid git-orbulk-authenticate-plus-HTTPS approach (FP-06/FP-07). Always and never force only one family.
-
-Non-binding background (not graded): some OpenSSH-family setups can reuse a shared SSH control connection for successive pure-SSH channels under configuration and platform defaults; that optimization is not required for correctness of pure SSH transfer.
-
-**Boundary / error behavior:**
-
-- If the git-orbulk-transfer session cannot be established in negotiate mode, the client falls back to the hybrid protocol rather than immediately aborting, unless configuration forbids fallback.
-- In always mode, hybrid HTTPS transfer is not used; failure of pure SSH fails the operation.
-- Server error packets surface as user-visible transfer failures (the transfer does not succeed; the failure is distinguishable from a successful download or upload). A server error packet on the post-upload verification round-trip fails the whole upload even though the peer already stored the bytes; that outcome is distinguishable from treating a successful byte put as a completed upload.
-
-**Verifiable oracle:**
-
-- Success: against a peer that implements git-orbulk-transfer, objects upload and download over the SSH protocol path; after object bytes have been sent on the SSH upload channel the client still completes a post-upload verification round-trip on that same channel, so a successful upload is distinguishable from a put-only completion that never verified; configuration can force never so only hybrid is used; negotiate falls back when the git-orbulk-transfer session cannot be established; a server error packet — including on that verification step after the object bytes were already stored — yields a failed transfer rather than a successful one.
-- Failure / absence: SSH remotes always require HTTPS object transfer even when pure SSH would work; always mode still uses HTTPS; negotiate does not attempt git-orbulk-transfer; server error packets are treated as success; a successful byte put is treated as a completed upload even when a verification-step error after the peer stored the bytes would have rejected the object.
-
----
-
-### FP-18: Logs, completion, dedup, and merge driver
-
-**Public entry:** The `git orbulk logs`, `git orbulk completion`, `git orbulk dedup`, and `git orbulk merge-driver` subcommands; Git merge attribute integration when a user configures a merge driver that invokes the merge-driver plumbing command.
-
-**Normal behavior:**
-
-- **Logs:** Crash and unexpected-error details are written under the repository’s LFS logs directory. The logs command’s finite sub-entries are: list stored logs (default), show a named log or the most recent (`last`), clear stored logs, and intentionally trigger a diagnostic exception for testing.
-- **Completion:** Emits a non-empty tab-completion script for each of a fixed set of shells—**bash**, **fish**, and **zsh**. When that script is loaded and exercised in the corresponding shell, completing the standalone binary yields VCS Orbulk porcelain subcommand names as completion candidates (and flag completion for those porcelain commands; not general Git remote/branch completion). The bash emission, when similarly loaded and exercised with Git’s own completion active, also yields those porcelain subcommand candidates for the multi-word git-invoked entry. The discriminating observation is the candidate set obtained through that shell’s use of the emitted script—not a direct call to a hidden completion interface that bypasses the script, and not a requirement that porcelain names appear as literal substrings in the script text.
-- **Dedup:** On filesystems that support copy-on-write cloning, re-links working-tree LFS files as COW clones of the local store objects to save space. A test mode only checks filesystem support (and the extensions gate below). Dedup fails when unsupported or when content extensions are configured.
-- **Merge driver:** Intended to be invoked by Git, not by end users by hand. Track records the ordinary `lfs` merge attribute, which leaves Git’s default merge of pointer text in effect and does **not** by itself select this driver. A user who knows some tracked files are text must separately set a merge attribute (the documentation illustrates this with a name such as `lfs-text`) and point that attribute at this plumbing command. When so invoked, the driver materializes ancestor/current/other stages and merges text-oriented LFS content via Git’s merge-file machinery or a configured external program. On a successful merge it writes a pointer document for the three-way-merged object bytes to the designated output, and — when that object is not already present — stores those merged bytes in the local object store under the same content-addressed nested path layout used by clean (first two hex digits of the object id, next two hex digits, then the full object id).
-
-**Boundary / error behavior:**
-
-- Dedup exits non-zero on unsupported platforms/filesystems rather than pretending to save space.
-- When copy-on-write cloning is supported and content extensions are configured (registration described under FP-16), both ordinary dedup and its filesystem-support test mode refuse and exit non-zero rather than reporting support success or performing COW re-links, because working-tree bytes may not match stored object bytes. Construct the contrast on a COW-capable substrate: same repository and filesystem, with versus without extension registration—extensions-configured must not produce the support-success outcome that no-extensions produces.
-- Completion for an unknown shell name fails with a non-zero exit.
-- Merge driver does not claim to handle arbitrary binary merges or all rename/copy cases Git itself cannot express in this hook shape.
-- A successful merge-driver invocation that writes only merged text, or only a pointer document with no corresponding bytes under the local content-addressed object layout, does not satisfy the merge-driver duty: later smudge of that pointer would have nothing local to restore.
-- The diagnostic-exception logs entry deliberately fails; clear removes stored logs so subsequent list is empty.
-
-**Verifiable oracle:**
-
-- Success: after a controlled failure path, logs shows a new log file; completion for bash, fish, and zsh each succeeds with a non-empty script that, when loaded and exercised in that shell, yields porcelain subcommand candidates for the standalone binary, and the bash script likewise yields those candidates for the multi-word git-invoked entry once Git’s own completion is active (candidates observed through the shell’s use of the script—not via a bypass of the script, and not by requiring porcelain names as literal script substrings); dedup test mode reflects real COW support; on a COW-capable substrate with no content extensions configured, dedup test mode reports support success, while with content extensions configured the same dedup/test invocation refuses with a non-zero exit distinguishable from that support-success outcome; after a successful text LFS merge through the merge driver (invoked because a merge attribute was configured to select it), the designated output holds a pointer for the merged object and that object’s bytes are present in the local store under the content-addressed nested layout.
-- Failure / absence: no log directory ever created; completion emissions that, when loaded and exercised in their shell, do not yield porcelain subcommand candidates for the standalone binary (or, for bash, for the multi-word git-invoked entry), including hollow scripts credited only through a hidden completion interface that bypasses the script; unknown shell names exit zero; dedup always exits zero without checking support; on a COW-capable substrate, configuring content extensions leaves dedup’s outcome indistinguishable from the no-extensions support-success path; merges of LFS text files always leave unresolved pointer conflicts with no driver path, or a successful merge leaves the designated output without a corresponding local object for the merged bytes; claiming that ordinary track alone selects the merge driver.
-
----
-
-## Cross-cutting acceptance notes
-
-- **End-to-end happy path:** install → track pattern → add/commit large file → push uploads object → fresh clone/pull restores bytes. Any implementation that only passes isolated unit stubs but cannot complete this path on a real Git repo and conforming endpoint is incomplete.
-- **Pointer canonicality:** Two independent clean runs on identical bytes must produce identical pointer documents and identical local object digests.
-- **Filter name stability:** The Git filter/attribute/merge name `lfs` and the on-disk `.git/lfs` namespace are part of the protocol compatibility surface and must remain those names.
-- **Hook set stability:** Repository install/update installs the four VCS Orbulk hooks (pre-push, post-checkout, post-commit, post-merge); a faithful client must not silently omit the lockable post-* hooks.
-- **Vocabulary:** This working PRD uses the repository’s own product names (VCS Orbulk, `git-orbulk`, git-orbulk-authenticate, git-orbulk-transfer, `.lfsconfig`, and related terms) exactly as the upstream project spells them.
+- Success: `{a: a, b: b, c: c}.*` with an order-preserving mapping type on `{c: c, b: b, a: a, d: d}` is `["a", "b", "c"]`; that result is the same through compile-then-search with the same options; `custom_add(\`1\`, \`2\`)` with a provider that adds two numbers is 3; `my_subtract(\`10\`, \`3\`)` is 7; `length(\`[1, 2]\`)` still works on that provider and on a later no-options search; a custom length that maps null to 0 yields 0 for a missing field and 3 for `[1, 2, 3]`.
+- Failure / absence: an order-preserving mapping type is ignored so the projected values follow document key order (`c`, `b`, `a`); custom functions are visible on a later search that did not attach them; attaching a custom provider removes `length`; `custom_add` without options succeeds; a custom function ignores its declared types.

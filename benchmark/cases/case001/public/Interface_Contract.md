@@ -4,646 +4,282 @@
 
 ### Product overview
 
-**Hrefparse** is an embeddable C++20 library that parses, validates, normalizes, and mutates URLs according to the WHATWG URL Standard. It also implements URL Search Params query-string handling and URLPattern matching from the same family of web platform APIs. Internationalized domain names follow Unicode Technical Standard #46 (ToASCII / ToUnicode), including Punycode (`xn--`) labels.
+**Tomlparse** is a Python library that reads TOML text and returns ordinary Python values. It is a parser only: it does not write TOML, and it does not preserve comments, ordering of presentation, or other style. The language this product implements is **TOML v1.1.0**.
 
-A common use is to take a URL string and produce its WHATWG-normalized **href**. That is a different contract from RFC 3986 parsers: Hrefparse rewrites hosts and paths. The product’s canonical illustration is the input `https://www.7‑Eleven.com/Home/Privacy/Montréal` (Unicode hyphen in the host, accented path segment) normalizing to `https://www.xn--7eleven-506c.com/Home/Privacy/Montr%C3%A9al`. Leaving the string unchanged, or applying only RFC 3986 encoding, is a failure of the product.
+A first-time integrator hands Tomlparse a short document such as two array-of-tables items, each with a name and a number, and receives a mapping whose sequence contains those two mappings with a Python string and a Python integer. Leaving the number as a string, accepting a document that TOML v1.1.0 forbids, or returning a custom comment-preserving node instead of a plain mapping is a failure of the product.
 
-The finished product is a **library**, not a network service and not an importable Python package. Integrators compile and link it. A matching **C interface** exposes the same parse, inspect, mutate, search-params, IDNA, and length-cap behavior. A command-line convenience named `hrefparsec` can validate, normalize, and print href or a chosen component; it is the same parse-and-inspect surface, not a separate product, and it is absent unless tools are enabled at configure time.
+The finished product is an **importable Python library**, not a command-line program, not a network service, and not a wire protocol. Integrators install the Tomlparse package and call the published parse entries. There is no dump, write, or encode entry. There is no product-owned configuration file.
 
-There is no runtime third-party dependency. A C++20 compiler is required (GCC 12 or newer, LLVM 14 or newer, or Microsoft Visual Studio 2022). CMake 3.16 or newer builds the library from this repository. Windows, Linux, and macOS are first-class; documented execution is Linux x86_64. Hardware is CPU-only. Public string inputs are ASCII or valid UTF-8; the caller is responsible for UTF-8 validity.
+The product is a pure-Python library with zero runtime third-party dependencies. Optional compiled wheels may exist on some platforms for speed; they are not required. The language is Python 3.8 or newer, including CPython and PyPy. Platforms are Linux, macOS, and Windows. Hardware is CPU-only.
 
-Hrefparse does not ship a regular-expression engine for URLPattern. The caller supplies an engine. Language bindings maintained outside this repository are not part of this product.
+Exact parameter lists, return shapes, and raised types for individual symbols belong with those symbols, not here.
 
 ### Shape of the public surface
 
-The public surface is a **C++ library plus a matching C interface**. There is no wire protocol and no product configuration-file format.
+The public surface is the importable package `tomlparse`. Callers write `import `tomlparse`` or `from `tomlparse` import …` and obtain the published entries from that package root. The importable package is a single top-level directory named `tomlparse` under `src`. Importing the package performs no I/O against caller files, starts no processes, and opens no sockets.
 
-**Headers.** The public C++ umbrella header is `hrefparse.h`. The public C header is `hrefparse_c.h`. Both are shipped at the include-directory root so a translation unit compiles with `#include "`hrefparse.h`"` or `#include "`hrefparse_c.h`"` after adding that include directory. Nested headers under the include tree are pulled in by `hrefparse.h`; C++ callers include `hrefparse.h`, not those nested paths, to reach the published API. A documented single-header amalgamation is an alternative distribution of the same C++ API, not a second product.
+The independently verifiable library entries, grouped by role, are:
 
-**C++ library.** Symbols live in namespace `hrefparse`. The default parse result type is `hrefparse::url_aggregator`. Callers may also request `hrefparse::url`. Both layouts expose the same parse, inspect, and mutate outcomes; choosing a layout is not a separate product. Parse success is observed by treating `hrefparse::result` of `hrefparse::url_aggregator` as true and then reading components through `operator->` (for example `get_href`, `get_hostname`). A successful `hrefparse::result` is also dereferenceable with unary `*` so that `&*` of that result is a pointer to the `hrefparse::url_aggregator`. A failed parse is a falsy result and does not yield a usable URL.
+- `loads` — parse one TOML v1.1.0 document from a Python text string into a document mapping, or fail.
+- `load` — parse the same language from a binary file object whose bytes are interpreted as `UTF-8`, or fail.
+- `TOMLDecodeError` — the documented parse-failure exception. It is a kind of `ValueError`.
 
-The C++ free functions that define the library entry surface are:
+Both parse entries accept an optional float converter (keyword `parse_float`) so TOML floats, including `inf` and `nan` spellings, can be built as something other than a Python float. When that converter is omitted, floats are Python floats. The converter does not change table or array structure, and it is not applied to integers, strings, booleans, or date-times.
 
-- `hrefparse::parse` — first argument is `std::string_view`. Callers compile the one-argument form and the two-argument form whose second argument is a pointer to an already-parsed `hrefparse::url_aggregator` obtained by `&*` on a successful `hrefparse::result`. Returns `hrefparse::result` of `hrefparse::url_aggregator`.
-- `hrefparse::can_parse` — first argument is `std::string_view`. Callers compile the one-argument form and the two-argument form whose second argument is a pointer to a `std::string_view` that holds the base URL string (not a parsed URL). Returns bool.
-- `hrefparse::href_from_file` — argument is `std::string_view`; the returned value is stored in a `std::string`
-- `hrefparse::set_max_input_length` / `hrefparse::get_max_input_length` — write and read the process-wide length cap
-- `hrefparse::parse_url_pattern` — function template on the caller-supplied engine. Callers compile the form whose first argument is `std::string_view`, second is a pointer to a `std::string_view` base (null when absent), third is a pointer to `hrefparse::url_pattern_options`; and the form whose first argument is `hrefparse::url_pattern_init`, second is a null pointer, third is a pointer to `hrefparse::url_pattern_options`. Returns `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. The engine exposes `regex_type` and these static members: `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type` (`std::nullopt` is compile failure); `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`; `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool.
-
-On a successful parse of `file://`, pathname assignment is `set_pathname` with a `std::string_view` on the `hrefparse::url_aggregator` reached through `operator->`.
-
-Inspect and mutate on a successful `hrefparse::url_aggregator` compile as follows. Readers: `get_href`, `get_origin`, `get_protocol`, `get_username`, `get_password`, `get_host`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`. The `get_origin` result is stored in a `std::string`; the other readers are used as `std::string_view`. Host kind is the public member `host_type` (not a method); callers convert that member to unsigned. Presence queries `has_credentials`, `has_hostname`, `has_port`, `has_search`, `has_hash` take no argument and are used as bool. Clears `clear_port`, `clear_search`, `clear_hash` take no argument. Flagged writers `set_host`, `set_hostname`, `set_protocol`, `set_pathname`, `set_username`, `set_password`, `set_port`, `set_href` take a `std::string_view` and return bool. `set_search` and `set_hash` take a `std::string_view`; callers compile those calls without using a return.
-
-URL Search Params is the type `hrefparse::url_search_params`. Callers construct it from a `std::string_view`. Methods compile as follows. Pair count is `size`, assigned to `size_t`. Serialize is `to_string`, stored in a `std::string`. First-value lookup is `get` with a `std::string` key; the result is optional-like (`has_value`, then unary `*`). All-values lookup is `get_all` with a `std::string` key; the result is vector-like (`size` and `[]`). Presence is `has` in a one-argument (key) form and a two-argument (key, value) form, both used as bool. Writers `append` and `set` take two `std::string` arguments. `remove` compiles as one-argument (key) and two-argument (key, value). `sort` takes no argument. `reset` takes a `std::string` query. Iterators `get_keys`, `get_values`, and `get_entries` take no argument; callers walk with `has_next` and `next` where `next` is optional-like (`has_value`, then unary `*`). An entries item exposes `first` and `second`.
-
-URLPattern is the class template `hrefparse::url_pattern` on the caller-supplied engine. A successful compile is observed by treating `tl::expected` of `hrefparse::url_pattern` as true and then using `operator->`. Callers default-construct that `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`, then assign the return of `hrefparse::parse_url_pattern`. Methods compile as follows. Regexp-group report is `has_regexp_groups`, used as bool. Compiled component pattern strings are `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, used as `std::string_view`. `test` compiles as `std::string_view` plus a null pointer, and as `hrefparse::url_pattern_init` plus a null pointer; the return is `hrefparse::result` of bool (boolean conversion, then unary `*`). `exec` compiles the same two overloads; the return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result` (a failed result is unexpected; empty optional is no-match; filled optional is a match). Callers default-construct those `hrefparse::result` objects, then assign the returns of `test` and `exec`. Callers default-construct `hrefparse::url_pattern_init` and assign protocol, username, password, hostname, port, pathname, search, hash, and `base_url` from `std::string`. Callers default-construct `hrefparse::url_pattern_options` and write public member `ignore_case`. A successful `exec` unwraps `hrefparse::url_pattern_result` with those eight component members, each an `hrefparse::url_pattern_component_result` exposing `input` and `groups` (sized; range-for of pair: `first` name, `second` optional-like with `has_value` then unary `*`). Remaining method-level defaults belong with those symbols.
-
-**C interface.** C callers include `hrefparse_c.h` and link the same library (the implementation needs the C++ standard library; linking with a C++ driver is the usual way to satisfy that). The C type `hrefparse_url` is an opaque handle. Every handle returned by a parse entry is released with `hrefparse_free`. View strings use `hrefparse_string` (`data`, `length`) and remain valid only while the underlying `hrefparse_url` is unchanged. Owned strings use `hrefparse_owned_string` (`data`, `length`) and are released with `hrefparse_free_owned_string`. Among C component readers, `hrefparse_get_origin` is the owned-string exception: it returns `hrefparse_owned_string` and is released with `hrefparse_free_owned_string`; the other named C readers return `hrefparse_string` views.
-
-The C free functions that define the C entry surface are:
-
-- `hrefparse_parse` — two arguments: a `const char*` buffer (a `char*` pointer is accepted) and a `size_t` length; returns `hrefparse_url`
-- `hrefparse_parse_with_base` — four arguments: input `const char*`, input `size_t` length, base `const char*`, base `size_t` length; returns `hrefparse_url`
-- `hrefparse_can_parse` — two arguments: `const char*` and `size_t`
-- `hrefparse_can_parse_with_base` — four arguments: input `const char*`, input `size_t` length, base `const char*`, base `size_t` length
-- `hrefparse_is_valid`
-- `hrefparse_get_href` / `hrefparse_get_hostname` / `hrefparse_get_origin` / `hrefparse_get_protocol` / `hrefparse_get_username` / `hrefparse_get_password` / `hrefparse_get_host` / `hrefparse_get_port` / `hrefparse_get_pathname` / `hrefparse_get_search` / `hrefparse_get_hash`
-- `hrefparse_get_host_type` — one argument `hrefparse_url`; the return converts to unsigned
-- `hrefparse_set_host` / `hrefparse_set_hostname` / `hrefparse_set_protocol` / `hrefparse_set_pathname` / `hrefparse_set_username` / `hrefparse_set_password` / `hrefparse_set_port` / `hrefparse_set_href` — three arguments: `hrefparse_url`, `const char*`, `size_t`; the return is boolean-convertible (accepted or refused)
-- `hrefparse_set_search` / `hrefparse_set_hash` — the same three arguments; callers compile those calls without using a return
-- `hrefparse_clear_port` / `hrefparse_clear_search` / `hrefparse_clear_hash` — one argument `hrefparse_url`
-- `hrefparse_has_credentials` / `hrefparse_has_hostname` / `hrefparse_has_port` / `hrefparse_has_search` / `hrefparse_has_hash` — one argument `hrefparse_url`; boolean-convertible
-- `hrefparse_free` / `hrefparse_free_owned_string`
-- `hrefparse_set_max_input_length` / `hrefparse_get_max_input_length`
-- `hrefparse_idna_to_ascii` — two arguments: `const char*` and `size_t`; returns `hrefparse_owned_string`
-- `hrefparse_idna_to_unicode` — two arguments: `const char*` and `size_t`; returns `hrefparse_owned_string`
-- `hrefparse_parse_search_params` — two arguments: a `const char*` buffer (a `char*` pointer is accepted) and a `size_t` length; returns `hrefparse_url_search_params`
-- `hrefparse_free_search_params` — one argument `hrefparse_url_search_params`
-- `hrefparse_search_params_size` — one argument `hrefparse_url_search_params`; the return is `size_t`-printable
-- `hrefparse_search_params_to_string` — one argument `hrefparse_url_search_params`; returns `hrefparse_owned_string`, released with `hrefparse_free_owned_string`
-- `hrefparse_search_params_get` — three arguments: `hrefparse_url_search_params`, `const char*`, `size_t`; returns `hrefparse_string`
-- `hrefparse_search_params_get_all` — the same three arguments; returns `hrefparse_strings`, walked with `hrefparse_strings_size` and `hrefparse_strings_get`, released with `hrefparse_free_strings`
-- `hrefparse_search_params_has` — the same three arguments; boolean-convertible
-- `hrefparse_search_params_has_value` — five arguments: `hrefparse_url_search_params`, key `const char*`, key `size_t`, value `const char*`, value `size_t`; boolean-convertible
-- `hrefparse_search_params_append` / `hrefparse_search_params_set` / `hrefparse_search_params_remove_value` — the same five arguments
-- `hrefparse_search_params_remove` — three arguments: `hrefparse_url_search_params`, `const char*`, `size_t`
-- `hrefparse_search_params_sort` — one argument `hrefparse_url_search_params`
-- `hrefparse_search_params_reset` — three arguments: `hrefparse_url_search_params`, query `const char*`, query `size_t`
-- `hrefparse_search_params_get_keys` — one argument `hrefparse_url_search_params`; returns `hrefparse_url_search_params_keys_iter`, walked with `hrefparse_search_params_keys_iter_has_next` / `hrefparse_search_params_keys_iter_next` (`hrefparse_string`), released with `hrefparse_free_search_params_keys_iter`
-- `hrefparse_search_params_get_values` — one argument `hrefparse_url_search_params`; returns `hrefparse_url_search_params_values_iter`, walked with `hrefparse_search_params_values_iter_has_next` / `hrefparse_search_params_values_iter_next` (`hrefparse_string`), released with `hrefparse_free_search_params_values_iter`
-- `hrefparse_search_params_get_entries` — one argument `hrefparse_url_search_params`; returns `hrefparse_url_search_params_entries_iter`, walked with `hrefparse_search_params_entries_iter_has_next` / `hrefparse_search_params_entries_iter_next` (`hrefparse_string_pair` with `key` and `value` as `hrefparse_string`), released with `hrefparse_free_search_params_entries_iter`
-
-Standalone ToASCII / ToUnicode are published on the C interface (`hrefparse_idna_to_ascii`, `hrefparse_idna_to_unicode`). URLPattern is not published on the C interface.
-
-**Library artifact.** The CMake target name is `hrefparse`. The linked artifact is `libhrefparse.a` or `libhrefparse.so`. Including the public headers without linking that library must not produce a successful parse of an absolute `https` URL.
-
-**CLI.** The optional convenience binary is `hrefparsec`. It is the same parse-and-inspect behavior. The default CMake configuration does not enable tools, so the binary is not required to be present.
-
-The C++ and C call arities and parameter types above are the published compile surface. Remaining method-level defaults belong with those symbols.
+**Not in this surface.** Encoding or writing TOML. Comment-preserving or style-preserving round-trip parsing. A command-line program, a web server, or a configuration framework. A fallback import of the standard-library TOML module. Parse throughput is not a published interface.
 
 ### Naming conventions
 
-**Product and library.** The product identity is Hrefparse. The CMake project, the library target, and the link stem are spelled `hrefparse`. The archive and shared-object basenames are `libhrefparse.a` and `libhrefparse.so`. The C++ namespace is `hrefparse`. The C prefix is `hrefparse_`.
+**Product and package.** The product identity is Tomlparse. The installable distribution name and the importable top-level package are spelled `tomlparse`.
 
-**Headers.** C++: `hrefparse.h`. C: `hrefparse_c.h`.
+**Parse entries.** String parse is `loads` (plural). Binary-file parse is `load` (singular). The first argument of `loads` is the document as a Python text string, passed positionally. The first argument of `load` is a file object opened for binary reading. The optional float converter on both entries is the keyword `parse_float`.
 
-**CLI.** The convenience tool basename is `hrefparsec`.
+**Decode error.** Parse failure of invalid TOML is `TOMLDecodeError`. That name is PascalCase. It is a subclass of `ValueError`. It is not `RecursionError` and it is not `TypeError`.
 
-**Parse and validity.** C++ parse and can-parse are `hrefparse::parse` and `hrefparse::can_parse`. C splits the optional-base forms into `hrefparse_parse` / `hrefparse_parse_with_base` and `hrefparse_can_parse` / `hrefparse_can_parse_with_base`. C validity is `hrefparse_is_valid`. C++ validity is the boolean conversion of `hrefparse::result`.
+**TOML keyword spellings.** Boolean values are only the lowercase tokens `true` and `false`. Special float spellings are `inf`, `+inf`, `-inf`, `nan`, `+nan`, and `-nan`. The same four words `true`, `false`, `inf`, and `nan` are valid **keys** when used as bare keys.
 
-**Filesystem path.** C++ only: `hrefparse::href_from_file`.
-
-**Length cap.** C++: `hrefparse::set_max_input_length`, `hrefparse::get_max_input_length`. C: `hrefparse_set_max_input_length`, `hrefparse_get_max_input_length`.
-
-**IDNA.** C: `hrefparse_idna_to_ascii`, `hrefparse_idna_to_unicode`. Punycode labels use the `xn--` prefix.
-
-**WHATWG component vocabulary.** The component names are `href`, `origin`, `protocol`, `username`, `password`, `host`, `hostname`, `port`, `pathname`, `search`, and `hash`.
-
-C++ readers: `get_href`, `get_origin`, `get_protocol`, `get_username`, `get_password`, `get_host`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`. C++ writers: `set_href`, `set_protocol`, `set_username`, `set_password`, `set_host`, `set_hostname`, `set_port`, `set_pathname`, `set_search`, `set_hash`. C++ clear: `clear_port`, `clear_search`, `clear_hash`. C++ presence: `has_credentials`, `has_hostname`, `has_port`, `has_search`, `has_hash`. Host kind on C++ is the public member `host_type` of `hrefparse::url_aggregator` (not a method).
-
-C readers: `hrefparse_get_href`, `hrefparse_get_origin`, `hrefparse_get_protocol`, `hrefparse_get_username`, `hrefparse_get_password`, `hrefparse_get_host`, `hrefparse_get_hostname`, `hrefparse_get_port`, `hrefparse_get_pathname`, `hrefparse_get_search`, `hrefparse_get_hash`. C writers: `hrefparse_set_href`, `hrefparse_set_protocol`, `hrefparse_set_username`, `hrefparse_set_password`, `hrefparse_set_host`, `hrefparse_set_hostname`, `hrefparse_set_port`, `hrefparse_set_pathname`, `hrefparse_set_search`, `hrefparse_set_hash`. C clear: `hrefparse_clear_port`, `hrefparse_clear_search`, `hrefparse_clear_hash`. C presence: `hrefparse_has_credentials`, `hrefparse_has_hostname`, `hrefparse_has_port`, `hrefparse_has_search`, `hrefparse_has_hash`. Host kind on the C side is `hrefparse_get_host_type`.
-
-**C string types.** `hrefparse_string` and `hrefparse_owned_string` each have `data` and `length`. `hrefparse_url` is the parse handle. `hrefparse_url_search_params` is the search-params handle. A multi-string result is `hrefparse_strings`, walked with `hrefparse_strings_size` and `hrefparse_strings_get` and released with `hrefparse_free_strings`. An entries walk yields `hrefparse_string_pair` (`key`, `value`).
-
-**URL Search Params.** C++ type `hrefparse::url_search_params`, constructed from `std::string_view`. Methods: `size`, `to_string`, `get`, `get_all`, `has`, `append`, `set`, `remove`, `sort`, `reset`, `get_keys`, `get_values`, `get_entries`. Iterator walk: `has_next`, `next`. C construct/release: `hrefparse_parse_search_params` / `hrefparse_free_search_params`. C operations: `hrefparse_search_params_size`, `hrefparse_search_params_to_string`, `hrefparse_search_params_get`, `hrefparse_search_params_get_all`, `hrefparse_search_params_has`, `hrefparse_search_params_has_value`, `hrefparse_search_params_append`, `hrefparse_search_params_set`, `hrefparse_search_params_remove`, `hrefparse_search_params_remove_value`, `hrefparse_search_params_sort`, `hrefparse_search_params_reset`, `hrefparse_search_params_get_keys`, `hrefparse_search_params_get_values`, `hrefparse_search_params_get_entries`.
-
-**Special schemes.** The finite special-scheme set is exactly `ftp`, `file`, `http`, `https`, `ws`, and `wss`. Any other scheme is non-special.
-
-**URLPattern.** C++ parse entry `hrefparse::parse_url_pattern` (function template on the caller-supplied engine). Compiled type `hrefparse::url_pattern`. Initializer `hrefparse::url_pattern_init` (component members protocol, username, password, hostname, port, pathname, search, hash, plus `base_url`). Options `hrefparse::url_pattern_options` (member `ignore_case`). Compile result is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`; callers default-construct that expected and assign the parse return. Methods: `has_regexp_groups`, `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, `get_hash`, `test`, `exec`. Callers default-construct `hrefparse::result` of bool and `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`, then assign the returns of `test` and `exec`. Execute result `hrefparse::url_pattern_result` of eight `hrefparse::url_pattern_component_result` members (`input`, `groups`). Engine: `regex_type`; static `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type` (`std::nullopt` is compile failure); static `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`; static `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool. The compile definition `HREFPARSE_USE_UNSAFE_STD_REGEX_PROVIDER` exposes a `std::regex`-backed provider; it is not a safe default for untrusted patterns.
+**Layout.** The importable package directory is `tomlparse` under `src`.
 
 ### Global observables an implementer must reproduce
 
 **No product config file.** The library does not read a configuration-file syntax of its own and does not require a config file to be present.
 
-**Input encoding.** Public string inputs are ASCII or valid UTF-8. The caller is responsible for UTF-8 validity.
+**No command-line product.** There is no console-script entry and no `python -m` program that is part of this surface. Outcomes are returned or raised from library calls. Parse entries do not exit the host process.
 
-**Process-wide length cap.** The cap is a process-wide byte limit on a URL’s serialized href and on related inputs. The default is the maximum 32-bit unsigned integer. The caller may lower it with `hrefparse::set_max_input_length` / `hrefparse_set_max_input_length` and read it back with `hrefparse::get_max_input_length` / `hrefparse_get_max_input_length`. The cap applies to both the raw input and the **normalized** href (percent-encoding expansion counts). The same cap applies to `hrefparse::href_from_file` and to URL Search Params construction and reset. Individual search-parameter append/set calls are not length-capped. A parse or conversion that would exceed the cap fails: parse yields no usable URL, `hrefparse::can_parse` / `hrefparse_can_parse` agree with that failure, and `hrefparse::href_from_file` returns an empty string. Raising the cap back to the default restores acceptance of ordinary-length URLs.
+**Library substrate.** When the `tomlparse` package is not importable, a program that does `from `tomlparse` import `loads`` and then calls `loads` on the one-line document `name = "probe"` does not run to completion and does not yield a successful document mapping. When the package is importable, that same document yields a mapping whose `name` value is the string `probe`.
 
-**Success versus failure.** A failed parse does not yield a usable URL. The caller can tell success from failure before reading href or any component. In C++, a failed `hrefparse::result` is falsy. In C, `hrefparse_is_valid` is false on that handle. Standalone IDNA on the C interface hands the caller a usable domain only when the owned string has non-null `data` and non-zero `length`; null `data` or zero `length` is “no usable domain.” Empty string is not the only allowed failure encoding.
+**Document mapping.** A successful parse returns a Python mapping whose keys are strings and whose values are ordinary Python mappings, sequences, and scalars (strings, integers, floats, booleans, and standard-library date, time, and datetime values). The product does not return custom node types in order to keep comments or layout. Integers are integers and not booleans; booleans are booleans and not the integers 1 and 0 and not strings.
 
-**WHATWG href, not identity copy.** A successful parse serializes the WHATWG href, which may differ from the input. Leading and trailing C0 controls and spaces are stripped. ASCII tab, line feed, and carriage return are then removed wherever they remain; they are not percent-encoded. A space that is not stripped is percent-encoded as `%20` in the URL href (a plus in a path is not treated as a space). Scheme and host matching for special-scheme URLs is ASCII-case-insensitive.
+**Empty document.** A parse of empty text, of text that is only whitespace, or of text that is only comments succeeds and yields an empty mapping. A document whose only content is the comment `#no newlines at all here` (no line feed) yields an empty mapping. A binary file with no bytes yields the same empty mapping.
 
-**Special schemes and default ports.** Special schemes are `ftp`, `file`, `http`, `https`, `ws`, and `wss`. Default ports used in parsing and serialization are: `http` and `ws` → 80; `https` and `wss` → 443; `ftp` → 21; `file` has none. A default port is omitted from the href (for example `https://example.com:443/` serializes without `:443`). A non-default port is kept.
+**TOML v1.1.0.** The dialect is TOML v1.1.0. Documents that v1.0.0 forbids and v1.1.0 allows are accepted, including newlines and trailing commas in inline tables. A table header must close on the same line. Keys may be bare, quoted as a basic or literal string, or dotted. Letter case is significant. Duplicate keys in the same table are refused. An inline table cannot be mutated after it is built.
 
-**Hosts.** Host parsing follows the WHATWG host parser, not dotted-decimal-only IPv4 (mixed-base IPv4 is canonicalized to dotted decimal). IPv6 hosts appear in brackets in the href. Internationalized hosts are converted with ToASCII; host parsing of an `http`/`https` URL uses the same mapping as standalone `hrefparse_idna_to_ascii`, including Unicode Normalization Form C reordering when the host is not already NFC. A space in a host is a parse failure; the same embedded space in a standalone ToASCII input is not.
+**Comments and line endings.** A comment starts at `#` and runs to the end of the line. A hash inside a string is not a comment. Indentation may be spaces or tabs and does not change meaning. A carriage-return/line-feed pair in the input is treated as a single line feed, including inside string values.
 
-**`file:` drive letters.** A `file:` path whose first segment is a normalized Windows drive letter (exactly one ASCII letter followed by `:`) is protected from `..` shortening (`file:c:/..` serializes as `file:///c:/`). A longer first segment that merely starts with letter-colon is not protected (`file:c:x/..` serializes as `file:///`).
+**Binary input.** `load` reads a **binary** file object and interprets the bytes as `UTF-8`. A file object opened in text mode is refused with `TypeError`, not `TOMLDecodeError`. Bytes that are not valid `UTF-8` do not yield a document mapping. For the same TOML characters, `load` after `UTF-8` decoding yields the same document mapping as `loads`.
 
-**Filesystem-path conversion.** `hrefparse::href_from_file` takes a `std::string_view` and produces a `file:` href (stored in a `std::string`) that matches the href obtained by parsing `file://` and assigning that path with `set_pathname` given a `std::string_view`. When the raw path or the percent-expanded href exceeds the length cap, the conversion returns `""`.
+**Wrong Python type versus invalid TOML.** `loads` accepts a Python text string only. Passing a bytes object or a boolean fails with `TypeError`, not `TOMLDecodeError`. The observer can tell “wrong Python type” from “invalid TOML”.
 
-**Can-parse agreement.** `hrefparse::can_parse` / `hrefparse_can_parse` (and `hrefparse_can_parse_with_base` when a base is given) return yes if and only if parse of the same input and base would succeed, including length-cap rejections. The caller does not have to keep the URL object.
+**Decode error.** When the document is not valid TOML, the parse does not succeed and does not deliver a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError`: a caller who handles `ValueError` also handles parse failures, and a caller who handles only `TOMLDecodeError` does not catch unrelated type errors. Wording of the decode-error report is not a compatibility contract. When the problem is at a character inside the document, an observer can recover a 1-based line number and a 1-based column number for that character. When the document ended too early, an observer can tell the failure is at the end of the document. From the same failure, the unformatted reason, the original document text, and a 0-based character offset are each recoverable, separately from the formatted report.
 
-**C handle lifetime.** Every `hrefparse_url` from `hrefparse_parse` / `hrefparse_parse_with_base` is released with `hrefparse_free`. Every `hrefparse_url_search_params` from `hrefparse_parse_search_params` is released with `hrefparse_free_search_params`. Every `hrefparse_owned_string` from IDNA, `hrefparse_search_params_to_string`, or other owned-string entries is released with `hrefparse_free_owned_string`. `hrefparse_string` views returned by getters are invalidated by any subsequent mutation of that handle.
+**Recursion versus decode.** An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That failure is not `TOMLDecodeError`. The observer can tell those two failure kinds apart.
 
-**Linking.** The published headers are not a complete implementation. A program that includes `hrefparse.h` (or `hrefparse_c.h`) but does not link `libhrefparse.a` / `libhrefparse.so` must not produce a successful Hrefparse url for an absolute `https` input.
+**Float converter.** Any callable that accepts the token text and returns a value that is not a dictionary or a list (and not a subtype of either) is allowed as `parse_float`. If the converter returns a dictionary or a list, the parse fails with `ValueError`. That failure is not `TOMLDecodeError`.
 
-**URLPattern engine.** Hrefparse does not ship a regular-expression engine. Compile fails when the caller does not supply a usable engine. That failure is distinguishable from a compiled pattern that matches nothing. URLPattern is C++-only.
+## `tomlparse`
 
-**No product-owned process exit codes.** The library reports parse and mutation outcomes through `hrefparse::result` / `hrefparse_is_valid` / setter return values, not through `main` exit status. The optional `hrefparsec` tool is not a required entry of this surface.
+The installable distribution and the importable top-level package are both `tomlparse`. Callers declare the interface from this package root (`import `tomlparse`` or `from `tomlparse` import …`). Importing the package performs no I/O, starts no processes, and opens no sockets.
 
-## `hrefparse::can_parse`
+The importable package is a single top-level directory named `tomlparse` under `src`.
 
-Include `hrefparse.h`. The C++ can-parse entry is `hrefparse::can_parse` in namespace `hrefparse`.
+These names are importable as ``tomlparse`.<name>` and as `from `tomlparse` import <name>`:
 
-### Signature
+- `loads`
+- `load`
+- `TOMLDecodeError`
 
-The first argument is `std::string_view`. Callers compile a one-argument form and a two-argument form. The second argument is a pointer to a `std::string_view` that holds the base URL string, not a parsed URL. Returns bool: yes if and only if parse of the same input and base would succeed.
+Typical import used to parse a TOML string and handle invalid input:
 
-The matching C entry is `hrefparse_can_parse` (include `hrefparse_c.h`). It is the two-argument form: a `const char*` buffer and a `size_t` length.
+```
+from `tomlparse` import `TOMLDecodeError`, `loads`
+```
 
-## `hrefparse::errors`
+A script that only needs a subset may import that subset, for example `from `tomlparse` import `loads`` or `from `tomlparse` import `TOMLDecodeError``. Binary-file parse is `from `tomlparse` import `load``.
 
-`hrefparse::parse_url_pattern` returns `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`.
+When `tomlparse` is not importable, a program that does `from `tomlparse` import `loads`` does not run to completion and does not yield a document mapping. When the package is importable, `loads` of the one-line document `name = "probe"` yields a mapping whose `name` value is the string `probe`.
 
-### Signature
+## `tomlparse.TOMLDecodeError`
 
-Callers default-construct `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`, then assign the return of `hrefparse::parse_url_pattern`. A failed expected is falsy and does not yield a usable pattern. That failure is distinguishable from a compiled pattern whose `test` / `exec` is no-match.
-
-## `hrefparse::href_from_file`
-
-Include `hrefparse.h`. The C++ filesystem-path conversion is `hrefparse::href_from_file`.
-
-### Signature
-
-The argument is `std::string_view`. The returned value is stored in a `std::string`.
-
-When the raw path or the percent-expanded href exceeds the process-wide length cap, the conversion returns `""`. Otherwise the href matches the result of parsing `file://` and assigning that path with `set_pathname` given a `std::string_view`.
-
-## `hrefparse::parse`
-
-Include `hrefparse.h`. The C++ parse entry is `hrefparse::parse` in namespace `hrefparse`.
+Import `TOMLDecodeError` from the package root `tomlparse` (`from `tomlparse` import `TOMLDecodeError``). Exception class raised when a document is not valid TOML. It is a class (a type), not a factory function and not a string.
 
 ### Signature
 
-The first argument is `std::string_view`. Callers compile a one-argument form and a two-argument form. The second argument is a pointer to an already-parsed `hrefparse::url_aggregator`, obtained by applying unary `*` to a successful `hrefparse::result` and taking its address (`&*` of the result). Returns `hrefparse::result` of `hrefparse::url_aggregator`.
+```
+`TOMLDecodeError`(`msg`, `doc`, `pos`)
+```
 
-The matching C entry is `hrefparse_parse` (include `hrefparse_c.h`). It is the two-argument form: a `const char*` buffer (a `char*` pointer is accepted) and a `size_t` length. It returns `hrefparse_url`.
+- `msg` — the unformatted reason, as text.
+- `doc` — the TOML document text being parsed, as text.
+- `pos` — the 0-based character offset into `doc` where parsing failed, as an integer.
 
-## `hrefparse::parse_url_pattern`
+A caller can produce the exception by supplying those three values. The resulting failure identifies that place the same way a parse failure does: reason, document, offset, 1-based line, and 1-based column are each recoverable, and the formatted report includes that location. Supplying reason `error parsing`, document `v=1` then a line feed then `[table]` then a line feed then `v='val'`, and offset 13, the recovered line is 3 and the recovered column is 2.
 
-Include `hrefparse.h`. The C++ URLPattern compile entry is `hrefparse::parse_url_pattern`. It is a function template on the caller-supplied engine. URLPattern is not published on the C interface.
+### Inheritance and discrimination
 
-### Signature
+`TOMLDecodeError` is a subclass of `ValueError`. An instance raised for invalid TOML is both a `TOMLDecodeError` and a `ValueError`. It is not a `RecursionError`. A `RecursionError` raised when nesting exceeds the interpreter’s recursion limit is not a `TOMLDecodeError`. A `TypeError` raised for the wrong Python input type (for example a bytes object or a boolean passed to `loads`, or a text-mode file passed to `load`) is not a `TOMLDecodeError`.
 
-Callers compile two forms. The first takes `std::string_view`, a pointer to a `std::string_view` base (null when the caller has no base), and a pointer to `hrefparse::url_pattern_options`. The second takes `hrefparse::url_pattern_init`, a null pointer, and a pointer to `hrefparse::url_pattern_options`. Both return `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Callers default-construct that expected, then assign the return. A failed expected is falsy and does not yield a usable pattern.
+### Recoverable location
 
-The engine type must expose `regex_type` and these static members. `create_instance` takes `std::string_view` and bool and returns `std::optional` of `regex_type`; returning `std::nullopt` is compile failure. `regex_search` takes `std::string_view` and a const reference to `regex_type` and returns `std::optional` of `std::vector` of `std::optional` of `std::string`. `regex_match` takes `std::string_view` and a const reference to `regex_type` and returns bool.
+A raised instance exposes:
 
-## `hrefparse::result`
+- `msg` — the unformatted reason.
+- `doc` — the original document text.
+- `pos` — the 0-based character offset.
+- `lineno` — the 1-based line corresponding to `pos`.
+- `colno` — the 1-based column corresponding to `pos`.
 
-`hrefparse::parse` returns `hrefparse::result` of `hrefparse::url_aggregator`.
+These values are recoverable separately from the formatted report that includes the location. Wording of that formatted report is not a compatibility contract. When `pos` is at or past the end of `doc`, an observer can tell the failure is at the end of the document rather than at a line and column in the interior.
 
-A successful result converts to true. Components are read through arrow access (for example `get_href`, `get_hostname`). A successful result is also dereferenceable with unary `*` so that `&*` of that result is a pointer to the `hrefparse::url_aggregator`, which is the already-parsed base passed to two-argument `hrefparse::parse`.
+### Raised by parse
 
-A failed result is falsy and does not yield a usable URL.
+`loads` and `load` raise `TOMLDecodeError` when the input is not valid TOML v1.1.0. The call does not return a document mapping. Duplicate keys, frozen inline-table mutation, overwrite of a value by a table or array-of-tables header, a missing value, a multiline string used as a key or table name, a header that spans lines or shares its line with a following pair, and other invalid documents fail this way. Nesting past the interpreter’s recursion limit does **not** raise `TOMLDecodeError`; that failure is `RecursionError`.
 
-Callers default-construct `hrefparse::result` of bool and `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`, then assign the returns of `test` and `exec`.
+## `tomlparse.load`
 
-## `hrefparse::url_aggregator.host_type`
-
-On a successful `hrefparse::result` of `hrefparse::url_aggregator`, host kind is the public member `host_type` (not a method).
-
-### Signature
-
-Callers read `host_type` on the `hrefparse::url_aggregator` and convert the value to unsigned. IPv4, IPv6, and domain hosts produce distinguishable unsigned values; two domain hosts share a value; two IPv4 hosts share a value.
-
-## `hrefparse::url_aggregator.set_host`
-
-On a successful `hrefparse::result` of `hrefparse::url_aggregator`, host assignment is `set_host`.
+Import `load` from the package root `tomlparse` (`from `tomlparse` import `load``). Parse one TOML v1.1.0 document from a binary file object whose bytes are interpreted as `UTF-8` and return a document mapping, or fail. The file object is passed as the first positional argument.
 
 ### Signature
 
-`set_host` takes a `std::string_view` and returns bool (accepted or refused). The same compile shape is used by `set_hostname`, `set_protocol`, `set_pathname`, `set_username`, `set_password`, `set_port`, and `set_href`.
+```
+`load`(fp, *, `parse_float`=float)
+```
 
-`set_search` and `set_hash` take a `std::string_view`; callers compile those calls without using a return.
+- `fp` — an already-open file object for **binary** reading. Passed positionally. The call reads that object’s current contents (a `read` that yields bytes). It does not take a filesystem path as the document. On-disk files opened in binary mode and in-memory binary buffers are both accepted.
+- `parse_float` — optional callable that receives the spelling of a TOML float (including `inf` and `nan` tokens) and returns the constructed value. Keyword-only. The default is the builtin `float`. Integers, strings, booleans, and date-times are not passed through this converter. If the converter returns a dictionary or a list (including a subtype of either), the parse fails with `ValueError`, not `TOMLDecodeError`. This keyword applies the same way it applies to `loads`.
 
-## `hrefparse::url_aggregator.set_pathname`
+### Return shape
 
-On a successful `hrefparse::result` of `hrefparse::url_aggregator`, pathname assignment is reached through arrow access (`set_pathname`, then `get_href`).
+On success, returns a mapping whose keys are strings. Nested tables are mappings. Arrays and arrays of tables are sequences (not strings). Successful parses do not return `None` in place of a mapping. An empty file (no bytes) yields an empty mapping (length 0), not `None`.
 
-### Signature
+Integers in the mapping are integers and are not booleans. Booleans are booleans (`True` / `False`) and are not the integers 1 and 0 and not strings. Floats are floats (when `parse_float` is left at the default). Strings are strings.
 
-`set_pathname` takes a `std::string_view`. Callers compile that call after parsing `file://`.
+The call reads from the supplied file object. It does not open a path of its own, does not write files, does not mutate the process environment, and does not exit the host process.
 
-## `hrefparse::url_pattern`
+### Same mapping as string parse after UTF-8
 
-Include `hrefparse.h`. URLPattern is the class template `hrefparse::url_pattern` on the caller-supplied engine.
+The file’s bytes are interpreted as `UTF-8`. For the same TOML characters, `load` after that decoding yields a document mapping equal to `loads` on that text. Every structural and scalar rule of the string-parse entry applies to that decoded text.
 
-### Signature
+- A binary file whose `UTF-8` bytes are `one=1` then a line feed then `two='two'` then a line feed then `arr=[]` yields `one` equal to the integer 1, `two` equal to the string `two`, and `arr` equal to an empty sequence, matching `loads` on that text.
+- A two-key root document encoded as `UTF-8` yields those integer and string values and matches `loads` on the same characters.
+- A binary file with no bytes yields an empty mapping, the same as empty text through `loads`. An in-memory binary buffer with no bytes is the same empty mapping.
+- A carriage-return/line-feed pair in the file is treated as a single line feed. A binary file whose `UTF-8` bytes are `one=1`, a carriage-return/line-feed pair, then `two='two'` parses to those two keys and matches both `loads` on that text and the same document written with line feeds only.
+- Multi-byte `UTF-8` letters in keys or string values parse as those Unicode characters and match `loads` on the same characters.
+- Two array-of-tables items `[[players]]` then `name = "Lehtinen"` then `number = 26` then `[[players]]` then `name = "Numminen"` then `number = 27` yield `players` as a two-element sequence of mappings, matching `loads`. A runtime pair of double-bracket headers with a shared integer key is the same: a two-element sequence matching `loads`.
+- A dotted key `prefix.leaf = n` nested under `prefix` then `leaf` matches `loads`. The dotted spelling of those two parts is not a key of the root.
+- A basic string `k = "\e"` yields the string of code point 27. A basic string using `\x` plus two hex digits yields the corresponding character. Both match `loads`.
+- An inline table that spans lines and has a trailing comma, `t = {` then a line feed then `c = 1,` then a line feed then `}`, yields `t` as a one-key mapping whose `c` is the integer 1, matching `loads`.
 
-A successful `hrefparse::parse_url_pattern` is `tl::expected` of `hrefparse::url_pattern` with error type `hrefparse::errors`. Callers default-construct that expected, assign the parse return, treat a successful expected as true, and reach methods through `operator->`.
+### Text-mode file object
 
-## `hrefparse::url_pattern.exec`
+A file object opened in **text** mode is refused with `TypeError`. The call does not return a document mapping. This is not a decode error: the exception is not `TOMLDecodeError`. The observer can tell a wrong file mode from invalid TOML.
 
-On a successful `hrefparse::url_pattern`, structured match is `exec`.
+That refusal applies to an on-disk file opened as text and to an in-memory text-mode file object, including when the text itself is valid TOML that the same characters would parse through a binary file or through `loads`.
 
-### Signature
+### Bytes that are not valid UTF-8
 
-Callers compile `exec` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of `std::optional` of `hrefparse::url_pattern_result`. Callers default-construct that result, then assign the return. A failed result is unexpected after a successful compile. Callers use `operator->` then `has_value`: empty optional is no-match; a filled optional is a match and unwraps `hrefparse::url_pattern_result`. A failed compile has no `exec`. No-match is not a compile error.
+Bytes that are not valid `UTF-8` do not yield a document mapping. The call does not succeed. Those bytes are not silently treated as some other 8-bit encoding even when that other decoding would be valid TOML.
 
-## `hrefparse::url_pattern.get_pathname`
+This includes at least:
 
-On a successful `hrefparse::url_pattern`, compiled component pattern strings are read through `get_protocol`, `get_username`, `get_password`, `get_hostname`, `get_port`, `get_pathname`, `get_search`, and `get_hash`.
+- A quoted key whose bytes contain one value in the range 0xA0–0xFF, followed by ASCII ` = 10001` and a line feed.
+- A quoted key whose bytes contain a lone 0xC3 (an incomplete two-byte `UTF-8` sequence), followed by the same ASCII assignment.
 
-### Signature
+A neighboring binary file of valid `UTF-8` TOML still succeeds.
 
-Each getter takes no argument and is used as `std::string_view`. A successful compile does not leave `get_pathname` empty. Distinct compiled pathnames yield pairwise distinct `get_pathname` strings.
+### Invalid TOML after a successful UTF-8 decode
 
-## `hrefparse::url_pattern.has_regexp_groups`
+When the bytes are valid `UTF-8` but the decoded text is not valid TOML v1.1.0, the call does not return a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `TypeError`. Nesting past the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping; that exception is not `TOMLDecodeError`.
 
-On a successful `hrefparse::url_pattern`, the regexp-group report is `has_regexp_groups`.
+The recoverable document on that failure is the decoded text, not the raw bytes. The identified place matches `loads` on that same text. That holds for an on-disk binary file and for an in-memory binary buffer. A neighboring binary file of valid `UTF-8` TOML still succeeds.
 
-### Signature
+Documents that fail this way include at least `val=.`, `]] this is invalid TOML [[`, an unclosed basic string `v = "abc`, and duplicate keys `a = 1` then `a = 2`. Two leading line feeds before `val=.` shift the recovered 1-based line from 1 to 3.
 
-`has_regexp_groups` takes no argument and is used as bool. A custom-expression named group reports true. A pattern that uses only literals, named segment wildcards, optional named groups, and full wildcards reports false.
+### Float converter
 
-## `hrefparse::url_pattern.test`
+A binary file whose `UTF-8` bytes are `precision-matters = 0.982492`, parsed with a converter that builds a standard-library decimal from the token text, binds `precision-matters` to a decimal of the characters `0.982492`, not a binary float. The same file without a converter binds a Python float. A token `inf` is also passed to the converter. In `a = 1` then `b = 1.0`, the integer is not passed through the converter; only the float token is. A custom converter’s return value is the bound value. A converter that returns a dictionary or a list (including a subtype of either) fails with `ValueError`, not `TOMLDecodeError`.
 
-On a successful `hrefparse::url_pattern`, yes/no match is `test`.
+## `tomlparse.loads`
 
-### Signature
-
-Callers compile `test` with `std::string_view` and a null pointer, and with `hrefparse::url_pattern_init` and a null pointer. The return is `hrefparse::result` of bool. Callers default-construct that result, then assign the return. A successful result converts to true; callers then dereference with unary `*` for the yes/no. `test` agrees with whether `exec` produced a match. A failed compile has no `test`.
-
-## `hrefparse::url_pattern_component_result`
-
-Each component of `hrefparse::url_pattern_result` is `hrefparse::url_pattern_component_result`.
-
-### Signature
-
-Callers read `input` as a string-like value and `groups` as a sized range. Walking `groups` yields pairs: `first` is the group name; `second` is optional-like (`has_value`, then unary `*`). A bound named group is the `has_value` case; an optional group that does not participate is the falsy `has_value` case.
-
-## `hrefparse::url_pattern_init`
-
-Include `hrefparse.h`. The per-component URLPattern initializer is `hrefparse::url_pattern_init`.
+Import `loads` from the package root `tomlparse` (`from `tomlparse` import `loads``). Parse one TOML v1.1.0 document from a Python text string and return a document mapping, or fail. The document is passed as the first positional argument.
 
 ### Signature
 
-Callers default-construct `hrefparse::url_pattern_init` and assign protocol, username, password, hostname, port, pathname, search, hash, and `base_url` from `std::string`. The same type is the first argument of the initializer overload of `hrefparse::parse_url_pattern`, `test`, and `exec`.
+```
+`loads`(s, *, `parse_float`=float)
+```
 
-## `hrefparse::url_pattern_options`
+- `s` — the TOML document as a Python text string. Passed positionally. A bytes object, a boolean, a file object, or any other non-text value is refused with `TypeError`, not `TOMLDecodeError`.
+- `parse_float` — optional callable that receives the spelling of a TOML float (including `inf` and `nan` tokens) and returns the constructed value. Keyword-only. The default is the builtin `float`. Integers, strings, booleans, and date-times are not passed through this converter. If the converter returns a dictionary or a list (including a subtype of either), the parse fails with `ValueError`, not `TOMLDecodeError`.
 
-Include `hrefparse.h`. Compile options for URLPattern are `hrefparse::url_pattern_options`.
+### Return shape
 
-### Signature
+On success, returns a mapping whose keys are strings. Nested tables are mappings. Arrays and arrays of tables are sequences (not strings). Successful parses do not return `None` in place of a mapping. An empty document yields an empty mapping (length 0), not `None`.
 
-Callers default-construct `hrefparse::url_pattern_options` and write the public member `ignore_case`. A pointer to that object is the last argument of both `hrefparse::parse_url_pattern` overloads. Ignore-case is a compile-time choice, not a bool on the parse entry itself.
+Integers in the mapping are integers and are not booleans. Booleans are booleans (`True` / `False`) and are not the integers 1 and 0 and not strings. Floats are floats (when `parse_float` is left at the default). Strings are strings.
 
-## `hrefparse::url_pattern_result`
+The call does not read or write files, does not mutate the process environment, and does not exit the host process.
 
-A successful `exec` unwraps `hrefparse::url_pattern_result`.
+### Empty document and root pairs
 
-### Signature
+- Empty text, whitespace-only text, and comment-only text (with or without a trailing line feed) succeed as an empty mapping. `#no newlines at all here` with no line feed is an empty mapping.
+- `one = 1` then a line feed then `two = 'two'` then a line feed then `arr = []` yields `one` equal to the integer 1, `two` equal to the string `two`, and `arr` equal to an empty sequence.
+- A single root pair `key = n` yields a one-key mapping whose bound value is that integer, not the decimal spelling of that integer as a string.
+- When the package is importable, `name = "probe"` yields a mapping whose `name` value is the string `probe`.
 
-`hrefparse::url_pattern_result` has public members `protocol`, `username`, `password`, `hostname`, `port`, `pathname`, `search`, and `hash`. Each is an `hrefparse::url_pattern_component_result`. A successful match includes all eight.
+### Keys are strings
 
-## `hrefparse::url_search_params`
+- Keys are strings. A bare key `1234` is the string `1234`, not the integer 1234.
+- A bare key may contain letters, digits, underscores, and hyphens: `bare_key`, `bare-key`, and `barekey` are three distinct keys.
+- Letter case is significant: `name` and `Name` are different keys; a table header `[section]` is a different table from `[Section]`.
+- The words `true`, `false`, `inf`, and `nan` are valid keys. A document `false = false` then a line feed then `true = 1` then a line feed then `inf = 100000000` then a line feed then `nan = "ceci n'est pas un nombre"` yields those four string keys with a boolean, an integer, an integer, and a string respectively. The boolean `True`, the boolean `False`, and the float infinity are not keys of that mapping.
+- A key may be written as a basic string or as a literal string. A quoted key may be empty: `"" = "blank"` binds the empty string as a key. A quoted key may contain characters a bare key cannot, including `#`, spaces, dots, and non-ASCII letters. The header `["key#group"]` names a table whose key is `key#group`. The quoted key `"with.dot"` is a single key containing a dot, not two dotted parts. A literal quoted key (single quotes) binds the interior text as the key.
 
-Include `hrefparse.h`. URL Search Params is the type `hrefparse::url_search_params`.
+### Dotted keys
 
-### Signature
+- A dotted key creates nested mappings. `name.first = "Arthur"` then `"name".'last' = "Dent"` yields a mapping `name` with string keys `first` and `last`. The string `name.first` is not a key of the root.
+- Spaces around dots are ignored: `a   .   b  =  1` is the same nesting as `a.b = 1`. The same spacing is allowed in table headers: `[ g . h . i ]` is the same nesting as `[g.h.i]`.
+- Intermediate tables created this way may later receive more dotted keys under the same prefix: `apple.type = "fruit"` then `apple.color = "red"` yields one `apple` mapping with both keys.
+- An unquoted dotted key `with.dot = 1` nests under `with` then `dot`. A quoted key `"with.dot" = 1` is a single root key. Those two documents are not equal.
 
-Callers construct `hrefparse::url_search_params` from a `std::string_view`.
+### Square-bracket headers
 
-The matching C handle is `hrefparse_url_search_params` (include `hrefparse_c.h`). A handle is obtained from `hrefparse_parse_search_params` and released with `hrefparse_free_search_params`.
+- A table header `[owner]` opens a table. Key/value pairs after that header belong to `owner` until another header appears. Those pairs are not keys of the root.
+- A header `[servers.alpha]` creates `servers` if needed and opens `alpha` inside it. Super-tables may be omitted: a document whose first header is `[x.y.z.w]` succeeds and yields nested empty tables `x`, `y`, `z`, and `w`, each containing only the next name in that chain, with the innermost table empty. Declaring a super-table afterwards is allowed: that same document may later contain `[x]` with a sibling key that is not on the omitted chain.
+- After dotted keys have created a nested table, a **new sub-table** that was not already opened as a header may still be declared. A document `[fruit]` then `apple.color = "red"` then `apple.taste.sweet = true` then `[fruit.apple.texture]` then `smooth = true` succeeds: `fruit.apple` has `color`, `taste`, and `texture`.
 
-## `hrefparse::url_search_params.append`
+### Arrays of tables
 
-On `hrefparse::url_search_params`, append is `append`.
+- An array of tables is opened with a double-square-bracket header. Each repetition appends one new mapping to that sequence. A document `[[players]]` then `name = "Lehtinen"` then `number = 26` then `[[players]]` then `name = "Numminen"` then `number = 27` yields `players` as a two-element sequence of mappings.
+- Nested arrays of tables attach to the **most recently appended** parent item: two `[[albums]]` items, each followed by two `[[albums.songs]]` items, yield two albums whose `songs` sequences each have two mappings.
+- An array-of-tables header may imply parent tables. `[[albums.songs]]` then `name = "Glory Days"` yields `albums` as a mapping (not a sequence) that contains a `songs` sequence of one mapping. After `[[albums]]` then `[[albums.songs]]`, `albums` is a sequence (not a mapping). Those two parent kinds are not the same.
+- After `[[a.b]]` then `x = 1`, a later `[a]` then `y = 2` is allowed and yields `a` as a mapping that has both `b` (the sequence) and `y`. After one or more `[[parent-table.arr]]` headers, a later `[parent-table]` may still add a sibling key that is not `arr`.
+- After `[[tab.arr]]` then `[tab]`, a later `arr.val1 = 1` is refused: `arr` is a sequence of tables, not a table that can take a dotted key. A sibling key that is not `arr` on that same `[tab]` is allowed.
 
-### Signature
+### Inline tables
 
-`append` takes two `std::string` arguments (key, then value).
+- An inline table is a mapping written as a value. `point = { x = 1, y = 2 }` yields `point` as a mapping whose string keys `x` and `y` have integer values 1 and 2. An empty inline table `{ }` (spaces allowed) is an empty mapping.
+- Dotted keys work inside inline tables: `{ a.b = 1 }` is a nested mapping `a` containing `b`.
+- Inline tables may span lines, may contain comments, and may have a trailing comma after the last pair. `{ c = 1, }` and a brace, a line feed, `c = 1,`, a line feed, and a closing brace are both a one-key mapping. Comments may sit after the opening brace, after commas, and after the closing brace on the same line as other tokens (`{ c = 1, }#comment`). Comment text is not a key of the table or of the root.
 
-## `hrefparse::url_search_params.get`
+### Arrays
 
-On `hrefparse::url_search_params`, first-value lookup is `get`.
+- An array is a sequence written in square brackets. `[]` is empty. Arrays may mix types: `[1, 1.1]` is an integer then a float; the second element is not an integer. Arrays may nest: `[ ["gamma", "delta"], [1, 2] ]` is a sequence of two sequences, not a flat four-element sequence.
+- Arrays may span lines, may contain comments between elements, and may have a trailing comma: `[1,]` and `[1, 2,]` are valid. Comment text between elements is not an array element.
 
-### Signature
+### Comments, indent, CRLF
 
-`get` takes a `std::string` key. The result is optional-like: callers test `has_value` and then dereference with unary `*`. A missing key is the falsy `has_value` case, distinguishable from a present empty string.
+- A comment starts at `#` and runs to the end of the line. A hash inside a string is not a comment: `another = "# This is not a comment"` yields that string including the hash.
+- A comment may follow a value with no space: `true=true#true` is boolean true for key `true`. Non-ASCII text is allowed in comments and is not a key.
+- A comment may follow a table header, an array-of-tables header, and a date-time value. Those comment words are not keys of the document or of the table they follow.
+- Indentation may be spaces or tabs and does not change meaning: `k = 1`, two spaces then `k = 1`, and a tab then `k = 1` are the same mapping.
+- A carriage-return/line-feed pair in the input is treated as a single line feed, including inside string values. A document that uses only carriage-return/line-feed between two keys parses as those two keys, equal to the same document with line feeds. A carriage return does not remain inside a multiline basic string that used carriage-return/line-feed as line endings.
 
-## `hrefparse::url_search_params.get_all`
+### Structural refusal
 
-On `hrefparse::url_search_params`, all-values lookup is `get_all`.
+These documents do not return a mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `RecursionError`. A neighboring document that omits only the illegal part succeeds.
 
-### Signature
+- Duplicate keys in the same table: `a = 1` then `a = 2`. Two `[table]` headers for the same table. A second key of the same name inside one inline table. Duplicate keys under a header table.
+- A table already opened by a header cannot be reopened. `[a.b.c]` then `z = 9` then `[a]` then `b.c.t = 9` fails. `[t1]` then `t2.t3.v = 0` then `[t1.t2]` fails. `[fruit]` with `apple.color` set, then a later `[fruit.apple]` header, fails.
+- A value cannot be overwritten by a table or array-of-tables header. `a = 1` then `[a.b.c.d]` fails. `a = true` then `[[a]]` fails. An inline table cannot be mutated afterwards: `a = { b = 1 }` then `a.b = 2` fails.
+- A key/value pair must have a value. A line `key =` with nothing after the equals (except whitespace or a comment) fails. A line with no key before the equals (`= 1`) fails.
+- A pair whose key is a multiline string fails: `"""key""" = 1` and `'''key''' = 1` do not yield a mapping. A table header whose name is a multiline string fails: `["""tbl"""]` and `['''tbl''']`.
+- A table header must close on the same line: `[tbl` then a line feed then `]` then `k = 1` fails. A header cannot share its line with a following pair: `[tbl] k = 1` on one line fails.
 
-`get_all` takes a `std::string` key. The result is vector-like: callers use `size` and index with `[]`. Each element is used as a string.
+### Nesting limits
 
-## `hrefparse::url_search_params.get_entries`
-
-On `hrefparse::url_search_params`, entry iteration is `get_entries`.
-
-### Signature
-
-`get_entries` takes no argument. Callers walk with `has_next` and `next`. `next` is optional-like: callers test `has_value` and then read `first` and `second` as strings.
-
-## `hrefparse::url_search_params.get_keys`
-
-On `hrefparse::url_search_params`, key iteration is `get_keys`.
-
-### Signature
-
-`get_keys` takes no argument. Callers walk with `has_next` and `next`. `next` is optional-like: callers test `has_value` and then dereference with unary `*`.
-
-## `hrefparse::url_search_params.get_values`
-
-On `hrefparse::url_search_params`, value iteration is `get_values`.
-
-### Signature
-
-`get_values` takes no argument. Callers walk with `has_next` and `next`. `next` is optional-like: callers test `has_value` and then dereference with unary `*`.
-
-## `hrefparse::url_search_params.has`
-
-On `hrefparse::url_search_params`, presence is `has`.
-
-### Signature
-
-Callers compile a one-argument form `has` with a `std::string` key and a two-argument form `has` with a `std::string` key and a `std::string` value. Both are used as bool.
-
-## `hrefparse::url_search_params.remove`
-
-On `hrefparse::url_search_params`, remove is `remove`.
-
-### Signature
-
-Callers compile a one-argument form `remove` with a `std::string` key and a two-argument form `remove` with a `std::string` key and a `std::string` value.
-
-## `hrefparse::url_search_params.reset`
-
-On `hrefparse::url_search_params`, reset is `reset`.
-
-### Signature
-
-`reset` takes a `std::string` query.
-
-## `hrefparse::url_search_params.set`
-
-On `hrefparse::url_search_params`, set is `set`.
-
-### Signature
-
-`set` takes two `std::string` arguments (key, then value).
-
-## `hrefparse::url_search_params.size`
-
-On `hrefparse::url_search_params`, pair count is `size`.
-
-### Signature
-
-`size` takes no argument. Callers assign the result to `size_t`.
-
-## `hrefparse::url_search_params.sort`
-
-On `hrefparse::url_search_params`, sort is `sort`.
-
-### Signature
-
-`sort` takes no argument.
-
-## `hrefparse::url_search_params.to_string`
-
-On `hrefparse::url_search_params`, serialize is `to_string`.
-
-### Signature
-
-`to_string` takes no argument. The returned value is stored in a `std::string`.
-
-## `hrefparse_can_parse`
-
-Include `hrefparse.h`. The C++ can-parse entry is `hrefparse::can_parse` in namespace `hrefparse`.
-
-### Signature
-
-The first argument is `std::string_view`. Callers compile a one-argument form and a two-argument form. The second argument is a pointer to a `std::string_view` that holds the base URL string, not a parsed URL. Returns bool: yes if and only if parse of the same input and base would succeed.
-
-The matching C entry is `hrefparse_can_parse` (include `hrefparse_c.h`). It is the two-argument form: a `const char*` buffer and a `size_t` length.
-
-## `hrefparse_can_parse_with_base`
-
-Include `hrefparse_c.h`. Can-parse with a base on the C interface is `hrefparse_can_parse_with_base`.
-
-### Signature
-
-Four arguments: input `const char*`, input `size_t` length, base `const char*`, base `size_t` length.
-
-Returns yes if and only if `hrefparse_parse_with_base` of the same input and base would succeed.
-
-## `hrefparse_free_search_params`
-
-Include `hrefparse_c.h`. Search-params release on the C interface is `hrefparse_free_search_params`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. Every handle from `hrefparse_parse_search_params` is released with this call.
-
-## `hrefparse_get_host_type`
-
-Include `hrefparse_c.h`. Host kind on the C interface is `hrefparse_get_host_type`.
-
-### Signature
-
-One argument: `hrefparse_url`. The return converts to unsigned. IPv4, IPv6, and domain hosts produce distinguishable unsigned values.
-
-## `hrefparse_get_origin`
-
-Include `hrefparse_c.h`. Origin on the C interface is `hrefparse_get_origin`.
-
-### Signature
-
-One argument: `hrefparse_url`. Returns `hrefparse_owned_string` (`data`, `length`). The owned string is released with `hrefparse_free_owned_string`.
-
-Other C component getters (`hrefparse_get_href`, `hrefparse_get_protocol`, `hrefparse_get_username`, `hrefparse_get_password`, `hrefparse_get_host`, `hrefparse_get_hostname`, `hrefparse_get_port`, `hrefparse_get_pathname`, `hrefparse_get_search`, `hrefparse_get_hash`) return `hrefparse_string` views. Origin is the owned-string exception among those readers.
-
-## `hrefparse_idna_to_ascii`
-
-Include `hrefparse_c.h`. Standalone ToASCII on the C interface is `hrefparse_idna_to_ascii`.
-
-### Signature
-
-Two arguments: a `const char*` buffer and a `size_t` length. Returns `hrefparse_owned_string`.
-
-A usable domain is handed to the caller only when that owned string has non-null `data` and non-zero `length`. Null `data` or zero `length` is “no usable domain.” The owned string is released with `hrefparse_free_owned_string`.
-
-## `hrefparse_idna_to_unicode`
-
-Include `hrefparse_c.h`. Standalone ToUnicode on the C interface is `hrefparse_idna_to_unicode`.
-
-### Signature
-
-Two arguments: a `const char*` buffer and a `size_t` length. Returns `hrefparse_owned_string`.
-
-A usable payload is handed to the caller only when that owned string has non-null `data` and non-zero `length`. The owned string is released with `hrefparse_free_owned_string`. ToASCII of that Unicode result uses `hrefparse_idna_to_ascii` on the same `data` and `length`.
-
-## `hrefparse_parse`
-
-Include `hrefparse.h`. The C++ parse entry is `hrefparse::parse` in namespace `hrefparse`.
-
-### Signature
-
-The first argument is `std::string_view`. Callers compile a one-argument form and a two-argument form. The second argument is a pointer to an already-parsed `hrefparse::url_aggregator`, obtained by applying unary `*` to a successful `hrefparse::result` and taking its address (`&*` of the result). Returns `hrefparse::result` of `hrefparse::url_aggregator`.
-
-The matching C entry is `hrefparse_parse` (include `hrefparse_c.h`). It is the two-argument form: a `const char*` buffer (a `char*` pointer is accepted) and a `size_t` length. It returns `hrefparse_url`.
-
-## `hrefparse_parse_search_params`
-
-Include `hrefparse_c.h`. Search-params construction on the C interface is `hrefparse_parse_search_params`.
-
-### Signature
-
-Two arguments: a `const char*` buffer (a `char*` pointer is accepted) and a `size_t` length. Returns `hrefparse_url_search_params`.
-
-Every returned handle is released with `hrefparse_free_search_params`.
-
-## `hrefparse_parse_with_base`
-
-Include `hrefparse_c.h`. Relative parse on the C interface is `hrefparse_parse_with_base`.
-
-### Signature
-
-Four arguments: input `const char*`, input `size_t` length, base `const char*`, base `size_t` length. Returns `hrefparse_url`.
-
-Every returned handle is released with `hrefparse_free`. Success is observed with `hrefparse_is_valid`.
-
-## `hrefparse_search_params_append`
-
-Include `hrefparse_c.h`. Append on the C interface is `hrefparse_search_params_append`.
-
-### Signature
-
-Five arguments: `hrefparse_url_search_params`, key `const char*`, key `size_t`, value `const char*`, value `size_t`.
-
-## `hrefparse_search_params_get`
-
-Include `hrefparse_c.h`. First-value lookup on the C interface is `hrefparse_search_params_get`.
-
-### Signature
-
-Three arguments: `hrefparse_url_search_params`, a `const char*` key, and a `size_t` key length. Returns an `hrefparse_string` view (`data`, `length`).
-
-## `hrefparse_search_params_get_all`
-
-Include `hrefparse_c.h`. All-values lookup on the C interface is `hrefparse_search_params_get_all`.
-
-### Signature
-
-Three arguments: `hrefparse_url_search_params`, a `const char*` key, and a `size_t` key length. Returns `hrefparse_strings`. Callers walk with `hrefparse_strings_size` and `hrefparse_strings_get` (index) as `hrefparse_string` views, then release with `hrefparse_free_strings`.
-
-## `hrefparse_search_params_get_entries`
-
-Include `hrefparse_c.h`. Entry iteration on the C interface starts at `hrefparse_search_params_get_entries`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. Returns `hrefparse_url_search_params_entries_iter`. Callers walk with `hrefparse_search_params_entries_iter_has_next` and `hrefparse_search_params_entries_iter_next`. `hrefparse_search_params_entries_iter_next` returns `hrefparse_string_pair`; callers read `key` and `value` as `hrefparse_string` views. The iterator is released with `hrefparse_free_search_params_entries_iter`.
-
-## `hrefparse_search_params_get_keys`
-
-Include `hrefparse_c.h`. Key iteration on the C interface starts at `hrefparse_search_params_get_keys`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. Returns `hrefparse_url_search_params_keys_iter`. Callers walk with `hrefparse_search_params_keys_iter_has_next` and `hrefparse_search_params_keys_iter_next` (`hrefparse_string`), then release with `hrefparse_free_search_params_keys_iter`.
-
-## `hrefparse_search_params_get_values`
-
-Include `hrefparse_c.h`. Value iteration on the C interface starts at `hrefparse_search_params_get_values`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. Returns `hrefparse_url_search_params_values_iter`. Callers walk with `hrefparse_search_params_values_iter_has_next` and `hrefparse_search_params_values_iter_next` (`hrefparse_string`), then release with `hrefparse_free_search_params_values_iter`.
-
-## `hrefparse_search_params_has`
-
-Include `hrefparse_c.h`. Key presence on the C interface is `hrefparse_search_params_has`.
-
-### Signature
-
-Three arguments: `hrefparse_url_search_params`, a `const char*` key, and a `size_t` key length. The return is boolean-convertible.
-
-## `hrefparse_search_params_has_value`
-
-Include `hrefparse_c.h`. Pair presence on the C interface is `hrefparse_search_params_has_value`.
-
-### Signature
-
-Five arguments: `hrefparse_url_search_params`, key `const char*`, key `size_t`, value `const char*`, value `size_t`. The return is boolean-convertible.
-
-## `hrefparse_search_params_remove`
-
-Include `hrefparse_c.h`. Remove-by-key on the C interface is `hrefparse_search_params_remove`.
-
-### Signature
-
-Three arguments: `hrefparse_url_search_params`, a `const char*` key, and a `size_t` key length.
-
-## `hrefparse_search_params_remove_value`
-
-Include `hrefparse_c.h`. Remove-by-key-and-value on the C interface is `hrefparse_search_params_remove_value`.
-
-### Signature
-
-Five arguments: `hrefparse_url_search_params`, key `const char*`, key `size_t`, value `const char*`, value `size_t`.
-
-## `hrefparse_search_params_reset`
-
-Include `hrefparse_c.h`. Reset on the C interface is `hrefparse_search_params_reset`.
-
-### Signature
-
-Three arguments: `hrefparse_url_search_params`, a `const char*` query, and a `size_t` query length.
-
-## `hrefparse_search_params_set`
-
-Include `hrefparse_c.h`. Set on the C interface is `hrefparse_search_params_set`.
-
-### Signature
-
-Five arguments: `hrefparse_url_search_params`, key `const char*`, key `size_t`, value `const char*`, value `size_t`.
-
-## `hrefparse_search_params_size`
-
-Include `hrefparse_c.h`. Pair count on the C interface is `hrefparse_search_params_size`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. The return is `size_t`-printable.
-
-## `hrefparse_search_params_sort`
-
-Include `hrefparse_c.h`. Sort on the C interface is `hrefparse_search_params_sort`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`.
-
-## `hrefparse_search_params_to_string`
-
-Include `hrefparse_c.h`. Search-params serialize on the C interface is `hrefparse_search_params_to_string`.
-
-### Signature
-
-One argument: `hrefparse_url_search_params`. Returns `hrefparse_owned_string` (`data`, `length`). The owned string is released with `hrefparse_free_owned_string`.
-
-## `hrefparse_set_host`
-
-Include `hrefparse_c.h`. Host assignment on the C interface is `hrefparse_set_host`.
-
-### Signature
-
-Three arguments: `hrefparse_url`, a `const char*` buffer, and a `size_t` length. The return is boolean-convertible (accepted or refused). The same compile shape is used by `hrefparse_set_hostname`, `hrefparse_set_protocol`, `hrefparse_set_pathname`, `hrefparse_set_username`, `hrefparse_set_password`, `hrefparse_set_port`, and `hrefparse_set_href`.
-
-`hrefparse_set_search` and `hrefparse_set_hash` take the same three arguments; callers compile those calls without using a return.
-
-## `hrefparse_url_search_params`
-
-Include `hrefparse.h`. URL Search Params is the type `hrefparse::url_search_params`.
-
-### Signature
-
-Callers construct `hrefparse::url_search_params` from a `std::string_view`.
-
-The matching C handle is `hrefparse_url_search_params` (include `hrefparse_c.h`). A handle is obtained from `hrefparse_parse_search_params` and released with `hrefparse_free_search_params`.
+- An inline array nested 470 levels deep (`arr =` then 470 opening brackets then 470 closing brackets) succeeds as a chain of one-element sequences whose innermost sequence is empty.
+- An inline table nested 310 levels deep (`key = {` repeated 310 times then 310 closing braces) succeeds as nested mappings under `key` whose innermost mapping is empty.
+- A dotted key with 310 parts (`a.a.…a = 1`) succeeds as nested mappings whose leaf integer is 1.
+- Intermediate nesting well below those depths also succeeds.
+- An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That exception is not `TOMLDecodeError`. The same entry still raises `TOMLDecodeError` (not `RecursionError`) for an ordinary invalid document such as a duplicate key.
 

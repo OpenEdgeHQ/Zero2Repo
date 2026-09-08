@@ -2,9 +2,10 @@
 
 Thin wrapper around the Harbor adapter's case loader so cbrun reuses one source
 of truth for parsing ``source/manifest.json`` runner metadata, the PRD, the
-Interface Contract and the final acceptance milestone. Unlike the adapter's
-released-suite gate, cbrun loads any case (the GPU cases are not in the released
-CPU suite), so it always passes ``require_released=False``.
+Interface Contract and the final acceptance milestone. Cases are whatever
+directories under the cases root have a manifest; cbrun does not keep a
+hardcoded id list. ``require_released=False`` still lets it load a path that
+would not be discovered as a sibling (for example a one-off directory).
 """
 
 from __future__ import annotations

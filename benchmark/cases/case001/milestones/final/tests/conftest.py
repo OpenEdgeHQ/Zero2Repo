@@ -37,16 +37,24 @@ def isolated_ws():
 
 @pytest.fixture(autouse=True)
 def _restore_process_state():
-    """Restore cwd and environ after each test.
+    """Restore cwd, environ, argv, and stdio after each test.
 
     Isolation helpers push those values for the duration of a call; this
     fixture still resets them if a test mutates them directly.
     """
     previous_cwd = os.getcwd()
     previous_env = os.environ.copy()
+    previous_argv = list(sys.argv)
+    previous_stdin = sys.stdin
+    previous_stdout = sys.stdout
+    previous_stderr = sys.stderr
     try:
         yield
     finally:
         os.chdir(previous_cwd)
         os.environ.clear()
         os.environ.update(previous_env)
+        sys.argv = previous_argv
+        sys.stdin = previous_stdin
+        sys.stdout = previous_stdout
+        sys.stderr = previous_stderr

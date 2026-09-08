@@ -23,9 +23,16 @@ from cbrun.assets import load_case  # noqa: E402
 from cbrun.docker_env import Container, docker_available, image_exists  # noqa: E402
 from cbrun.isolation import synthesize_task_toml  # noqa: E402
 from cbrun.steps import discover_steps  # noqa: E402
+from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 
-ORACLE_CASE = "case002"  # CPU-only pytest acceptance; cheapest oracle.
 GENERIC_JUDGE_IMAGE = "codingbench-base/ubuntu:24.04"
+
+
+def _oracle_case_id() -> str:
+    dirs = iter_benchmark_case_dirs(BENCHMARK_ROOT / "cases")
+    if not dirs:
+        pytest.skip("no cases with source/manifest.json")
+    return dirs[0].name
 
 
 def _case_dir(case_id: str) -> Path:
@@ -73,8 +80,8 @@ def _require_docker_and_deliverable(case_id: str) -> str:
 @pytest.mark.slow
 def test_oracle_gt_scores_reward_one(tmp_path: Path) -> None:
     """Injecting the case GT into /app must score reward 1 (env is solvable)."""
-    deliverable = _require_docker_and_deliverable(ORACLE_CASE)
-    case = load_case(_case_dir(ORACLE_CASE))
+    deliverable = _require_docker_and_deliverable(_oracle_case_id())
+    case = load_case(_case_dir(_oracle_case_id()))
     step = discover_steps(case)[0]
 
     final_dir = images.extract_hidden_tests(deliverable, tmp_path / "tests")
@@ -109,10 +116,10 @@ def test_oracle_gt_scores_reward_one(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_agent_image_has_cbagent_user(tmp_path: Path) -> None:
     """The derived :agent image must include the fixed non-root cbagent user."""
-    _require_docker_and_deliverable(ORACLE_CASE)
-    case_dir = _case_dir(ORACLE_CASE)
+    _require_docker_and_deliverable(_oracle_case_id())
+    case_dir = _case_dir(_oracle_case_id())
     image = images.ensure_agent_image(
-        ORACLE_CASE, cache_root=tmp_path / "cache", case_dir=case_dir, force=True
+        _oracle_case_id(), cache_root=tmp_path / "cache", case_dir=case_dir, force=True
     )
     container = Container.start(image.agent_image, network="host")
     try:
@@ -127,10 +134,10 @@ def test_codex_setup_writes_config_without_secrets_in_command(tmp_path: Path) ->
     """Codex setup should write auth/config under CODEX_HOME before solve."""
     from cbrun.agent_spec import resolve_agent
 
-    _require_docker_and_deliverable(ORACLE_CASE)
-    case_dir = _case_dir(ORACLE_CASE)
+    _require_docker_and_deliverable(_oracle_case_id())
+    case_dir = _case_dir(_oracle_case_id())
     image = images.ensure_agent_image(
-        ORACLE_CASE, cache_root=tmp_path / "cache", case_dir=case_dir, force=True
+        _oracle_case_id(), cache_root=tmp_path / "cache", case_dir=case_dir, force=True
     )
     inv = resolve_agent(
         backend="codex",
@@ -161,10 +168,10 @@ def test_codex_setup_writes_config_without_secrets_in_command(tmp_path: Path) ->
 @pytest.mark.slow
 def test_agent_image_denylist_shim_blocks_upstream_pip(tmp_path: Path) -> None:
     """pip shim in :agent image should reject upstream packages from denylist."""
-    _require_docker_and_deliverable(ORACLE_CASE)
-    case_dir = _case_dir(ORACLE_CASE)
+    _require_docker_and_deliverable(_oracle_case_id())
+    case_dir = _case_dir(_oracle_case_id())
     image = images.ensure_agent_image(
-        ORACLE_CASE, cache_root=tmp_path / "cache", case_dir=case_dir, force=True
+        _oracle_case_id(), cache_root=tmp_path / "cache", case_dir=case_dir, force=True
     )
     container = Container.start(image.agent_image, network="host")
     try:
@@ -179,10 +186,10 @@ def test_agent_image_denylist_shim_blocks_upstream_pip(tmp_path: Path) -> None:
 def test_solve_container_blocks_github(tmp_path: Path) -> None:
     from cbrun.denylist import GITHUB_BLOCK_HOSTS
 
-    _require_docker_and_deliverable(ORACLE_CASE)
-    case_dir = _case_dir(ORACLE_CASE)
+    _require_docker_and_deliverable(_oracle_case_id())
+    case_dir = _case_dir(_oracle_case_id())
     image = images.ensure_agent_image(
-        ORACLE_CASE, cache_root=tmp_path / "cache", case_dir=case_dir, force=False
+        _oracle_case_id(), cache_root=tmp_path / "cache", case_dir=case_dir, force=False
     )
     container = Container.start(
         image.agent_image,
@@ -202,10 +209,10 @@ def test_solve_container_blocks_github(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_agent_image_has_no_hidden_tests(tmp_path: Path) -> None:
     """The derived :agent image must not contain /tests/final in any layer."""
-    _require_docker_and_deliverable(ORACLE_CASE)
-    case_dir = _case_dir(ORACLE_CASE)
+    _require_docker_and_deliverable(_oracle_case_id())
+    case_dir = _case_dir(_oracle_case_id())
     image = images.ensure_agent_image(
-        ORACLE_CASE, cache_root=tmp_path / "cache", case_dir=case_dir, force=True
+        _oracle_case_id(), cache_root=tmp_path / "cache", case_dir=case_dir, force=True
     )
     # Host cache must hold the extracted hidden tests.
     assert (image.tests_cache_dir / "final" / "test_manifest.json").is_file()
@@ -224,8 +231,8 @@ def test_agent_image_has_no_hidden_tests(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_app_pytest_shadow_is_judge_error_after_isolation(tmp_path: Path) -> None:
     """A candidate pytest.py copied with /app must not score reward 1."""
-    deliverable = _require_docker_and_deliverable(ORACLE_CASE)
-    case = load_case(_case_dir(ORACLE_CASE))
+    deliverable = _require_docker_and_deliverable(_oracle_case_id())
+    case = load_case(_case_dir(_oracle_case_id()))
     step = discover_steps(case)[0]
     final_dir = images.extract_hidden_tests(deliverable, tmp_path / "tests")
 
@@ -257,8 +264,8 @@ def test_app_pytest_shadow_is_judge_error_after_isolation(tmp_path: Path) -> Non
 @pytest.mark.slow
 def test_dirty_solve_pytest_does_not_reach_judge(tmp_path: Path) -> None:
     """Replacing pytest only in the solve container must not follow /app across."""
-    deliverable = _require_docker_and_deliverable(ORACLE_CASE)
-    case = load_case(_case_dir(ORACLE_CASE))
+    deliverable = _require_docker_and_deliverable(_oracle_case_id())
+    case = load_case(_case_dir(_oracle_case_id()))
     step = discover_steps(case)[0]
     final_dir = images.extract_hidden_tests(deliverable, tmp_path / "tests")
     gt_code = case.assets.gt_milestone.code_dir

@@ -43,14 +43,17 @@ from objective_gates import shutil_ignore_patterns  # noqa: E402
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "template"
 CONTAINER_TESTS_FINAL = "/tests/final"
 
-# Released suite shipped under benchmark/cases/.
-RELEASED_CASE_IDS: frozenset[str] = frozenset(
-    f"case{i:03d}" for i in range(1, 7)
-)
+
+def default_cases_root() -> Path:
+    """Directory that holds shipped case folders (``benchmark/cases``)."""
+    return Path(__file__).resolve().parent.parent / "cases"
 
 
 def iter_benchmark_case_dirs(cases_root: Path) -> list[Path]:
-    """Return case directories that have ``source/manifest.json``."""
+    """Return case directories that have ``source/manifest.json``.
+
+    A directory whose name starts with ``_`` is treated as a draft and skipped.
+    """
     root = Path(cases_root)
     if not root.is_dir():
         return []
@@ -61,6 +64,13 @@ def iter_benchmark_case_dirs(cases_root: Path) -> list[Path]:
         if (path / "source" / "manifest.json").is_file():
             dirs.append(path)
     return dirs
+
+
+def released_case_ids(cases_root: Path | None = None) -> frozenset[str]:
+    """Case ids discovered under ``cases_root`` (default: ``benchmark/cases``)."""
+    root = default_cases_root() if cases_root is None else Path(cases_root)
+    return frozenset(path.name for path in iter_benchmark_case_dirs(root))
+
 
 _COPY_IGNORE = shutil_ignore_patterns
 
@@ -254,11 +264,13 @@ def discover_case(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     case_id = manifest.get("case_id") or case_dir.name
-    if require_released and case_id not in RELEASED_CASE_IDS:
-        raise AdapterError(
-            f"Case '{case_id}' is not in the released benchmark suite "
-            f"({', '.join(sorted(RELEASED_CASE_IDS))})."
-        )
+    if require_released:
+        discovered = {path.resolve() for path in iter_benchmark_case_dirs(case_dir.parent)}
+        if case_dir.resolve() not in discovered:
+            raise AdapterError(
+                f"Case '{case_id}' is not discoverable under {case_dir.parent} "
+                "(need source/manifest.json; directory name must not start with '_')."
+            )
 
     sensitive_terms = list(manifest.get("sensitive_terms", []))
     repository_url = manifest.get("repository_url", "")

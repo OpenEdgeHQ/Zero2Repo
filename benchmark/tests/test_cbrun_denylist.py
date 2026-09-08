@@ -24,6 +24,7 @@ from cbrun.denylist import (  # noqa: E402
     validate_denylist_payload,
 )
 from cbrun.submit import CONTAINER_SUBMIT_PATH, SUBMIT_TOKEN  # noqa: E402
+from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 
 
 def test_normalize_pkg_name() -> None:
@@ -195,14 +196,21 @@ def test_scan_workspace_imports_skips_cpp_line_comments(tmp_path: Path) -> None:
     assert hits == []
 
 
-def test_load_denylist_case001_allows_cuda_namespace() -> None:
-    case_dir = BENCHMARK_ROOT / "cases" / "case001"
-    if not (case_dir / "source" / "denylist.json").is_file():
-        pytest.skip("denylist.json is not part of the public case bundle")
-    spec = load_denylist(case_dir)
-    assert spec is not None
-    assert "cuda::" not in spec.import_ban
-    assert "cub::" in spec.import_ban
+def _case_dirs_with_denylist() -> list[Path]:
+    return [
+        path
+        for path in iter_benchmark_case_dirs(BENCHMARK_ROOT / "cases")
+        if (path / "source" / "denylist.json").is_file()
+    ]
+
+
+def test_load_denylist_from_released_case() -> None:
+    case_dirs = _case_dirs_with_denylist()
+    if not case_dirs:
+        pytest.skip("no denylist.json in discovered cases")
+    for case_dir in case_dirs:
+        spec = load_denylist(case_dir)
+        assert spec is not None
 
 
 def test_validate_denylist_artifact_rejects_cuda_namespace() -> None:
@@ -259,14 +267,14 @@ def test_validate_denylist_artifact_accepts_empty_import_ban_for_source_case() -
     assert errors == []
 
 
-def test_validate_denylist_artifact_accepts_case001_shape() -> None:
-    denylist_path = BENCHMARK_ROOT / "cases" / "case001" / "source" / "denylist.json"
-    if not denylist_path.is_file():
-        pytest.skip("denylist.json is not part of the public case bundle")
-    manifest = json.loads(
-        (BENCHMARK_ROOT / "cases" / "case001" / "source" / "manifest.json").read_text(
-            encoding="utf-8",
-        ),
-    )
-    payload = json.loads(denylist_path.read_text(encoding="utf-8"))
-    assert validate_denylist_artifact(payload, manifest, case_id="case001") == []
+def test_validate_denylist_artifact_accepts_released_case_shape() -> None:
+    case_dirs = _case_dirs_with_denylist()
+    if not case_dirs:
+        pytest.skip("no denylist.json in discovered cases")
+    for case_dir in case_dirs:
+        denylist_path = case_dir / "source" / "denylist.json"
+        manifest = json.loads(
+            (case_dir / "source" / "manifest.json").read_text(encoding="utf-8")
+        )
+        payload = json.loads(denylist_path.read_text(encoding="utf-8"))
+        assert validate_denylist_artifact(payload, manifest, case_id=case_dir.name) == []

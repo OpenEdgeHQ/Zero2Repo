@@ -21,6 +21,7 @@ from cbrun.limits import (  # noqa: E402
     classify_terminal,
     resolve_limits,
 )
+from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 from cbrun.submit import (  # noqa: E402
     CONTAINER_SUBMIT_PATH,
     SUBMIT_TOKEN,
@@ -28,6 +29,8 @@ from cbrun.submit import (  # noqa: E402
 )
 from cbrun.results import TrialResult  # noqa: E402
 from cbrun.steps import discover_steps  # noqa: E402
+
+_CASE_IDS = [path.name for path in iter_benchmark_case_dirs(BENCHMARK_ROOT / "cases")]
 
 
 # --- instruction --------------------------------------------------------------
@@ -104,10 +107,7 @@ def test_instruction_empty_build_command_declares_no_build_step() -> None:
     assert "does **not** run any install or build" in out
 
 
-@pytest.mark.parametrize(
-    "case_id",
-    ["case001", "case002", "case003", "case004", "case005", "case006"],
-)
+@pytest.mark.parametrize("case_id", _CASE_IDS)
 def test_instruction_surfaces_each_case_build_command(case_id: str) -> None:
     from cbrun.assets import load_case
 

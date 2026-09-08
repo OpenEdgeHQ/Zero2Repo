@@ -1,979 +1,1309 @@
 # feature: F05
-"""Clean, smudge, filter-process, and local object-store acceptance tests.
+"""FP-05: construct results, pipe, current value, and literals.
 
-PRD: FP-05. Assertions stay at the PRD's precision: non-empty non-pointer
-clean hashes and stores a sharded object and writes a canonical pointer
-without uploading; already-pointer input is written through without a
-nested object; smudge restores original bytes from the local store and
-copies non-pointer bytes through; missing objects without a reachable
-endpoint fail unless skip / skip-smudge / skip-download-errors apply;
-include/exclude and skip modes leave pointers in the working tree;
-relocated storage uses objects-directory-plus-shard under the configured
-root. Pointer version-identifier strings, hash-method labels, exit-code
-numbers, error wording, pkt-line, and filter argv are not pinned.
+Assertions follow Full_PRD.original.md FP-05 (L224–L254) together with
+current value / pipe (L22), null-is-host-none (L23 / L62), boolean-is-not
+1-or-0 (L28), expression-reference as a deferred subexpression (L29 / L61),
+value-error failure (L63), and unclosed backtick / raw string as syntax
+(L107). Functions that consume expression references are FP-07.
+Comparators and logic are FP-06. Evaluation options are not supplied.
 """
 
 from __future__ import annotations
 
-from _harness import token, workspace
-from _helpers import (
-    add_git_remote,
-    assert_clean_wrote_canonical_pointer,
-    assert_generated_pointer_shape,
-    assert_object_absent,
-    assert_object_bytes,
-    clean_bytes,
-    commit_tracked_payload,
-    configure_fetch_exclude,
-    configure_fetch_include,
-    configure_lfs_clean_filter,
-    configure_storage_root,
-    configure_unreachable_endpoint,
-    default_lfs_store_root,
-    enable_skip_download_errors,
-    enable_skip_smudge_environment,
-    index_blob,
-    install_local_keeping_process,
-    lookup_git_config,
-    path_without_product_bin,
-    pointer_from_clean,
-    pointer_from_clean_stdout,
-    recording_http_server,
-    require_filters_point_at_git_orbulk,
-    require_generated_pointer_shape,
-    require_git_config_set,
-    require_invalid_unlike_success,
-    require_points_at_git_orbulk,
-    require_object_absent,
-    require_object_bytes,
-    require_smudge_passthrough,
-    require_success,
-    sha256_hex,
-    sharded_object_rel,
-    skip_download_errors_environment,
-    smudge_bytes,
-    smudge_skip_bytes,
-    track_pattern,
+from pathsel import compile, search  # noqa: F401 — public search/compile surface
+
+from F01_helpers import (
+    assert_search_is_value_error,
+    compile_expression,
+    oneshot_search,
+    require_search_value,
+    require_successful_null,
+    search_parsed,
+    sentinel_document,
+)
+from F02_helpers import (
+    assert_compile_syntax_not_empty_or_incomplete,
+    assert_search_syntax_not_empty_or_incomplete,
+    compile_once_then_search,
+    quoted_ident_text,
+    runtime_dotted_field_key,
+    runtime_unquotable_key,
+)
+from F03_helpers import in_range_index, require_oneshot_equals
+from F04_helpers import (
+    json_literal_text,
+    require_array_multiset,
+    require_unsuccessful_compile_path,
+)
+from F05_helpers import (
+    local_ident,
+    local_payload,
+    escaped_backtick_string_literal,
+    raw_string_text,
+    require_constructed_list,
+    require_deferred_reference,
+    require_mapping,
+    runtime_json_unicode_string_literal,
+    unclosed_json_literal_text,
 )
 
+_PUBLIC_NUMBERS = frozenset(range(10))
 
-def _payload() -> bytes:
-    return f"blob-{token()}-X".encode("utf-8")
+_PHI = "\u03a6"
 
-
-def _unrecognized() -> bytes:
-    return f"not-pointer-{token()}\n".encode("utf-8")
-
-
-def _seed_tracked(
-    ws,
-    rel: str,
-    data: bytes,
-    glob: str,
-    *,
-    keep_process: bool = True,
-    skip_smudge_install: bool = False,
-) -> str:
-    """Init, install, track, add, and commit. Return independent SHA-256."""
-    ws.init_repo()
-    if skip_smudge_install:
-        require_success(ws.invoke_via_git(["install", "--local", "--skip-smudge"]))
-        require_filters_point_at_git_orbulk(ws, local=True)
-    elif keep_process:
-        install_local_keeping_process(ws)
-    else:
-        configure_lfs_clean_filter(ws)
-    track_pattern(ws, glob)
-    return commit_tracked_payload(ws, rel, data)
-
-
-def _unlink_worktree(ws, *rels: str) -> None:
-    for rel in rels:
-        ws.resolve(rel).unlink()
-
-
-def _checkout(ws, *rels: str, env_updates=None):
-    return ws.git(
-        ["checkout", "HEAD", "--", *rels],
-        env_updates=env_updates,
-    )
-
-
-def _remove_object(ws, oid: str) -> None:
-    path = default_lfs_store_root(ws) / sharded_object_rel(oid)
-    try:
-        path.unlink()
-    except OSError as exc:
-        raise AssertionError(f"cannot remove object at {path}: {exc}") from exc
+_HASH_DOC = {"foo": {"bar": "bar", "baz": "baz", "qux": "qux"}}
+_QUOTED_TOP_DOC = {"baz": 2, 'qux"': 3}
+_WILDCARD_HASH_DOC = {
+    "foo": {
+        "nested": {
+            "one": {"a": "first", "b": "second", "c": "third"},
+            "two": {"a": "first", "b": "second", "c": "third"},
+            "three": {"a": "first", "b": "second", "c": "third"},
+        }
+    }
+}
+_LIST_DOC = {
+    "foo": {
+        "includeme": True,
+        "bar": {
+            "baz": [
+                {"common": "first"},
+                {"common": "second"},
+            ]
+        },
+    }
+}
+_TOP_LIST_DOC = {"bar": 1, "baz": 2}
+_PIPE_DOC = {"foo": {"bar": {"baz": "one"}, "other": {"baz": "two"}}}
+_PIPE_STOP_DOC = {
+    "foo": {
+        "x": {"baz": "subkey"},
+        "y": {"baz": "subkey"},
+        "z": {"baz": "subkey"},
+    }
+}
+_AT_DOC = {
+    "foo": [{"name": "a"}, {"name": "b"}],
+    "bar": {"baz": "qux"},
+}
+_LIST_ORACLE = [True, ["first", "second"]]
 
 
-def _require_worktree_pointer(ws, rel: str, *, digest: str, size: int) -> bytes:
-    body = ws.read_bytes(rel)
-    require_generated_pointer_shape(body, digest=digest, size=size)
-    return body
+def _baited(document: dict) -> dict:
+    baited = dict(document)
+    baited.update(sentinel_document())
+    return baited
 
 
-# ---------------------------------------------------------------------------
-# A. Non-empty non-pointer clean: hash, shard, canonical pointer, no upload
-# ---------------------------------------------------------------------------
-
-
-def test_clean_stores_sharded_object_and_writes_canonical_pointer(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    result = clean_bytes(isolated_ws, data)
-    print(f"clean exit={result.returncode} stdout_len={len(result.stdout)}")
-    document = assert_clean_wrote_canonical_pointer(
-        result, digest=digest, size=len(data)
-    )
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    print(f"stored={stored} doc_len={len(document)}")
-    assert document != data, (
-        "clean wrote the original bytes through instead of a canonical pointer"
-    )
-    assert stored.read_bytes() == data, (
-        "sharded object is not the original content"
-    )
-
-
-def test_clean_via_direct_binary_stores_object(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    result = clean_bytes(isolated_ws, data, via_git=False)
-    print(f"direct clean exit={result.returncode} len={len(result.stdout)}")
-    document = assert_clean_wrote_canonical_pointer(
-        result, digest=digest, size=len(data)
-    )
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    assert document != data, (
-        "direct-binary clean wrote the original bytes through instead of "
-        "a canonical pointer"
-    )
-    assert stored.read_bytes() == data, (
-        "sharded object from direct-binary clean is not the original content"
-    )
-
-
-def test_git_add_stages_pointer_blob_and_stores_object(isolated_ws):
-    isolated_ws.init_repo()
-    install_local_keeping_process(isolated_ws)
-    ext = token()
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    track_pattern(isolated_ws, f"*.{ext}")
-    digest = commit_tracked_payload(isolated_ws, rel, data)
-    blob = index_blob(isolated_ws, rel)
-    print(f"add rel={rel} digest={digest} blob_len={len(blob)}")
-    assert_generated_pointer_shape(blob, digest=digest, size=len(data))
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    assert blob != data, (
-        "git add staged the original bytes instead of a pointer blob"
-    )
-    assert stored.read_bytes() == data, (
-        "sharded object after git add is not the original content"
-    )
-
-
-def test_clean_does_not_upload_to_configured_endpoint(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    with recording_http_server() as (url, records):
-        add_git_remote(isolated_ws, "origin", url)
-        require_git_config_set(isolated_ws, "lfs.url", url, local=True)
-        result = clean_bytes(isolated_ws, data)
-        pointer_from_clean(result, digest=digest, size=len(data))
-        require_object_bytes(default_lfs_store_root(isolated_ws), digest, data)
-        leaked = [
-            (method, body)
-            for method, body in records
-            if data == body or data in body
-        ]
-        print(f"records={len(records)} leaked={len(leaked)} url={url}")
-        assert not leaked, (
-            "clean sent object bytes to the configured endpoint: "
-            f"{leaked!r}"
-        )
-
-
-def test_two_independent_cleans_of_identical_bytes_match(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    first = pointer_from_clean_stdout(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
-    )
-    second = pointer_from_clean_stdout(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
-    )
-    print(f"first_len={len(first)} second_len={len(second)}")
-    assert first == second, "two cleans of identical bytes wrote different pointers"
-    require_object_bytes(default_lfs_store_root(isolated_ws), digest, data)
-
-
-# ---------------------------------------------------------------------------
-# B. Already-pointer write-through; unrecognized still hashes
-# ---------------------------------------------------------------------------
-
-
-def test_clean_of_already_pointer_writes_through_without_nested_object(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    pointer = assert_clean_wrote_canonical_pointer(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
-    )
-    assert_object_bytes(default_lfs_store_root(isolated_ws), digest, data)
-    nested_oid = sha256_hex(pointer)
-    second = assert_clean_wrote_canonical_pointer(
-        clean_bytes(isolated_ws, pointer), digest=digest, size=len(data)
-    )
-    print(f"nested_oid={nested_oid} second_len={len(second)}")
-    assert_object_absent(default_lfs_store_root(isolated_ws), nested_oid)
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    assert stored.read_bytes() == data, (
-        "original object was lost after clean of an already-pointer document"
-    )
-    assert second != data, (
-        "clean of an already-pointer document wrote the original payload "
-        "instead of a pointer for that payload"
-    )
-
-
-def test_git_add_of_pointer_worktree_does_not_nest(isolated_ws):
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    digest = _seed_tracked(isolated_ws, rel, data, glob)
-    pointer = index_blob(isolated_ws, rel)
-    _unlink_worktree(isolated_ws, rel)
-    skipped = _checkout(
-        isolated_ws, rel, env_updates=enable_skip_smudge_environment()
-    )
-    require_success(skipped)
-    worktree = _require_worktree_pointer(
-        isolated_ws, rel, digest=digest, size=len(data)
-    )
-    print(f"pointer_wt_len={len(worktree)}")
-    added = isolated_ws.git(["add", "--", rel])
-    require_success(added)
-    blob = index_blob(isolated_ws, rel)
-    assert_generated_pointer_shape(blob, digest=digest, size=len(data))
-    assert_object_absent(default_lfs_store_root(isolated_ws), sha256_hex(pointer))
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    assert blob != data, (
-        "git add of a pointer worktree staged the original payload instead "
-        "of a pointer blob"
-    )
-    assert stored.read_bytes() == data, (
-        "original object was lost after git add of a pointer worktree"
-    )
-
-
-def test_clean_of_unrecognized_bytes_still_hashes_and_stores(isolated_ws):
-    isolated_ws.init_repo()
-    data = _unrecognized()
-    digest = sha256_hex(data)
-    result = clean_bytes(isolated_ws, data)
-    print(f"unrecognized clean exit={result.returncode} len={len(result.stdout)}")
-    document = assert_clean_wrote_canonical_pointer(
-        result, digest=digest, size=len(data)
-    )
-    stored = assert_object_bytes(
-        default_lfs_store_root(isolated_ws), digest, data
-    )
-    assert document != data, (
-        "clean of unrecognized bytes wrote the input through instead of "
-        "hashing it into a pointer"
-    )
-    assert stored.read_bytes() == data, (
-        "unrecognized bytes were not stored as the sharded object"
+def _require_null_field(mapping: object, key: str) -> None:
+    require_mapping(mapping)
+    assert key in mapping, f"missing-field key {key!r} was omitted: {mapping!r}"
+    assert mapping[key] is None, (
+        f"missing-field key {key!r} stored {mapping[key]!r}, not null"
     )
 
 
 # ---------------------------------------------------------------------------
-# C. Smudge restore, non-pointer copy-through, missing-object failure
+# A. Multiselect hash: written keys remain; missing stores null; null current
 # ---------------------------------------------------------------------------
 
 
-def test_smudge_restores_original_bytes_from_local_store(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    pointer = pointer_from_clean(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
+def test_multiselect_hash_builds_named_pairs():
+    one = require_oneshot_equals("foo.{bar: bar}", _HASH_DOC, {"bar": "bar"})
+    require_mapping(one)
+    assert one == {"bar": "bar"}
+    assert one != _HASH_DOC["foo"]
+    assert one is not _HASH_DOC
+    two = require_oneshot_equals(
+        "foo.{bar: bar, baz: baz}", _HASH_DOC, {"bar": "bar", "baz": "baz"}
     )
-    restored = smudge_bytes(isolated_ws, pointer)
-    print(f"smudge exit={restored.returncode} len={len(restored.stdout)}")
-    require_success(restored)
-    assert restored.stdout == data, (
-        "smudge did not restore original bytes from the local store"
-    )
+    require_mapping(two)
+    assert two == {"bar": "bar", "baz": "baz"}
+    assert "qux" not in two
+    assert two != _HASH_DOC["foo"]
+    print(f"hash_pairs one={one!r} two={two!r}", flush=True)
 
 
-def test_git_checkout_restores_identical_bytes_when_object_local(isolated_ws):
-    ext = token()
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    digest = _seed_tracked(isolated_ws, rel, data, f"*.{ext}")
-    require_generated_pointer_shape(
-        index_blob(isolated_ws, rel), digest=digest, size=len(data)
+def test_multiselect_hash_stores_null_for_missing_field():
+    observed = require_oneshot_equals(
+        "foo.{bar: bar, noexist: noexist}",
+        _HASH_DOC,
+        {"bar": "bar", "noexist": None},
     )
-    require_object_bytes(default_lfs_store_root(isolated_ws), digest, data)
-    _unlink_worktree(isolated_ws, rel)
-    checked = _checkout(isolated_ws, rel)
-    print(f"checkout exit={checked.returncode}")
-    require_success(checked)
-    got = isolated_ws.read_bytes(rel)
-    print(f"worktree_len={len(got)} digest={digest}")
-    assert got == data, "checkout did not restore original working-tree bytes"
+    require_mapping(observed)
+    _require_null_field(observed, "noexist")
+    assert observed["bar"] == "bar"
+    assert list(observed.keys()) != ["bar"]
+    print(f"hash_missing={observed!r}", flush=True)
 
 
-def test_checkout_style_smudge_does_not_overwrite_modified_worktree_file(
-    isolated_ws,
-):
-    ext = token()
-    glob = f"*.{ext}"
-    placeholder = f"keep_{token()}.{ext}"
-    modified = f"dirty_{token()}.{ext}"
-    data_keep = _payload()
-    data_mod = _payload()
-    dirty = f"dirty-{token()}\n".encode("utf-8")
-    digest_keep = _seed_tracked(isolated_ws, placeholder, data_keep, glob)
-    digest_mod = commit_tracked_payload(isolated_ws, modified, data_mod)
-    require_object_bytes(
-        default_lfs_store_root(isolated_ws), digest_keep, data_keep
+def test_multiselect_hash_on_null_current_value_is_null():
+    live = require_oneshot_equals(
+        "foo.{nokey: nokey}", _HASH_DOC, {"nokey": None}
     )
-    require_object_bytes(
-        default_lfs_store_root(isolated_ws), digest_mod, data_mod
+    require_mapping(live)
+    _require_null_field(live, "nokey")
+    require_successful_null(oneshot_search("foo.badkey.{nokey: nokey}", _HASH_DOC))
+    on_null = require_search_value(
+        oneshot_search("foo.badkey.{nokey: nokey}", _HASH_DOC)
     )
-    _unlink_worktree(isolated_ws, placeholder, modified)
-    planted = _checkout(
-        isolated_ws,
-        placeholder,
-        modified,
-        env_updates=enable_skip_smudge_environment(),
+    print(f"hash_null_current live={live!r} on_null={on_null!r}", flush=True)
+    assert on_null is None
+    assert on_null != {"nokey": None}
+    assert on_null != {}
+    assert on_null != live
+
+
+def test_runtime_multiselect_hash_missing_field_and_null_current():
+    root = local_ident()
+    k1, k2 = local_ident(), local_ident()
+    missing = local_ident()
+    bad = local_ident()
+    alias, source = local_ident(), local_ident()
+    assert alias != source
+    p1, p2, source_payload = local_payload(), local_payload(), local_payload()
+    alias_decoy = local_payload()
+    inner = {k1: p1, k2: p2, source: source_payload}
+    document = {root: inner, alias: alias_decoy}
+
+    two = require_oneshot_equals(
+        f"{root}.{{{k1}: {k1}, {k2}: {k2}}}", document, {k1: p1, k2: p2}
     )
-    require_success(planted)
-    _require_worktree_pointer(
-        isolated_ws, placeholder, digest=digest_keep, size=len(data_keep)
+    require_mapping(two)
+    assert two == {k1: p1, k2: p2}
+    assert two != inner
+
+    stored = require_oneshot_equals(
+        f"{root}.{{{k1}: {k1}, {missing}: {missing}}}",
+        document,
+        {k1: p1, missing: None},
     )
-    _require_worktree_pointer(
-        isolated_ws, modified, digest=digest_mod, size=len(data_mod)
+    require_mapping(stored)
+    _require_null_field(stored, missing)
+    assert stored[k1] == p1
+
+    aliased = require_oneshot_equals(
+        f"{root}.{{{alias}: {source}}}", document, {alias: source_payload}
     )
-    isolated_ws.write(modified, dirty)
-    smudged = isolated_ws.invoke_via_git(["checkout"])
+    require_mapping(aliased)
+    assert alias in aliased
+    assert aliased[alias] == source_payload
+    assert aliased[alias] is not None
+    assert aliased != {alias: None}
+    assert aliased != {source: source_payload}
+    assert aliased[alias] != alias_decoy
+
+    require_successful_null(
+        oneshot_search(f"{root}.{bad}.{{{k1}: {k1}}}", document)
+    )
+    on_null = require_search_value(
+        oneshot_search(f"{root}.{bad}.{{{k1}: {k1}}}", document)
+    )
+    live = require_oneshot_equals(
+        f"{root}.{{{k1}: {k1}}}", document, {k1: p1}
+    )
+    require_mapping(live)
     print(
-        f"placeholder={placeholder} modified={modified} "
-        f"smudge_exit={smudged.returncode}"
+        f"runtime_hash two={two!r} stored={stored!r} aliased={aliased!r} "
+        f"on_null={on_null!r} live={live!r}",
+        flush=True,
     )
-    require_success(smudged)
-    kept = isolated_ws.read_bytes(placeholder)
-    left = isolated_ws.read_bytes(modified)
-    print(f"kept_len={len(kept)} left_len={len(left)}")
-    assert kept == data_keep, (
-        "unmodified placeholder was not replaced with original bytes "
-        "by checkout-style smudging"
+    assert on_null is None
+    assert on_null != {k1: None}
+    assert on_null != {}
+    assert live == {k1: p1}
+
+
+def test_compile_then_search_multiselect_hash():
+    public = compile_once_then_search(
+        "foo.{bar: bar, baz: baz}", _HASH_DOC
     )
-    assert left == dirty, (
-        "modified working-tree file was overwritten by checkout-style "
-        "smudging of placeholders"
+    require_mapping(public)
+    assert public == {"bar": "bar", "baz": "baz"}
+
+    root = local_ident()
+    k1, missing = local_ident(), local_ident()
+    alias, source = local_ident(), local_ident()
+    bad = local_ident()
+    p1, source_payload = local_payload(), local_payload()
+    document = {root: {k1: p1, source: source_payload}}
+
+    parsed_missing = require_search_value(
+        compile_expression(f"{root}.{{{k1}: {k1}, {missing}: {missing}}}")
     )
-    assert left != data_mod, (
-        "modified working-tree file was restored to the committed payload"
+    first_missing = require_search_value(search_parsed(parsed_missing, document))
+    second_missing = require_search_value(search_parsed(parsed_missing, document))
+    require_mapping(first_missing)
+    _require_null_field(first_missing, missing)
+    assert first_missing == second_missing == {k1: p1, missing: None}
+
+    parsed_alias = require_search_value(
+        compile_expression(f"{root}.{{{alias}: {source}}}")
     )
+    first_alias = require_search_value(search_parsed(parsed_alias, document))
+    second_alias = require_search_value(search_parsed(parsed_alias, document))
+    require_mapping(first_alias)
+    assert first_alias == second_alias == {alias: source_payload}
 
-
-def test_smudge_copies_non_pointer_bytes_through(isolated_ws):
-    isolated_ws.init_repo()
-    data = _payload()
-    digest = sha256_hex(data)
-    pointer = pointer_from_clean(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
+    parsed_null = require_search_value(
+        compile_expression(f"{root}.{bad}.{{{k1}: {k1}}}")
     )
-    restored = smudge_bytes(isolated_ws, pointer)
-    require_success(restored)
-    assert restored.stdout == data
-    other = _unrecognized()
-    copied = smudge_bytes(isolated_ws, other)
-    print(f"non-pointer smudge exit={copied.returncode} len={len(copied.stdout)}")
-    require_success(copied)
-    require_smudge_passthrough(copied, other)
-
-
-def test_smudge_fails_when_object_missing_and_endpoint_unreachable():
-    data = _payload()
-    with workspace() as present:
-        present.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(present, data), digest=digest, size=len(data)
-        )
-        ok = smudge_bytes(present, pointer)
-        require_success(ok)
-        assert ok.stdout == data
-        print(f"present smudge len={len(ok.stdout)}")
-    with workspace() as missing:
-        missing.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(missing, data), digest=digest, size=len(data)
-        )
-        _remove_object(missing, digest)
-        configure_unreachable_endpoint(missing)
-        failed = smudge_bytes(missing, pointer)
-        print(f"missing smudge exit={failed.returncode}")
-        require_invalid_unlike_success(ok, failed)
-
-
-def test_git_checkout_fails_when_object_missing_and_endpoint_unreachable():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as present:
-        digest = _seed_tracked(present, rel, data, glob)
-        _unlink_worktree(present, rel)
-        ok = _checkout(present, rel)
-        require_success(ok)
-        assert present.read_bytes(rel) == data
-        print(f"present checkout digest={digest}")
-    with workspace() as missing:
-        digest = _seed_tracked(missing, rel, data, glob)
-        _remove_object(missing, digest)
-        configure_unreachable_endpoint(missing)
-        _unlink_worktree(missing, rel)
-        failed = _checkout(missing, rel)
-        print(f"missing checkout exit={failed.returncode}")
-        require_invalid_unlike_success(ok, failed)
+    first_null = require_search_value(search_parsed(parsed_null, document))
+    second_null = require_search_value(search_parsed(parsed_null, document))
+    print(
+        f"compile_hash public={public!r} missing={first_missing!r} "
+        f"alias={first_alias!r} on_null={first_null!r}",
+        flush=True,
+    )
+    assert first_null is second_null is None
+    assert first_null != {k1: None}
 
 
 # ---------------------------------------------------------------------------
-# D. Filter-process same semantics as clean/smudge
+# B. Quoted hash keys; one mapping per object-wildcard value
 # ---------------------------------------------------------------------------
 
 
-def test_git_add_via_process_filter_matches_clean_plumbing_store_and_pointer():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as proc:
-        digest = _seed_tracked(proc, rel, data, glob, keep_process=True)
-        process = lookup_git_config(proc, "filter.lfs.process", local=True)
-        assert process is not None, "process filter was unset on the process arm"
-        require_points_at_git_orbulk(process)
-        blob = index_blob(proc, rel)
-        require_generated_pointer_shape(blob, digest=digest, size=len(data))
-        require_object_bytes(default_lfs_store_root(proc), digest, data)
-        print(f"process blob_len={len(blob)}")
-    with workspace() as pipe:
-        digest_b = _seed_tracked(pipe, rel, data, glob, keep_process=False)
-        process_b = lookup_git_config(pipe, "filter.lfs.process", local=True)
-        assert process_b is None, "plumbing arm still has a process filter"
-        blob_b = index_blob(pipe, rel)
-        require_generated_pointer_shape(blob_b, digest=digest_b, size=len(data))
-        require_object_bytes(default_lfs_store_root(pipe), digest_b, data)
-        print(f"plumbing blob_len={len(blob_b)}")
-        assert digest == digest_b
-
-
-def test_git_checkout_via_process_filter_restores_like_smudge():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as proc:
-        digest = _seed_tracked(proc, rel, data, glob, keep_process=True)
-        process = lookup_git_config(proc, "filter.lfs.process", local=True)
-        assert process is not None, "process filter was unset on the process arm"
-        require_points_at_git_orbulk(process)
-        require_generated_pointer_shape(
-            index_blob(proc, rel), digest=digest, size=len(data)
-        )
-        require_object_bytes(default_lfs_store_root(proc), digest, data)
-        _unlink_worktree(proc, rel)
-        checked = _checkout(proc, rel)
-        require_success(checked)
-        got = proc.read_bytes(rel)
-        print(f"process checkout len={len(got)}")
-        assert got == data
-    with workspace() as pipe:
-        digest_b = _seed_tracked(pipe, rel, data, glob, keep_process=False)
-        process_b = lookup_git_config(pipe, "filter.lfs.process", local=True)
-        assert process_b is None, "plumbing arm still has a process filter"
-        require_generated_pointer_shape(
-            index_blob(pipe, rel), digest=digest_b, size=len(data)
-        )
-        require_object_bytes(default_lfs_store_root(pipe), digest_b, data)
-        _unlink_worktree(pipe, rel)
-        checked = _checkout(pipe, rel)
-        require_success(checked)
-        got = pipe.read_bytes(rel)
-        print(f"plumbing checkout len={len(got)}")
-        assert got == data
-        assert digest == digest_b
-
-
-# ---------------------------------------------------------------------------
-# E. Include / exclude and skip-smudge when the object is local
-# ---------------------------------------------------------------------------
-
-
-def test_include_smudges_only_matching_path():
-    ext = token()
-    glob = f"*.{ext}"
-    keep = f"keep_{token()}.{ext}"
-    other = f"other_{token()}.{ext}"
-    data_keep = _payload()
-    data_other = _payload()
-    with workspace() as baseline:
-        _seed_tracked(baseline, keep, data_keep, glob)
-        commit_tracked_payload(baseline, other, data_other)
-        _unlink_worktree(baseline, keep, other)
-        require_success(_checkout(baseline, keep, other))
-        assert baseline.read_bytes(keep) == data_keep
-        assert baseline.read_bytes(other) == data_other
-        print("baseline both materialized")
-    with workspace() as limited:
-        _seed_tracked(limited, keep, data_keep, glob)
-        commit_tracked_payload(limited, other, data_other)
-        configure_fetch_include(limited, keep)
-        _unlink_worktree(limited, keep, other)
-        require_success(_checkout(limited, keep, other))
-        got_keep = limited.read_bytes(keep)
-        got_other = limited.read_bytes(other)
-        print(f"include keep_len={len(got_keep)} other_len={len(got_other)}")
-        assert got_keep == data_keep
-        require_generated_pointer_shape(
-            got_other, digest=sha256_hex(data_other), size=len(data_other)
-        )
-        assert got_other != data_other
-
-
-def test_exclude_leaves_matching_path_as_pointer():
-    ext = token()
-    glob = f"*.{ext}"
-    keep = f"keep_{token()}.{ext}"
-    drop = f"drop_{token()}.{ext}"
-    data_keep = _payload()
-    data_drop = _payload()
-    with workspace() as baseline:
-        _seed_tracked(baseline, keep, data_keep, glob)
-        commit_tracked_payload(baseline, drop, data_drop)
-        _unlink_worktree(baseline, keep, drop)
-        require_success(_checkout(baseline, keep, drop))
-        assert baseline.read_bytes(drop) == data_drop
-        print("baseline drop materialized")
-    with workspace() as limited:
-        _seed_tracked(limited, keep, data_keep, glob)
-        commit_tracked_payload(limited, drop, data_drop)
-        configure_fetch_exclude(limited, drop)
-        _unlink_worktree(limited, keep, drop)
-        require_success(_checkout(limited, keep, drop))
-        got_keep = limited.read_bytes(keep)
-        got_drop = limited.read_bytes(drop)
-        print(f"exclude keep_len={len(got_keep)} drop_len={len(got_drop)}")
-        assert got_keep == data_keep
-        require_generated_pointer_shape(
-            got_drop, digest=sha256_hex(data_drop), size=len(data_drop)
-        )
-        assert got_drop != data_drop
-
-
-def test_include_from_lfsconfig_same_contrast():
-    ext = token()
-    glob = f"*.{ext}"
-    keep = f"keep_{token()}.{ext}"
-    other = f"other_{token()}.{ext}"
-    data_keep = _payload()
-    data_other = _payload()
-    with workspace() as baseline:
-        _seed_tracked(baseline, keep, data_keep, glob)
-        commit_tracked_payload(baseline, other, data_other)
-        _unlink_worktree(baseline, keep, other)
-        require_success(_checkout(baseline, keep, other))
-        assert baseline.read_bytes(keep) == data_keep
-        assert baseline.read_bytes(other) == data_other
-    with workspace() as limited:
-        _seed_tracked(limited, keep, data_keep, glob)
-        commit_tracked_payload(limited, other, data_other)
-        limited.write(
-            ".lfsconfig",
-            f"[lfs]\n\tfetchinclude = {keep}\n",
-        )
-        _unlink_worktree(limited, keep, other)
-        require_success(_checkout(limited, keep, other))
-        got_keep = limited.read_bytes(keep)
-        got_other = limited.read_bytes(other)
-        print(f"lfsconfig keep_len={len(got_keep)} other_len={len(got_other)}")
-        assert got_keep == data_keep
-        require_generated_pointer_shape(
-            got_other, digest=sha256_hex(data_other), size=len(data_other)
-        )
-        assert got_other != data_other
-
-
-def test_smudge_skip_flag_passes_pointer_through():
-    data = _payload()
-    with workspace() as baseline:
-        baseline.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(baseline, data), digest=digest, size=len(data)
-        )
-        restored = smudge_bytes(baseline, pointer)
-        require_success(restored)
-        assert restored.stdout == data
-        print(f"baseline smudge len={len(restored.stdout)}")
-    with workspace() as skipped:
-        skipped.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(skipped, data), digest=digest, size=len(data)
-        )
-        result = smudge_skip_bytes(skipped, pointer)
-        print(f"skip smudge exit={result.returncode} len={len(result.stdout)}")
-        require_success(result)
-        require_generated_pointer_shape(
-            result.stdout, digest=digest, size=len(data)
-        )
-        assert result.stdout != data
-
-
-def test_skip_smudge_environment_leaves_pointer_in_worktree():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as baseline:
-        digest = _seed_tracked(baseline, rel, data, glob)
-        _unlink_worktree(baseline, rel)
-        require_success(_checkout(baseline, rel))
-        assert baseline.read_bytes(rel) == data
-        print(f"baseline checkout digest={digest}")
-    with workspace() as skipped:
-        digest = _seed_tracked(skipped, rel, data, glob)
-        _unlink_worktree(skipped, rel)
-        require_success(
-            _checkout(
-                skipped, rel, env_updates=enable_skip_smudge_environment()
-            )
-        )
-        body = skipped.read_bytes(rel)
-        print(f"skip-env worktree_len={len(body)}")
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-
-
-def test_install_skip_smudge_checkout_leaves_pointer_text():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as baseline:
-        digest = _seed_tracked(baseline, rel, data, glob)
-        _unlink_worktree(baseline, rel)
-        require_success(_checkout(baseline, rel))
-        assert baseline.read_bytes(rel) == data
-        print(f"ordinary install checkout digest={digest}")
-    with workspace() as skipped:
-        digest = _seed_tracked(
-            skipped, rel, data, glob, skip_smudge_install=True
-        )
-        _unlink_worktree(skipped, rel)
-        require_success(_checkout(skipped, rel))
-        body = skipped.read_bytes(rel)
-        print(f"skip-smudge install worktree_len={len(body)}")
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-
-
-# ---------------------------------------------------------------------------
-# F. Relocated store root and content-addressed sharing
-# ---------------------------------------------------------------------------
-
-
-def test_relocated_storage_uses_objects_directory_plus_shard_not_default_path(
-    isolated_ws,
-):
-    isolated_ws.init_repo()
-    store = isolated_ws.home / f"lfsstore_{token()}"
-    store.mkdir()
-    configure_storage_root(isolated_ws, store)
-    data = _payload()
-    digest = sha256_hex(data)
-    pointer_from_clean(
-        clean_bytes(isolated_ws, data), digest=digest, size=len(data)
+def test_multiselect_hash_quoted_dotted_key():
+    observed = require_oneshot_equals(
+        'foo.{"foo.bar": bar}', _HASH_DOC, {"foo.bar": "bar"}
     )
-    stored = require_object_bytes(store, digest, data)
-    require_object_absent(default_lfs_store_root(isolated_ws), digest)
-    bogus = store / digest[:2] / digest[2:4] / digest
-    try:
-        bogus_exists = bogus.exists()
-    except OSError as exc:
-        raise AssertionError(f"cannot stat {bogus}: {exc}") from exc
-    print(f"relocated={stored} bogus_exists={bogus_exists}")
-    assert not bogus_exists, (
-        "relocated store wrote the shard directly under the configured "
-        f"path without an objects directory: {bogus}"
+    require_mapping(observed)
+    assert "foo.bar" in observed
+    assert observed["foo.bar"] == "bar"
+    assert observed != "bar"
+    assert observed is not None
+    print(f"quoted_dotted={observed!r}", flush=True)
+
+
+def test_top_level_quoted_hash_keys_with_embedded_quote():
+    observed = require_oneshot_equals(
+        '{"baz": baz, "qux\\"": "qux\\""}',
+        _QUOTED_TOP_DOC,
+        {"baz": 2, 'qux"': 3},
     )
+    require_mapping(observed)
+    assert observed["baz"] == 2
+    assert 'qux"' in observed
+    assert observed['qux"'] == 3
+    print(f"quoted_embedded={observed!r}", flush=True)
 
 
-def test_identical_content_shares_one_sharded_object(isolated_ws):
-    isolated_ws.init_repo()
-    install_local_keeping_process(isolated_ws)
-    ext = token()
-    glob = f"*.{ext}"
-    data = _payload()
-    rel_a = f"a_{token()}.{ext}"
-    rel_b = f"b_{token()}.{ext}"
-    track_pattern(isolated_ws, glob)
-    digest = commit_tracked_payload(isolated_ws, rel_a, data)
-    commit_tracked_payload(isolated_ws, rel_b, data)
-    blob_a = index_blob(isolated_ws, rel_a)
-    blob_b = index_blob(isolated_ws, rel_b)
-    require_generated_pointer_shape(blob_a, digest=digest, size=len(data))
-    require_generated_pointer_shape(blob_b, digest=digest, size=len(data))
-    store = default_lfs_store_root(isolated_ws)
-    require_object_bytes(store, digest, data)
-    matches = list((store / "objects").rglob(digest))
-    print(f"shared matches={len(matches)} digest={digest}")
-    assert len(matches) == 1, (
-        "identical content did not share a single sharded object file: "
-        f"{matches!r}"
+def test_multiselect_hash_after_object_wildcard():
+    observed = require_search_value(
+        oneshot_search("foo.nested.*.{a: a, b: b}", _WILDCARD_HASH_DOC)
+    )
+    require_constructed_list(observed)
+    assert len(observed) == 3
+    for item in observed:
+        require_mapping(item)
+        assert item == {"a": "first", "b": "second"}
+        assert "c" not in item
+    print(f"wildcard_hash={observed!r}", flush=True)
+
+
+def test_runtime_quoted_hash_key_and_wildcard_hash():
+    key, left, right = runtime_dotted_field_key()
+    assert key != "foo.bar"
+    assert right != ""
+    source = local_ident()
+    assert source != right
+    payload, decoy = local_payload(), local_payload()
+    root = local_ident()
+    obj = {source: payload, right: decoy}
+    document = {root: obj}
+    quoted = quoted_ident_text(key)
+    dotted = require_oneshot_equals(
+        f"{root}.{{{quoted}: {source}}}", document, {key: payload}
+    )
+    require_mapping(dotted)
+    assert list(dotted.keys()) == [key]
+    assert dotted[key] == payload
+    assert dotted[key] != decoy
+    assert dotted != decoy
+    print(f"runtime_dotted_key={key!r} left={left!r} right={right!r}", flush=True)
+
+    unquotable = runtime_unquotable_key()
+    uq_source = local_ident()
+    uq_payload = local_payload()
+    uq_root = local_ident()
+    uq_doc = {uq_root: {uq_source: uq_payload}}
+    uq_quoted = quoted_ident_text(unquotable)
+    uq = require_oneshot_equals(
+        f"{uq_root}.{{{uq_quoted}: {uq_source}}}",
+        uq_doc,
+        {unquotable: uq_payload},
+    )
+    require_mapping(uq)
+    assert unquotable in uq
+    assert uq[unquotable] == uq_payload
+
+    inner = local_ident()
+    extra = local_ident()
+    assert extra not in {"a", "b"}
+    triples = []
+    values = {}
+    for _ in range(3):
+        name = local_ident()
+        a_p, b_p, extra_p = local_payload(), local_payload(), local_payload()
+        triples.append({"a": a_p, "b": b_p})
+        values[name] = {"a": a_p, "b": b_p, extra: extra_p}
+    wild_root = local_ident()
+    wild_doc = {wild_root: {inner: values}}
+    wild = require_search_value(
+        oneshot_search(f"{wild_root}.{inner}.*.{{a: a, b: b}}", wild_doc)
+    )
+    require_constructed_list(wild)
+    require_array_multiset(wild, triples)
+    assert len(wild) == 3
+    for item in wild:
+        require_mapping(item)
+        assert set(item.keys()) == {"a", "b"}
+        assert extra not in item
+    print(f"runtime_wildcard_hash={wild!r}", flush=True)
+
+
+def test_compile_then_search_quoted_key_and_wildcard_hash():
+    public = compile_once_then_search('foo.{"foo.bar": bar}', _HASH_DOC)
+    require_mapping(public)
+    assert public == {"foo.bar": "bar"}
+
+    key, _left, right = runtime_dotted_field_key()
+    source = local_ident()
+    assert source != right
+    payload, decoy = local_payload(), local_payload()
+    root = local_ident()
+    document = {root: {source: payload, right: decoy}}
+    quoted = quoted_ident_text(key)
+    parsed = require_search_value(
+        compile_expression(f"{root}.{{{quoted}: {source}}}")
+    )
+    first = require_search_value(search_parsed(parsed, document))
+    second = require_search_value(search_parsed(parsed, document))
+    require_mapping(first)
+    assert first == second == {key: payload}
+    assert first[key] != decoy
+
+    inner = local_ident()
+    extra = local_ident()
+    triples = []
+    values = {}
+    for _ in range(3):
+        name = local_ident()
+        a_p, b_p, extra_p = local_payload(), local_payload(), local_payload()
+        triples.append({"a": a_p, "b": b_p})
+        values[name] = {"a": a_p, "b": b_p, extra: extra_p}
+    wild_root = local_ident()
+    wild_doc = {wild_root: {inner: values}}
+    parsed_wild = require_search_value(
+        compile_expression(f"{wild_root}.{inner}.*.{{a: a, b: b}}")
+    )
+    first_wild = require_search_value(search_parsed(parsed_wild, wild_doc))
+    second_wild = require_search_value(search_parsed(parsed_wild, wild_doc))
+    require_constructed_list(first_wild)
+    require_array_multiset(first_wild, triples)
+    require_array_multiset(second_wild, triples)
+    print(
+        f"compile_quoted public={public!r} dotted={first!r} wild={first_wild!r}",
+        flush=True,
     )
 
 
 # ---------------------------------------------------------------------------
-# G. Missing object: default fail, skip family, skip-download-errors
+# C. Multiselect list: after a dot or as a top-level constructor
 # ---------------------------------------------------------------------------
 
 
-def test_skip_download_errors_allows_checkout_with_pointer_text():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as default:
-        digest = _seed_tracked(default, rel, data, glob)
-        _remove_object(default, digest)
-        configure_unreachable_endpoint(default)
-        _unlink_worktree(default, rel)
-        failed = _checkout(default, rel)
-        print(f"default missing checkout exit={failed.returncode}")
-        assert failed.returncode != 0
-    with workspace() as skipped:
-        digest = _seed_tracked(skipped, rel, data, glob)
-        _remove_object(skipped, digest)
-        configure_unreachable_endpoint(skipped)
-        enable_skip_download_errors(skipped)
-        _unlink_worktree(skipped, rel)
-        ok = _checkout(skipped, rel)
-        print(f"skip-download-errors checkout exit={ok.returncode}")
-        require_success(ok)
-        body = skipped.read_bytes(rel)
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-        require_invalid_unlike_success(ok, failed)
+def test_multiselect_list_named_oracle():
+    observed = require_oneshot_equals(
+        "foo.[includeme, bar.baz[*].common]", _LIST_DOC, _LIST_ORACLE
+    )
+    require_constructed_list(observed)
+    assert observed == [True, ["first", "second"]]
+    assert observed[0] is True
+    assert observed[0] is not 1
+    assert observed != _LIST_DOC["foo"]
+    print(f"list_oracle={observed!r}", flush=True)
 
 
-def test_skip_download_errors_from_environment_allows_checkout_with_pointer_text():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as default:
-        digest = _seed_tracked(default, rel, data, glob)
-        _remove_object(default, digest)
-        configure_unreachable_endpoint(default)
-        _unlink_worktree(default, rel)
-        failed = _checkout(default, rel)
-        assert failed.returncode != 0
-        print(f"default env-carrier checkout exit={failed.returncode}")
-    with workspace() as skipped:
-        digest = _seed_tracked(skipped, rel, data, glob)
-        _remove_object(skipped, digest)
-        configure_unreachable_endpoint(skipped)
-        _unlink_worktree(skipped, rel)
-        ok = _checkout(
-            skipped, rel, env_updates=skip_download_errors_environment()
-        )
-        print(f"skip-download-errors env checkout exit={ok.returncode}")
-        require_success(ok)
-        body = skipped.read_bytes(rel)
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-        require_invalid_unlike_success(ok, failed)
+def test_multiselect_list_on_null_current_value_is_null():
+    live = require_oneshot_equals(
+        "foo.[includeme, bar.baz[*].common]", _LIST_DOC, _LIST_ORACLE
+    )
+    require_constructed_list(live)
+    require_successful_null(
+        oneshot_search("foo.badkey.[includeme, other]", _LIST_DOC)
+    )
+    on_null = require_search_value(
+        oneshot_search("foo.badkey.[includeme, other]", _LIST_DOC)
+    )
+    print(f"list_null_current live={live!r} on_null={on_null!r}", flush=True)
+    assert on_null is None
+    assert on_null != []
+    assert on_null != [None, None]
+    assert on_null != live
 
 
-def test_skip_download_errors_still_smudges_when_object_is_local():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as default:
-        digest = _seed_tracked(default, rel, data, glob)
-        _unlink_worktree(default, rel)
-        require_success(_checkout(default, rel))
-        assert default.read_bytes(rel) == data
-        print(f"default local checkout digest={digest}")
-    with workspace() as skip_dl:
-        digest = _seed_tracked(skip_dl, rel, data, glob)
-        enable_skip_download_errors(skip_dl)
-        _unlink_worktree(skip_dl, rel)
-        require_success(_checkout(skip_dl, rel))
-        got = skip_dl.read_bytes(rel)
-        print(f"skip-download-errors local len={len(got)}")
-        assert got == data
-    with workspace() as skip_sm:
-        digest = _seed_tracked(skip_sm, rel, data, glob)
-        _unlink_worktree(skip_sm, rel)
-        require_success(
-            _checkout(
-                skip_sm, rel, env_updates=enable_skip_smudge_environment()
-            )
-        )
-        body = skip_sm.read_bytes(rel)
-        print(f"skip-smudge local len={len(body)}")
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
+def test_top_level_multiselect_list():
+    observed = require_oneshot_equals("[bar, baz]", _TOP_LIST_DOC, [1, 2])
+    require_constructed_list(observed)
+    assert observed == [1, 2]
+    assert observed != _TOP_LIST_DOC
+    print(f"top_list={observed!r}", flush=True)
 
 
-def test_smudge_skip_flag_succeeds_when_object_missing():
-    data = _payload()
-    with workspace() as default:
-        default.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(default, data), digest=digest, size=len(data)
-        )
-        _remove_object(default, digest)
-        configure_unreachable_endpoint(default)
-        failed = smudge_bytes(default, pointer)
-        print(f"default missing smudge exit={failed.returncode}")
-        assert failed.returncode != 0
-    with workspace() as skipped:
-        skipped.init_repo()
-        digest = sha256_hex(data)
-        pointer = pointer_from_clean(
-            clean_bytes(skipped, data), digest=digest, size=len(data)
-        )
-        _remove_object(skipped, digest)
-        configure_unreachable_endpoint(skipped)
-        ok = smudge_skip_bytes(skipped, pointer)
-        print(f"skip-flag missing smudge exit={ok.returncode}")
-        require_success(ok)
-        require_generated_pointer_shape(
-            ok.stdout, digest=digest, size=len(data)
-        )
-        assert ok.stdout != data
-        require_invalid_unlike_success(ok, failed)
+def test_runtime_multiselect_list_and_null_current():
+    root = local_ident()
+    keep, inner, field, common, bad = (
+        local_ident(),
+        local_ident(),
+        local_ident(),
+        local_ident(),
+        local_ident(),
+    )
+    keep_payload = local_payload()
+    c1, c2 = local_payload(), local_payload()
+    document = {
+        root: {
+            keep: keep_payload,
+            inner: {field: [{common: c1}, {common: c2}]},
+        }
+    }
+    pair = require_oneshot_equals(
+        f"{root}.[{keep}, {inner}.{field}[*].{common}]",
+        document,
+        [keep_payload, [c1, c2]],
+    )
+    require_constructed_list(pair)
+    assert pair == [keep_payload, [c1, c2]]
+
+    require_successful_null(
+        oneshot_search(f"{root}.{bad}.[{keep}, {local_ident()}]", document)
+    )
+    on_null = require_search_value(
+        oneshot_search(f"{root}.{bad}.[{keep}, {local_ident()}]", document)
+    )
+    assert on_null is None
+    assert on_null != []
+    assert on_null != [None, None]
+
+    k1, k2, k3 = local_ident(), local_ident(), local_ident()
+    p1, p2, p3 = local_payload(), local_payload(), local_payload()
+    top = {k1: p1, k2: p2, k3: p3}
+    two = require_oneshot_equals(f"[{k1}, {k2}]", top, [p1, p2])
+    require_constructed_list(two)
+    three = require_oneshot_equals(f"[{k1}, {k2}, {k3}]", top, [p1, p2, p3])
+    require_constructed_list(three)
+    print(
+        f"runtime_list pair={pair!r} two={two!r} three={three!r} on_null={on_null!r}",
+        flush=True,
+    )
+    assert three == [p1, p2, p3]
+    assert len(three) == 3
+    assert three != two
 
 
-def test_skip_smudge_environment_checkout_succeeds_when_object_missing():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as default:
-        digest = _seed_tracked(default, rel, data, glob)
-        _remove_object(default, digest)
-        configure_unreachable_endpoint(default)
-        _unlink_worktree(default, rel)
-        failed = _checkout(default, rel)
-        print(f"default missing checkout exit={failed.returncode}")
-        assert failed.returncode != 0
-    with workspace() as skipped:
-        digest = _seed_tracked(skipped, rel, data, glob)
-        _remove_object(skipped, digest)
-        configure_unreachable_endpoint(skipped)
-        _unlink_worktree(skipped, rel)
-        ok = _checkout(
-            skipped, rel, env_updates=enable_skip_smudge_environment()
-        )
-        print(f"skip-env missing checkout exit={ok.returncode}")
-        require_success(ok)
-        body = skipped.read_bytes(rel)
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-        require_invalid_unlike_success(ok, failed)
+def test_compile_then_search_multiselect_list():
+    public = compile_once_then_search(
+        "foo.[includeme, bar.baz[*].common]", _LIST_DOC
+    )
+    require_constructed_list(public)
+    assert public == _LIST_ORACLE
+    assert public[0] is True
 
+    root = local_ident()
+    keep, inner, field, common, bad = (
+        local_ident(),
+        local_ident(),
+        local_ident(),
+        local_ident(),
+        local_ident(),
+    )
+    keep_payload = local_payload()
+    c1, c2 = local_payload(), local_payload()
+    document = {
+        root: {
+            keep: keep_payload,
+            inner: {field: [{common: c1}, {common: c2}]},
+        }
+    }
+    parsed = require_search_value(
+        compile_expression(f"{root}.[{keep}, {inner}.{field}[*].{common}]")
+    )
+    first = require_search_value(search_parsed(parsed, document))
+    second = require_search_value(search_parsed(parsed, document))
+    require_constructed_list(first)
+    assert first == second == [keep_payload, [c1, c2]]
 
-def test_install_skip_smudge_checkout_succeeds_when_object_missing():
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    with workspace() as default:
-        digest = _seed_tracked(default, rel, data, glob)
-        _remove_object(default, digest)
-        configure_unreachable_endpoint(default)
-        _unlink_worktree(default, rel)
-        failed = _checkout(default, rel)
-        print(f"ordinary install missing checkout exit={failed.returncode}")
-        assert failed.returncode != 0
-    with workspace() as skipped:
-        digest = _seed_tracked(
-            skipped, rel, data, glob, skip_smudge_install=True
-        )
-        _remove_object(skipped, digest)
-        configure_unreachable_endpoint(skipped)
-        _unlink_worktree(skipped, rel)
-        ok = _checkout(skipped, rel)
-        print(f"skip-smudge install missing checkout exit={ok.returncode}")
-        require_success(ok)
-        body = skipped.read_bytes(rel)
-        require_generated_pointer_shape(body, digest=digest, size=len(data))
-        assert body != data
-        require_invalid_unlike_success(ok, failed)
+    k1, k2, k3 = local_ident(), local_ident(), local_ident()
+    p1, p2, p3 = local_payload(), local_payload(), local_payload()
+    top = {k1: p1, k2: p2, k3: p3}
+    parsed_three = require_search_value(compile_expression(f"[{k1}, {k2}, {k3}]"))
+    first_three = require_search_value(search_parsed(parsed_three, top))
+    second_three = require_search_value(search_parsed(parsed_three, top))
+    require_constructed_list(first_three)
+    assert first_three == second_three == [p1, p2, p3]
+
+    parsed_null = require_search_value(
+        compile_expression(f"{root}.{bad}.[{keep}, {local_ident()}]")
+    )
+    first_null = require_search_value(search_parsed(parsed_null, document))
+    second_null = require_search_value(search_parsed(parsed_null, document))
+    print(
+        f"compile_list public={public!r} pair={first!r} three={first_three!r} "
+        f"on_null={first_null!r}",
+        flush=True,
+    )
+    assert first_null is second_null is None
+    assert first_null != []
 
 
 # ---------------------------------------------------------------------------
-# H. Negative control
+# D. Pipe evaluates left then right; spaces optional; pipe stops a projection
 # ---------------------------------------------------------------------------
 
 
-def test_git_add_fails_when_binary_removed_from_path(isolated_ws, product_binary):
-    isolated_ws.init_repo()
-    install_local_keeping_process(isolated_ws)
-    ext = token()
-    glob = f"*.{ext}"
-    rel = f"payload_{token()}.{ext}"
-    data = _payload()
-    track_pattern(isolated_ws, glob)
-    isolated_ws.write(rel, data)
-    present = isolated_ws.git(["add", "--", rel, ".gitattributes"])
-    require_success(present)
-    hidden_path = path_without_product_bin(isolated_ws.env)
-    rel2 = f"payload_{token()}.{ext}"
-    isolated_ws.write(rel2, data)
-    missing = isolated_ws.git(
-        ["add", "--", rel2],
-        env_updates={"PATH": hidden_path},
+def test_pipe_evaluates_left_then_right():
+    mid = require_oneshot_equals("foo | bar", _PIPE_DOC, {"baz": "one"})
+    require_mapping(mid)
+    assert mid == {"baz": "one"}
+    assert mid != {"baz": "two"}
+    tail = require_oneshot_equals("foo | bar | baz", _PIPE_DOC, "one")
+    print(f"pipe_chain mid={mid!r} tail={tail!r}", flush=True)
+    assert tail == "one"
+    assert tail != "two"
+
+
+def test_pipe_spaces_optional():
+    spaced = require_oneshot_equals("foo | bar | baz", _PIPE_DOC, "one")
+    compact = require_oneshot_equals("foo|bar| baz", _PIPE_DOC, "one")
+    print(f"pipe_spaces spaced={spaced!r} compact={compact!r}", flush=True)
+    assert spaced == compact == "one"
+
+
+def test_pipe_stops_projection_indexes_whole_array():
+    projected = require_search_value(oneshot_search("foo.*.baz", _PIPE_STOP_DOC))
+    require_constructed_list(projected)
+    require_array_multiset(projected, ["subkey", "subkey", "subkey"])
+    assert len(projected) == 3
+    indexed = require_oneshot_equals("foo.*.baz | [0]", _PIPE_STOP_DOC, "subkey")
+    print(f"pipe_stop projected={projected!r} indexed={indexed!r}", flush=True)
+    assert indexed == "subkey"
+    assert indexed is not None
+    assert indexed != []
+    assert indexed != projected
+
+
+def test_runtime_pipe_chain_and_stops_projection():
+    k1, k2, k3 = local_ident(), local_ident(), local_ident()
+    payload = local_payload()
+    chain_doc = {k1: {k2: {k3: payload}}}
+    chained = require_oneshot_equals(f"{k1} | {k2} | {k3}", chain_doc, payload)
+    compact = require_oneshot_equals(f"{k1}|{k2}| {k3}", chain_doc, payload)
+    assert chained == compact == payload
+
+    root, field = local_ident(), local_ident()
+    payloads = [local_payload(), local_payload(), local_payload()]
+    names = [local_ident(), local_ident(), local_ident()]
+    stop_doc = {root: {name: {field: payloads[i]} for i, name in enumerate(names)}}
+    projected = require_search_value(
+        oneshot_search(f"{root}.*.{field}", stop_doc)
+    )
+    require_constructed_list(projected)
+    require_array_multiset(projected, payloads)
+    i = in_range_index(len(payloads))
+    indexed = require_oneshot_equals(
+        f"{root}.*.{field} | [{i}]", stop_doc, projected[i]
+    )
+    print(f"runtime_pipe_stop i={i} indexed={indexed!r}", flush=True)
+    assert indexed == projected[i]
+    assert indexed in payloads
+    assert indexed is not None
+    assert indexed != projected
+    if i != 0:
+        assert indexed != projected[0]
+
+    extra = local_ident()
+    extra_payload = local_payload()
+    ctor_root, ctor_k = local_ident(), local_ident()
+    ctor_payload = local_payload()
+    ctor_doc = {ctor_root: {ctor_k: ctor_payload, extra: extra_payload}}
+    constructed = require_oneshot_equals(
+        f"{ctor_root} | {{{ctor_k}: {ctor_k}}}",
+        ctor_doc,
+        {ctor_k: ctor_payload},
+    )
+    require_mapping(constructed)
+    assert constructed == {ctor_k: ctor_payload}
+    assert extra not in constructed
+    assert constructed != ctor_doc[ctor_root]
+    assert constructed != ctor_payload
+    print(f"runtime_pipe_ctor={constructed!r}", flush=True)
+
+
+def test_compile_then_search_pipe_stops_projection():
+    public_chain = compile_once_then_search("foo | bar | baz", _PIPE_DOC)
+    assert public_chain == "one"
+    public_stop = compile_once_then_search("foo.*.baz | [0]", _PIPE_STOP_DOC)
+    assert public_stop == "subkey"
+
+    root, field = local_ident(), local_ident()
+    payloads = [local_payload(), local_payload(), local_payload()]
+    names = [local_ident(), local_ident(), local_ident()]
+    stop_doc = {root: {name: {field: payloads[i]} for i, name in enumerate(names)}}
+    projected = require_search_value(
+        oneshot_search(f"{root}.*.{field}", stop_doc)
+    )
+    require_constructed_list(projected)
+    i = in_range_index(len(payloads))
+    parsed = require_search_value(
+        compile_expression(f"{root}.*.{field} | [{i}]")
+    )
+    first = require_search_value(search_parsed(parsed, stop_doc))
+    second = require_search_value(search_parsed(parsed, stop_doc))
+    assert first == second == projected[i]
+
+    extra = local_ident()
+    ctor_root, ctor_k = local_ident(), local_ident()
+    ctor_payload, extra_payload = local_payload(), local_payload()
+    ctor_doc = {ctor_root: {ctor_k: ctor_payload, extra: extra_payload}}
+    parsed_ctor = require_search_value(
+        compile_expression(f"{ctor_root} | {{{ctor_k}: {ctor_k}}}")
+    )
+    first_ctor = require_search_value(search_parsed(parsed_ctor, ctor_doc))
+    second_ctor = require_search_value(search_parsed(parsed_ctor, ctor_doc))
+    require_mapping(first_ctor)
+    print(
+        f"compile_pipe chain={public_chain!r} stop={first!r} ctor={first_ctor!r}",
+        flush=True,
+    )
+    assert first_ctor == second_ctor == {ctor_k: ctor_payload}
+    assert extra not in first_ctor
+
+
+# ---------------------------------------------------------------------------
+# E. `@` is the current value being searched
+# ---------------------------------------------------------------------------
+
+
+def test_current_value_token_is_the_document():
+    observed = require_oneshot_equals("@", _AT_DOC, _AT_DOC)
+    require_mapping(observed)
+    assert observed == _AT_DOC
+    print(f"at_document={observed!r}", flush=True)
+
+
+def test_current_value_selects_bar_and_first_foo():
+    bar = require_oneshot_equals("@.bar", _AT_DOC, {"baz": "qux"})
+    require_mapping(bar)
+    assert bar == {"baz": "qux"}
+    field = require_oneshot_equals("bar", _AT_DOC, {"baz": "qux"})
+    assert bar == field
+    first = require_oneshot_equals("@.foo[0]", _AT_DOC, {"name": "a"})
+    require_mapping(first)
+    print(f"at_select bar={bar!r} first={first!r}", flush=True)
+    assert first == {"name": "a"}
+
+
+def test_pipe_then_at_is_left_hand_result():
+    whole = require_oneshot_equals("@", _AT_DOC, _AT_DOC)
+    require_mapping(whole)
+    piped = require_oneshot_equals("foo | @", _AT_DOC, _AT_DOC["foo"])
+    require_constructed_list(piped)
+    print(f"pipe_at whole={whole!r} piped={piped!r}", flush=True)
+    assert piped == _AT_DOC["foo"]
+    assert piped != whole
+    assert piped != _AT_DOC
+
+
+def test_runtime_current_value_and_pipe_at():
+    field = local_ident()
+    root = local_ident()
+    outer_payload, root_payload = local_payload(), local_payload()
+    extra = local_ident()
+    extra_payload = local_payload()
+    root_obj = {field: root_payload, extra: extra_payload}
+    document = {field: outer_payload, root: root_obj}
+    whole = require_oneshot_equals("@", document, document)
+    require_mapping(whole)
+    assert whole == document
+    outer = require_oneshot_equals(f"@.{field}", document, outer_payload)
+    assert outer == outer_payload
+    piped_at = require_oneshot_equals(f"{root} | @", document, root_obj)
+    require_mapping(piped_at)
+    assert piped_at == root_obj
+    assert piped_at != document
+    piped_field = require_oneshot_equals(
+        f"{root} | @.{field}", document, root_payload
     )
     print(
-        f"product_binary={product_binary} hidden_path={hidden_path!r} "
-        f"absent-add exit={missing.returncode}"
+        f"runtime_at outer={outer!r} piped_at={piped_at!r} "
+        f"piped_field={piped_field!r}",
+        flush=True,
     )
-    assert missing.returncode != 0, (
-        "git add succeeded after the product binary was removed from PATH"
+    assert piped_field == root_payload
+    assert piped_field != outer_payload
+    assert piped_field is not None
+
+
+def test_compile_then_search_current_value():
+    public = compile_once_then_search("@", _AT_DOC)
+    require_mapping(public)
+    assert public == _AT_DOC
+
+    field = local_ident()
+    root = local_ident()
+    outer_payload, root_payload = local_payload(), local_payload()
+    extra = local_ident()
+    root_obj = {field: root_payload, extra: local_payload()}
+    document = {field: outer_payload, root: root_obj}
+
+    parsed_at = require_search_value(compile_expression(f"{root} | @"))
+    first_at = require_search_value(search_parsed(parsed_at, document))
+    second_at = require_search_value(search_parsed(parsed_at, document))
+    require_mapping(first_at)
+    assert first_at == second_at == root_obj
+    assert first_at != document
+
+    parsed_field = require_search_value(
+        compile_expression(f"{root} | @.{field}")
     )
-    assert (missing.returncode, missing.stdout, missing.stderr) != (
-        present.returncode,
-        present.stdout,
-        present.stderr,
-    ), "absent-binary git add was not distinguishable from git add with the binary"
+    first_field = require_search_value(search_parsed(parsed_field, document))
+    second_field = require_search_value(search_parsed(parsed_field, document))
+    print(
+        f"compile_at public={public!r} piped={first_at!r} field={first_field!r}",
+        flush=True,
+    )
+    assert first_field == second_field == root_payload
+    assert first_field != outer_payload
+
+
+# ---------------------------------------------------------------------------
+# F. Backtick JSON literals are independent of the document
+# ---------------------------------------------------------------------------
+
+
+def test_json_literals_named_scalars_array_and_object():
+    document = sentinel_document()
+    foo = require_oneshot_equals('`"foo"`', document, "foo")
+    assert foo == "foo"
+    array = require_oneshot_equals("`[1, 2, 3]`", document, [1, 2, 3])
+    require_constructed_list(array)
+    obj = require_oneshot_equals('`{"a": "b"}`', document, {"a": "b"})
+    require_mapping(obj)
+    truth = require_oneshot_equals("`true`", document, True)
+    assert truth is True
+    assert truth is not 1
+    falsehood = require_oneshot_equals("`false`", document, False)
+    assert falsehood is False
+    assert falsehood is not 0
+    require_successful_null(oneshot_search("`null`", document))
+    nothing = require_search_value(oneshot_search("`null`", document))
+    print(
+        f"json_scalars foo={foo!r} array={array!r} obj={obj!r} "
+        f"true={truth!r} false={falsehood!r} null={nothing!r}",
+        flush=True,
+    )
+    assert nothing is None
+
+
+def test_json_digit_literals_zero_through_nine():
+    document = sentinel_document()
+    for digit in range(10):
+        value = require_oneshot_equals(f"`{digit}`", document, digit)
+        assert value == digit
+        assert type(value) is int
+        assert value is not True
+        assert value is not False
+        print(f"json_digit {digit}={value!r}", flush=True)
+
+
+def test_json_literal_starts_subexpression():
+    document = sentinel_document()
+    field = require_oneshot_equals('`{"a": "b"}`.a', document, "b")
+    indexed = require_oneshot_equals("`[0, 1, 2]`[1]", document, 1)
+    print(f"json_subexpr field={field!r} indexed={indexed!r}", flush=True)
+    assert field == "b"
+    assert indexed == 1
+    assert type(indexed) is int
+
+
+def test_json_literal_whitespace_unicode_and_escaped_backtick():
+    document = sentinel_document()
+    leading = require_oneshot_equals('`  {"foo": true}`', document, {"foo": True})
+    require_mapping(leading)
+    assert leading["foo"] is True
+    trailing = require_oneshot_equals('`{"foo": true}   `', document, {"foo": True})
+    require_mapping(trailing)
+    assert trailing["foo"] is True
+    phi = require_oneshot_equals('`"\\u03a6"`', document, _PHI)
+    assert phi == _PHI
+    assert phi != "\\u03a6"
+    assert len(phi) == 1
+    escaped = require_oneshot_equals('`"foo\\`bar"`', document, "foo`bar")
+    print(
+        f"json_ws_unicode leading={leading!r} trailing={trailing!r} "
+        f"phi={phi!r} escaped={escaped!r}",
+        flush=True,
+    )
+    assert escaped == "foo`bar"
+    assert "`" in escaped
+
+
+def test_json_literal_is_independent_of_document():
+    key, payload = local_ident(), local_payload()
+    literal = json_literal_text({key: payload})
+    first_doc = sentinel_document()
+    second_doc = sentinel_document()
+    assert first_doc != second_doc
+    first = require_oneshot_equals(literal, first_doc, {key: payload})
+    second = require_oneshot_equals(literal, second_doc, {key: payload})
+    require_mapping(first)
+    print(f"json_independent first={first!r} second={second!r}", flush=True)
+    assert first == second == {key: payload}
+    assert first != first_doc
+    assert second != second_doc
+
+
+def test_runtime_json_literal_unicode_and_subexpression():
+    document = sentinel_document()
+    expr, decoded = runtime_json_unicode_string_literal()
+    assert decoded != _PHI
+    unicode_value = require_oneshot_equals(expr, document, decoded)
+    assert unicode_value == decoded
+    assert unicode_value != _PHI
+    assert len(unicode_value) == 1
+
+    left, right = local_ident(), local_ident()
+    escaped_expr = escaped_backtick_string_literal(left, right)
+    escaped = require_oneshot_equals(escaped_expr, document, f"{left}`{right}")
+    assert escaped == f"{left}`{right}"
+    assert "`" in escaped
+    assert escaped != f"{left}{right}"
+
+    obj_key, obj_field, obj_payload = (
+        local_ident(),
+        local_ident(),
+        local_payload(),
+    )
+    obj_lit = json_literal_text({obj_field: obj_payload})
+    field_value = require_oneshot_equals(
+        f"{obj_lit}.{obj_field}", document, obj_payload
+    )
+    assert field_value == obj_payload
+
+    items = [local_payload(), local_payload(), local_payload()]
+    i = in_range_index(len(items))
+    array_lit = json_literal_text(items)
+    indexed = require_oneshot_equals(f"{array_lit}[{i}]", document, items[i])
+    print(
+        f"runtime_json unicode={unicode_value!r} escaped={escaped!r} "
+        f"field={field_value!r} i={i} indexed={indexed!r}",
+        flush=True,
+    )
+    assert indexed == items[i]
+    if i != 0:
+        assert indexed != items[0]
+
+
+def test_compile_then_search_json_literal_subexpression():
+    document = sentinel_document()
+    public_field = compile_once_then_search('`{"a": "b"}`.a', document)
+    assert public_field == "b"
+    public_index = compile_once_then_search("`[0, 1, 2]`[1]", document)
+    assert public_index == 1
+
+    obj_field, obj_payload = local_ident(), local_payload()
+    obj_lit = json_literal_text({obj_field: obj_payload})
+    parsed = require_search_value(compile_expression(f"{obj_lit}.{obj_field}"))
+    first = require_search_value(search_parsed(parsed, document))
+    second = require_search_value(search_parsed(parsed, document))
+    assert first == second == obj_payload
+
+    items = [local_payload(), local_payload(), local_payload()]
+    i = in_range_index(len(items))
+    array_lit = json_literal_text(items)
+    parsed_idx = require_search_value(compile_expression(f"{array_lit}[{i}]"))
+    first_idx = require_search_value(search_parsed(parsed_idx, document))
+    second_idx = require_search_value(search_parsed(parsed_idx, document))
+    print(
+        f"compile_json field={first!r} i={i} indexed={first_idx!r}",
+        flush=True,
+    )
+    assert first_idx == second_idx == items[i]
+    if i != 0:
+        assert first_idx != items[0]
+
+
+# ---------------------------------------------------------------------------
+# G. Raw strings: text between single quotes, no JSON escapes
+# ---------------------------------------------------------------------------
+
+
+def test_raw_string_named_oracles_and_zero_is_text():
+    document = sentinel_document()
+    foo = require_oneshot_equals("'foo'", document, "foo")
+    spaced = require_oneshot_equals("'  foo  '", document, "  foo  ")
+    assert spaced == "  foo  "
+    assert spaced != "foo"
+    raw_zero = require_oneshot_equals("'0'", document, "0")
+    json_zero = require_oneshot_equals("`0`", document, 0)
+    print(
+        f"raw_named foo={foo!r} spaced={spaced!r} raw0={raw_zero!r} "
+        f"json0={json_zero!r}",
+        flush=True,
+    )
+    assert raw_zero == "0"
+    assert type(raw_zero) is str
+    assert json_zero == 0
+    assert type(json_zero) is int
+    assert raw_zero != json_zero
+
+
+def test_raw_string_does_not_interpret_unicode_escape():
+    document = sentinel_document()
+    raw = require_oneshot_equals("'\\u03a6'", document, "\\u03a6")
+    json_phi = require_oneshot_equals('`"\\u03a6"`', document, _PHI)
+    print(f"raw_unicode raw={raw!r} json={json_phi!r}", flush=True)
+    assert raw == "\\u03a6"
+    assert len(raw) == 6
+    assert raw != _PHI
+    assert json_phi == _PHI
+
+
+def test_raw_string_quote_and_backslash():
+    document = sentinel_document()
+    quoted = require_oneshot_equals("'foo\\'bar'", document, "foo'bar")
+    letter = require_oneshot_equals("'\\z'", document, "\\z")
+    doubled = require_oneshot_equals("'\\\\'", document, "\\\\")
+    print(
+        f"raw_escapes quoted={quoted!r} letter={letter!r} doubled={doubled!r}",
+        flush=True,
+    )
+    assert quoted == "foo'bar"
+    assert letter == "\\z"
+    assert doubled == "\\\\"
+    assert len(doubled) == 2
+
+
+def test_runtime_raw_string():
+    document = sentinel_document()
+    payload = local_payload()
+    assert "'" not in payload
+    plain = require_oneshot_equals(raw_string_text(payload), document, payload)
+    assert plain == payload
+
+    left, right = local_ident(), local_ident()
+    body = f" {left}\\{right} "
+    assert not body[body.index("\\") + 1 :].startswith("'")
+    kept = require_oneshot_equals(raw_string_text(body), document, body)
+    print(f"runtime_raw kept={kept!r}", flush=True)
+    assert kept == body
+    assert kept.startswith(" ")
+    assert kept.endswith(" ")
+    assert "\\" in kept
+    assert kept != f" {left}{right} "
+    assert kept != body.strip()
+
+    hex4 = f"{(0x4E00 + (int(local_ident()[-4:], 16) % 0x2000)):04x}"
+    assert hex4.lower() != "03a6"
+    escape_text = f"\\u{hex4}"
+    raw_u = require_oneshot_equals(f"'\\u{hex4}'", document, escape_text)
+    assert raw_u == escape_text
+    assert raw_u != chr(int(hex4, 16))
+    assert raw_u != _PHI
+
+    qleft, qright = local_ident(), local_ident()
+    quoted = require_oneshot_equals(
+        f"'{qleft}\\'{qright}'", document, f"{qleft}'{qright}"
+    )
+    assert quoted == f"{qleft}'{qright}"
+
+
+def test_compile_then_search_raw_string():
+    document = sentinel_document()
+    public = compile_once_then_search("'\\u03a6'", document)
+    assert public == "\\u03a6"
+    assert public != _PHI
+
+    left, right = local_ident(), local_ident()
+    body = f" {left}\\{right} "
+    parsed = require_search_value(compile_expression(raw_string_text(body)))
+    first = require_search_value(search_parsed(parsed, document))
+    second = require_search_value(search_parsed(parsed, document))
+    print(f"compile_raw first={first!r}", flush=True)
+    assert first == second == body
+    assert "\\" in first
+    assert first.startswith(" ")
+    assert first.endswith(" ")
+
+
+# ---------------------------------------------------------------------------
+# H. Expression reference: `&` plus an expression, not evaluated immediately
+# ---------------------------------------------------------------------------
+
+
+def test_expression_reference_is_not_evaluated_immediately():
+    live = require_oneshot_equals("foo", _HASH_DOC, {"bar": "bar", "baz": "baz", "qux": "qux"})
+    require_mapping(live)
+    result = oneshot_search("&foo", _HASH_DOC)
+    deferred = require_deferred_reference(
+        result, document=_HASH_DOC, immediates=(live, "bar")
+    )
+    print(f"expr_ref live={live!r} deferred_type={type(deferred).__name__}", flush=True)
+    assert result.exception is None
+    assert deferred is not None
+
+
+def test_runtime_expression_reference_is_deferred():
+    field, other, root, nested = (
+        local_ident(),
+        local_ident(),
+        local_ident(),
+        local_ident(),
+    )
+    payload, other_payload, nested_payload = (
+        local_payload(),
+        local_payload(),
+        local_payload(),
+    )
+    document = {
+        field: payload,
+        other: other_payload,
+        root: {nested: nested_payload},
+    }
+    live = require_oneshot_equals(field, document, payload)
+    assert live == payload
+    deferred = require_deferred_reference(
+        oneshot_search(f"&{field}", document),
+        document=document,
+        immediates=(payload,),
+    )
+    other_deferred = require_deferred_reference(
+        oneshot_search(f"&{other}", document),
+        document=document,
+        immediates=(other_payload,),
+    )
+    nested_live = require_oneshot_equals(
+        f"{root}.{nested}", document, nested_payload
+    )
+    path_deferred = require_deferred_reference(
+        oneshot_search(f"&{root}.{nested}", document),
+        document=document,
+        immediates=(nested_payload, nested_live),
+    )
+    print(
+        f"runtime_expr_ref types={[type(deferred).__name__, type(other_deferred).__name__, type(path_deferred).__name__]}",
+        flush=True,
+    )
+    assert deferred is not None
+    assert other_deferred is not None
+    assert path_deferred is not None
+
+
+def test_compile_then_search_expression_reference_is_deferred():
+    field, root, nested = local_ident(), local_ident(), local_ident()
+    payload, nested_payload = local_payload(), local_payload()
+    document = {field: payload, root: {nested: nested_payload}}
+
+    parsed = require_search_value(compile_expression(f"&{field}"))
+    first = require_deferred_reference(
+        search_parsed(parsed, document),
+        document=document,
+        immediates=(payload,),
+    )
+    second = require_deferred_reference(
+        search_parsed(parsed, document),
+        document=document,
+        immediates=(payload,),
+    )
+    parsed_path = require_search_value(compile_expression(f"&{root}.{nested}"))
+    first_path = require_deferred_reference(
+        search_parsed(parsed_path, document),
+        document=document,
+        immediates=(nested_payload,),
+    )
+    second_path = require_deferred_reference(
+        search_parsed(parsed_path, document),
+        document=document,
+        immediates=(nested_payload,),
+    )
+    print(
+        f"compile_expr_ref types={[type(first).__name__, type(second).__name__, type(first_path).__name__, type(second_path).__name__]}",
+        flush=True,
+    )
+    assert first is not None
+    assert second is not None
+    assert first_path is not None
+    assert second_path is not None
+
+
+# ---------------------------------------------------------------------------
+# I. Named constructor / literal / pipe failures
+# ---------------------------------------------------------------------------
+
+
+def test_backtick_foo_quote_bar_does_not_succeed():
+    document = _baited({"unused": local_payload()})
+    live = require_oneshot_equals('`"foo"`', document, "foo")
+    assert live == "foo"
+    observed = assert_search_is_value_error('`foo"bar`', document)
+    result = oneshot_search('`foo"bar`', document)
+    print(f"foo_quote_bar exc={observed!r}", flush=True)
+    assert result.exception is not None
+    assert result.value is not document
+    assert result.value is not None or result.exception is not None
+    assert result.value != live
+
+
+def test_unclosed_backtick_and_raw_string_are_syntax():
+    document = _baited({"unused": local_payload()})
+    live_json = require_oneshot_equals('`"foo"`', document, "foo")
+    live_raw = require_oneshot_equals("'foo'", document, "foo")
+    assert live_json == "foo"
+    assert live_raw == "foo"
+    assert_search_syntax_not_empty_or_incomplete('`"foo"`'[:-1], document)
+    assert_search_syntax_not_empty_or_incomplete("'foo", document)
+
+
+def test_literal_after_dot_does_not_succeed():
+    document = _baited(_HASH_DOC)
+    live = require_oneshot_equals("foo.bar", document, "bar")
+    observed = assert_search_is_value_error('foo.`"bar"`', document)
+    result = oneshot_search('foo.`"bar"`', document)
+    print(f"literal_after_dot exc={observed!r} live={live!r}", flush=True)
+    assert result.exception is not None
+    assert result.value is not document
+    assert result.value != live
+    assert result.value != "bar"
+
+
+def test_unclosed_or_trailing_comma_multiselect_does_not_succeed():
+    document = _baited(_HASH_DOC)
+    live_hash = require_oneshot_equals(
+        "foo.{bar: bar, baz: baz}", document, {"bar": "bar", "baz": "baz"}
+    )
+    live_list = require_oneshot_equals(
+        "foo.[includeme, bar.baz[*].common]",
+        _baited(_LIST_DOC),
+        _LIST_ORACLE,
+    )
+    require_mapping(live_hash)
+    require_constructed_list(live_list)
+    list_doc = _baited(_LIST_DOC)
+    for expression, doc in (
+        ("foo.{bar: bar", document),
+        ("foo.[includeme", list_doc),
+        ("foo.{bar: bar,}", document),
+        ("foo.[includeme,]", list_doc),
+    ):
+        observed = assert_search_is_value_error(expression, doc)
+        result = oneshot_search(expression, doc)
+        print(f"unclosed_multiselect {expression!r} exc={observed!r}", flush=True)
+        assert result.exception is not None
+        assert result.value is not doc
+        assert result.value != {}
+        assert result.value != []
+        assert result.value != live_hash
+        assert result.value != live_list
+
+
+def test_pipe_with_missing_side_does_not_succeed():
+    document = _baited(_PIPE_DOC)
+    live = require_oneshot_equals("foo | bar", document, {"baz": "one"})
+    require_mapping(live)
+    for expression in ("foo |", "| foo"):
+        observed = assert_search_is_value_error(expression, document)
+        result = oneshot_search(expression, document)
+        print(f"missing_pipe_side {expression!r} exc={observed!r}", flush=True)
+        assert result.exception is not None
+        assert result.value is not document
+        assert result.value != live
+        assert result.value is not None or result.exception is not None
+
+
+def test_runtime_constructor_literal_and_pipe_failures():
+    ident, other = local_ident(), local_ident()
+    payload = local_payload()
+    root, field = local_ident(), local_ident()
+    document = _baited({root: {field: payload}})
+
+    live_json = require_oneshot_equals('`"foo"`', document, "foo")
+    assert live_json == "foo"
+    quoted = assert_search_is_value_error(f'`{ident}"{other}`', document)
+    quoted_result = oneshot_search(f'`{ident}"{other}`', document)
+    print(f"runtime_foo_quote_bar exc={quoted!r}", flush=True)
+    assert quoted_result.exception is not None
+    assert quoted_result.value is not document
+
+    unclosed_json = unclosed_json_literal_text({ident: payload})
+    assert_search_syntax_not_empty_or_incomplete(unclosed_json, document)
+    assert_search_syntax_not_empty_or_incomplete(f"'{payload}", document)
+
+    live_field = require_oneshot_equals(f"{root}.{field}", document, payload)
+    after_dot = f"{root}.{json_literal_text(payload)}"
+    after = assert_search_is_value_error(after_dot, document)
+    after_result = oneshot_search(after_dot, document)
+    print(f"runtime_literal_after_dot exc={after!r} live={live_field!r}", flush=True)
+    assert after_result.exception is not None
+    assert after_result.value is not document
+    assert after_result.value != live_field
+
+    live_hash = require_oneshot_equals(
+        f"{root}.{{{field}: {field}}}", document, {field: payload}
+    )
+    require_mapping(live_hash)
+    for expression in (
+        f"{root}.{{{field}: {field}",
+        f"{root}.[{field}",
+        f"{root}.{{{field}: {field},}}",
+        f"{root}.[{field},]",
+    ):
+        observed = assert_search_is_value_error(expression, document)
+        result = oneshot_search(expression, document)
+        print(f"runtime_unclosed_ms {expression!r} exc={observed!r}", flush=True)
+        assert result.exception is not None
+        assert result.value is not document
+        assert result.value != {}
+        assert result.value != []
+        assert result.value != live_hash
+
+    live_pipe = require_oneshot_equals(f"{root} | {field}", document, payload)
+    for expression in (f"{root} |", f"| {root}"):
+        observed = assert_search_is_value_error(expression, document)
+        result = oneshot_search(expression, document)
+        print(f"runtime_missing_pipe {expression!r} exc={observed!r}", flush=True)
+        assert result.exception is not None
+        assert result.value is not document
+        assert result.value != live_pipe
+
+
+def test_compile_path_constructor_literal_and_pipe_failures():
+    ident, other = local_ident(), local_ident()
+    payload = local_payload()
+    root, field = local_ident(), local_ident()
+    document = _baited({root: {field: payload}})
+
+    assert_compile_syntax_not_empty_or_incomplete('`"foo"`'[:-1])
+    assert_compile_syntax_not_empty_or_incomplete("'foo")
+    assert_compile_syntax_not_empty_or_incomplete(unclosed_json_literal_text({ident: payload}))
+    assert_compile_syntax_not_empty_or_incomplete(f"'{payload}")
+
+    require_unsuccessful_compile_path('`foo"bar`', document)
+    require_unsuccessful_compile_path(f'`{ident}"{other}`', document)
+    require_unsuccessful_compile_path('foo.`"bar"`', _baited(_HASH_DOC))
+    require_unsuccessful_compile_path(
+        f"{root}.{json_literal_text(payload)}", document
+    )
+    require_unsuccessful_compile_path("foo.{bar: bar", _baited(_HASH_DOC))
+    require_unsuccessful_compile_path("foo.[includeme", _baited(_LIST_DOC))
+    require_unsuccessful_compile_path("foo.{bar: bar,}", _baited(_HASH_DOC))
+    require_unsuccessful_compile_path("foo.[includeme,]", _baited(_LIST_DOC))
+    require_unsuccessful_compile_path(f"{root}.{{{field}: {field}", document)
+    require_unsuccessful_compile_path(f"{root}.[{field},]", document)
+    require_unsuccessful_compile_path("foo |", _baited(_PIPE_DOC))
+    require_unsuccessful_compile_path("| foo", _baited(_PIPE_DOC))
+    require_unsuccessful_compile_path(f"{root} |", document)
+    require_unsuccessful_compile_path(f"| {root}", document)
+    print("compile_path_failures_ok", flush=True)

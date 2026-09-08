@@ -11,6 +11,7 @@ import pytest
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
+from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 from cbrun.recipe import (  # noqa: E402
     PIPELINE_BASE_PREFIX,
     RecipeLockError,
@@ -25,16 +26,19 @@ from cbrun.recipe import (  # noqa: E402
 )
 
 
-def _case_dir(case_id: str) -> Path:
-    return BENCHMARK_ROOT / "cases" / case_id
+def _case_dirs() -> list[Path]:
+    dirs = iter_benchmark_case_dirs(BENCHMARK_ROOT / "cases")
+    assert dirs, f"no cases with source/manifest.json under {BENCHMARK_ROOT / 'cases'}"
+    return dirs
 
 
-def test_load_lock_case001_has_base_and_install() -> None:
-    lock = load_lock(_case_dir("case001"))
-    validate_lock_env_install(lock)
-    assert resolve_lock_base_image(lock) == "codingbench-base/ubuntu:24.04"
-    assert "cmake" in lock["runner"]["install_command"]
-    assert env_recipe_tag("case001") == "codingbench-env/case001:recipe-env"
+def test_load_lock_has_base_and_install() -> None:
+    for case_dir in _case_dirs():
+        lock = load_lock(case_dir)
+        validate_lock_env_install(lock)
+        assert resolve_lock_base_image(lock) == "codingbench-base/ubuntu:24.04"
+        assert lock["runner"]["install_command"].strip()
+        assert env_recipe_tag(case_dir.name) == f"codingbench-env/{case_dir.name}:recipe-env"
 
 
 def test_public_base_pull_ref_strips_pipeline_prefix() -> None:
@@ -204,19 +208,22 @@ def test_validate_rejects_missing_install() -> None:
         validate_lock_env_install(lock)
 
 
-def test_stage_bundle_case001_has_public_specs_and_hidden_tests() -> None:
-    case_dir = _case_dir("case001")
+def test_stage_bundle_has_public_specs_and_hidden_tests() -> None:
+    case_dir = _case_dirs()[0]
     final_dir = case_dir / "milestones" / "final"
     with stage_benchmark_bundle(case_dir, final_dir) as bundle:
         assert (bundle / "environment" / "prd" / "Full_PRD.md").is_file()
         assert (bundle / "environment" / "Interface_Contract.md").is_file()
-        assert (bundle / "environment" / "Hardware_Requirements.md").is_file()
+        if (case_dir / "public" / "Hardware_Requirements.md").is_file():
+            assert (bundle / "environment" / "Hardware_Requirements.md").is_file()
         assert (bundle / "final" / "test_manifest.json").is_file()
-        assert (bundle / "final" / "tests" / "F01_acceptance.py").is_file()
+        tests_out = bundle / "final" / "tests"
+        assert tests_out.is_dir()
+        assert any(tests_out.iterdir())
         prd = (bundle / "environment" / "prd" / "Full_PRD.md").read_text(
             encoding="utf-8"
         )
-        assert "Hrefparse" in prd
+        assert prd.strip()
 
 
 def test_stage_bundle_drops_pipeline_metadata(tmp_path: Path) -> None:
@@ -253,7 +260,7 @@ def test_staging_shell_copies_hardware_when_present() -> None:
 def test_cli_build_images_does_not_require_model() -> None:
     from cbrun.cli import _parse_args
 
-    args = _parse_args(["--case", "case001", "--build-images"])
+    args = _parse_args(["--case", "sample", "--build-images"])
     assert args.build_images is True
     assert args.model is None
 
@@ -261,4 +268,4 @@ def test_cli_build_images_does_not_require_model() -> None:
 def test_cli_trial_without_model_is_rejected() -> None:
     from cbrun.cli import main
 
-    assert main(["--case", "case001"]) == 2
+    assert main(["--case", "sample"]) == 2

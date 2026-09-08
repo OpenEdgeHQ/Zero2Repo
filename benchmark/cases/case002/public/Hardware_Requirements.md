@@ -1,42 +1,24 @@
 # Hardware Requirements
 
-This document describes the hardware and toolchain expectations for running
-Judge tests against this case's **PRD-declared core capabilities**.
+This document lists the hardware and toolchain a submitted solution must run
+under. Hidden tests exercise the real capabilities below; a fallback that skips
+a mandatory profile is not a substitute.
 
 ## Summary
 
-This is a CPU-only Go command-line Git extension. No GPU or specialized
-accelerator is required. A standard Linux x86_64 contestant machine with a
-Go toolchain meeting the module minimum (Go 1.25 or newer), GNU make, and
-Git is sufficient to compile the client from source and exercise the
-PRD-declared CLI entrypoints.
-
-## Judge policy
-
-Milestone tests verify **PRD-declared capabilities**, not cheaper
-cross-machine proxies. When a capability is platform-specific, tests must
-exercise that capability on runners where the corresponding profile's
-readiness check succeeds. Graceful-degradation is a separate scenario only
-when the PRD explicitly requires fallback — it must not replace the primary
-capability test.
+This is a pure-Python library that evaluates declarative path expressions against nested JSON-like mappings and sequences and returns the selected values. It has no compiled extensions, native code, or GPU/accelerator requirements, and zero declared runtime dependencies. The documented interpreter floor is Python 3.9 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite.
 
 ## Execution profiles
 
 ### CPU baseline (**mandatory**)
 
-Build the large-file Git extension CLI from this repository's Go module and
-run one real CLI operation against the locally built binary.
+Standard CPU-only Python execution path. Core capability is evaluating a dotted-field expression against a nested mapping from this repository's source tree and returning the selected scalar.
 
 - **Profile id:** `cpu_baseline`
-- **Platforms:** linux
+- **Platforms:** linux, darwin, windows
 - **Required on:** linux
-- **Verification** (what the readiness check exercises, in neutral language —
-  no real package/module names, no raw command):
-  - Compile the module-root main package from this repository into a
-    temporary binary, invoke its version subcommand, and assert a successful
-    exit (the built-from-source client reports its version string).
-- **Setup:** Go 1.25 or newer, GNU make, and Git. Module dependencies are
-  fetched via the Go module proxy.
-- **Build:** Compile the module-root main package into a CLI binary
-  (`go build` at the repository root, or the equivalent `make` target that
-  produces the same binary).
+- **Verification** (what the readiness check exercises, in neutral language — no real
+  package/module names, no raw command):
+  - Load the query engine from this repository's source tree (not a separately published wheel), confirm the imported module file lives under the repository package directory, evaluate a dotted-field expression against a small nested mapping, and assert the extracted scalar equals the expected value.
+- **Setup:** Python 3.9 or newer. Zero runtime third-party dependencies. Tests use a third-party Python test runner. Optional coverage and property-based extras exist and are not required for this profile. No extra system libraries are required beyond a normal interpreter.
+- **Build:** No native compile step. The importable package uses a flat layout at the project root and is packaged with setuptools. An editable install from the project root, or putting the project root on the import path, is enough to import from this tree.

@@ -6,19 +6,19 @@ a mandatory profile is not a substitute.
 
 ## Summary
 
-This is a CPU-only C++20 library for WHATWG-compliant URL parsing, normalization, and component access. It has no GPU or accelerator requirement and no runtime third-party dependencies. A standard Linux x86_64 host with a C++20 compiler (GCC 12 or newer, LLVM 14 or newer, or MSVC 2022 or newer) and CMake 3.16 or newer is sufficient to compile the library from this repository's sources and exercise a parse of an absolute https URL.
+This is a pure-Python library that parses TOML documents into native mappings, sequences, and scalars. The default path has no compiled extensions, no runtime third-party dependencies, and no GPU or accelerator requirements. The documented interpreter floor is Python 3.8 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite. Optional compiled wheels exist for performance on some platforms; they are not required for the mandatory CPU profile.
 
 ## Execution profiles
 
 ### CPU baseline (**mandatory**)
 
-Build the URL-parser library from this repository's CMake sources and run one real parse of an absolute https URL against the locally built artifact.
+Standard CPU-only Python execution path. Core capability is parsing a TOML document from this repository's source tree into native Python dict, list, and scalar values.
 
 - **Profile id:** `cpu_baseline`
 - **Platforms:** linux, darwin, windows
 - **Required on:** linux
 - **Verification** (what the readiness check exercises, in neutral language — no real
   package/module names, no raw command):
-  - Configure and compile this repository's library target from source with CMake in Release mode, compile a small C++20 program that includes the public header and links the just-built archive, parse an absolute `https` URL, and assert that hostname and pathname match the input and that a serialized href is printed.
-- **Setup:** C++20 compiler at the documented floors (GCC 12 or newer, LLVM 14 or newer, or MSVC 2022 or newer) and CMake 3.16 or newer. The library is self-contained at runtime. Optional Ninja generator. Enabling the project's test option additionally fetches a unit-test framework through the CMake package manager.
-- **Build:** Configure from the repository root with CMake and build the library target (library-only configure does not enable tests). When the build type is left unset, the project defaults to Release.
+  - Load the parser from this repository's source tree (not a separately published wheel), confirm the imported module file lives under the source layout, parse a short in-memory TOML document containing one integer assignment, and assert the result equals the expected native mapping.
+- **Setup:** Python 3.8 or newer. Zero runtime third-party dependencies. Tests use the standard-library unit-test runner. Optional compiled-extension wheels exist for performance on some platforms and are not required for this profile. No extra system libraries are required beyond a normal interpreter.
+- **Build:** No native compile step for the default path. The package is src-layout, built with a PEP 517 backend. An editable install from the project root, or putting the source directory on the import path, is enough to import from this tree.
