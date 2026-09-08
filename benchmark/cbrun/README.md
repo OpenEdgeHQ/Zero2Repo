@@ -214,11 +214,15 @@ version when available.
 
 ## Pipeline (per trial)
 
-1. If `:deliverable` is missing, rebuild it from the shared `codingbench-base/*`
-   image plus `source/recipe.lock.json` (install toolchain, copy public specs and
-   hidden tests, leave `/app` empty). Then derive/reuse the `:agent` image
-   (extract hidden tests to host cache, install pinned CLIs, create `cbagent`
-   user, `rm -rf /tests/final`). Idempotent.
+1. If `:deliverable` is missing, rebuild it from `source/recipe.lock.json`.
+   The lock's `codingbench-base/<public>` tag is a local toolchain image
+   built FROM the matching public image (Docker Hub `ubuntu:24.04` for the
+   current suite) using `cbrun/base_image/Dockerfile`. cbrun pulls that
+   public image and builds the toolchain tag when it is absent, then
+   installs the case toolchain, copies public specs and hidden tests, and
+   leaves `/app` empty. Then derive/reuse the `:agent` image (extract
+   hidden tests to host cache, install pinned CLIs, create `cbagent` user,
+   `rm -rf /tests/final`). Idempotent.
 2. Start a GT-free container (`--gpus` only when the case needs it, host network
    for model APIs, **never** the Docker socket).
 3. Inject the instruction; **setup** agent auth/config; **chown** `/app` (+ HOME

@@ -26,6 +26,8 @@ __all__ = [
     "env_recipe_tag",
     "load_lock",
     "recipe_lock_path",
+    "PIPELINE_BASE_PREFIX",
+    "public_base_pull_ref",
     "resolve_lock_base_image",
     "resolve_lock_runner",
     "stage_benchmark_bundle",
@@ -36,6 +38,9 @@ __all__ = [
 SCHEMA_VERSION = 1
 RECIPE_LOCK_NAME = "recipe.lock.json"
 ENV_RECIPE_TAG_SUFFIX = "recipe-env"
+# Local tag used in recipe.lock. Built FROM the public suffix
+# (codingbench-base/ubuntu:24.04 FROM ubuntu:24.04) plus toolchain.
+PIPELINE_BASE_PREFIX = "codingbench-base/"
 
 # Commands that consume a project tree. Invalid during env-only rebuild:
 # there is no seed repo on a public case checkout.
@@ -98,6 +103,26 @@ def resolve_lock_base_image(lock: dict[str, Any]) -> str:
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
     raise RecipeLockError("recipe.lock is missing base_image")
+
+
+def public_base_pull_ref(base_image: str) -> str:
+    """Return the public FROM image for a recipe.lock ``base_image`` tag.
+
+    ``codingbench-base/<public>`` is a local toolchain image, not published.
+    The suffix is the official registry image to pull and use as ``FROM``
+    (current suite: Docker Hub ``ubuntu:24.04``). Tags that are already a
+    public reference are returned unchanged.
+    """
+    name = (base_image or "").strip()
+    if not name:
+        raise RecipeLockError("base_image is empty")
+    prefix = PIPELINE_BASE_PREFIX
+    if name.startswith(prefix):
+        public = name[len(prefix) :].strip()
+        if not public:
+            raise RecipeLockError(f"base_image has empty public suffix: {name}")
+        return public
+    return name
 
 
 def resolve_lock_runner(lock: dict[str, Any], manifest_runner: dict[str, Any]) -> dict[str, Any]:

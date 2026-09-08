@@ -14,3 +14,6 @@ benchmark/.cbrun_cache/
 benchmark/cases/_mapping.private.json
 benchmark/cases/*/source/denylist.json
 .DS_Store
+
+# Local working notes / review guides (not published)
+doc/

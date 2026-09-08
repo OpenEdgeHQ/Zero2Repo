@@ -4,7 +4,11 @@ Clone-and-eval hosts should not download a multi-GB image per case. cbrun
 replays the same env-install-only path as CodingBench-1.6
 (``build_deliverable_env_install_only``):
 
-1. Start from ``recipe.lock.json`` ``base_image`` (must already be present).
+1. Resolve ``recipe.lock.json`` ``base_image``. Tags under
+   ``codingbench-base/`` are a local toolchain image built FROM the matching
+   public image (Docker Hub ``ubuntu:24.04`` for the current suite). If the
+   local tag is missing, pull the public image and ``docker build``
+   ``cbrun/base_image/Dockerfile`` once.
 2. Run ``runner.install_command`` (toolchain only; no seed repo).
 3. Stage public PRD / Contract / optional hardware + hidden ``milestones/final``.
 4. Leave ``/app`` empty. Commit as ``codingbench-benchmark/<case>:deliverable``.
@@ -29,6 +33,7 @@ from .recipe import (
     RecipeLockError,
     env_recipe_tag,
     load_lock,
+    public_base_pull_ref,
     resolve_lock_base_image,
     resolve_lock_runner,
     stage_benchmark_bundle,
@@ -37,6 +42,8 @@ from .recipe import (
 )
 
 __all__ = ["ensure_deliverable_image"]
+
+BASE_IMAGE_DOCKERFILE_DIR = Path(__file__).resolve().parent / "base_image"
 
 DEFAULT_ENV_BUILD_RETRIES = 3
 DEFAULT_ENV_BUILD_RETRY_DELAY_SEC = 15.0
@@ -128,6 +135,55 @@ def _load_manifest_runner(case_dir: Path) -> dict[str, Any]:
     return runner
 
 
+def _ensure_base_image(base_image: str) -> None:
+    """Make *base_image* available locally.
+
+    Public tags are pulled. ``codingbench-base/<public>`` is built FROM the
+    public image using ``base_image/Dockerfile`` (toolchain, not a retag).
+    """
+    if image_exists(base_image):
+        return
+    from_image = public_base_pull_ref(base_image)
+    print(f"[cbrun] pulling {from_image}", flush=True)
+    proc = subprocess.run(["docker", "pull", from_image])
+    if proc.returncode != 0:
+        raise RecipeLockError(
+            f"docker pull failed for {from_image} "
+            f"(exit {proc.returncode}; see streamed docker output above)"
+        )
+    if from_image == base_image:
+        if not image_exists(base_image):
+            raise RecipeLockError(f"base image still missing after pull: {base_image}")
+        return
+
+    dockerfile = BASE_IMAGE_DOCKERFILE_DIR / "Dockerfile"
+    if not dockerfile.is_file():
+        raise RecipeLockError(f"missing base-image Dockerfile: {dockerfile}")
+    print(
+        f"[cbrun] building {base_image} FROM {from_image} "
+        f"({dockerfile})",
+        flush=True,
+    )
+    proc = subprocess.run(
+        [
+            "docker",
+            "build",
+            "--build-arg",
+            f"FROM_IMAGE={from_image}",
+            "-t",
+            base_image,
+            str(BASE_IMAGE_DOCKERFILE_DIR),
+        ]
+    )
+    if proc.returncode != 0:
+        raise RecipeLockError(
+            f"docker build failed for {base_image} "
+            f"(exit {proc.returncode}; see streamed docker output above)"
+        )
+    if not image_exists(base_image):
+        raise RecipeLockError(f"base image still missing after build: {base_image}")
+
+
 def _build_env_image(
     case_dir: Path,
     lock: dict[str, Any],
@@ -145,11 +201,7 @@ def _build_env_image(
         return tag
 
     base_image = resolve_lock_base_image(lock)
-    if not image_exists(base_image):
-        raise RecipeLockError(
-            f"base image not found: {base_image}. Load the shared pipeline "
-            "base (codingbench-base/*) before rebuilding a case deliverable."
-        )
+    _ensure_base_image(base_image)
 
     install = str(runner.get("install_command") or "").strip()
     if not install or install.lower() == "true":

@@ -120,14 +120,18 @@ cp codex.env.example codex.env          # set OPENAI_API_KEY / MODEL
 
 ### Build case images from recipe (no per-case download)
 
-Each case ships `source/recipe.lock.json`. With the shared
-`codingbench-base/*` image already loaded, cbrun rebuilds
-`:deliverable` locally:
+Each case ships `source/recipe.lock.json`. The lock names
+`codingbench-base/ubuntu:24.04`, which is official `ubuntu:24.04` plus a
+shared toolchain (Python, pytest, compilers, Node, Miniconda). If that tag
+is missing, cbrun pulls `ubuntu:24.04` and builds the toolchain image once
+(`benchmark/cbrun/base_image/`), then rebuilds `:deliverable` locally:
 
 ```bash
 cd benchmark
 cbrun --case case001 --build-images
 # or, on the first trial, cbrun builds it automatically
+# or, once by hand:
+#   ./cbrun/base_image/build.sh
 ```
 
 ### Smoke-test the container wiring

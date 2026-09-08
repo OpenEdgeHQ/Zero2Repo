@@ -1,8 +1,11 @@
 """Per-case ``:deliverable`` / ``:agent`` image derivation.
 
-When ``:deliverable`` is missing, cbrun rebuilds it from the shared
-``codingbench-base/*`` image plus ``source/recipe.lock.json`` (env-install-only:
-toolchain, public specs, hidden tests, empty ``/app``). Callers that clone the
+When ``:deliverable`` is missing, cbrun rebuilds it from the recipe base
+(``codingbench-base/<public>``, built FROM the matching public image such as
+Docker Hub ``ubuntu:24.04`` using ``cbrun/base_image/Dockerfile``) plus
+``source/recipe.lock.json`` (env-install-only: toolchain, public specs,
+hidden tests, empty ``/app``). If the local base tag is missing, cbrun pulls
+the public image and builds the toolchain image once. Callers that clone the
 repo therefore do not need a per-case image tarball.
 
 From that ``:deliverable``, cbrun derives an ``:agent`` image by (1) extracting

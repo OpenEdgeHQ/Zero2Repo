@@ -12,9 +12,11 @@ BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
 from cbrun.recipe import (  # noqa: E402
+    PIPELINE_BASE_PREFIX,
     RecipeLockError,
     env_recipe_tag,
     load_lock,
+    public_base_pull_ref,
     resolve_lock_base_image,
     resolve_lock_runner,
     stage_benchmark_bundle,
@@ -33,6 +35,122 @@ def test_load_lock_case001_has_base_and_install() -> None:
     assert resolve_lock_base_image(lock) == "codingbench-base/ubuntu:24.04"
     assert "cmake" in lock["runner"]["install_command"]
     assert env_recipe_tag("case001") == "codingbench-env/case001:recipe-env"
+
+
+def test_public_base_pull_ref_strips_pipeline_prefix() -> None:
+    assert PIPELINE_BASE_PREFIX == "codingbench-base/"
+    assert (
+        public_base_pull_ref("codingbench-base/ubuntu:24.04") == "ubuntu:24.04"
+    )
+    assert public_base_pull_ref("ubuntu:24.04") == "ubuntu:24.04"
+    with pytest.raises(RecipeLockError, match="empty"):
+        public_base_pull_ref("codingbench-base/")
+    with pytest.raises(RecipeLockError, match="empty"):
+        public_base_pull_ref("  ")
+
+
+def test_ensure_base_image_builds_toolchain_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cbrun import recipe_image
+
+    calls: list[list[str]] = []
+    present: set[str] = set()
+
+    def fake_exists(tag: str) -> bool:
+        return tag in present
+
+    def fake_run(argv, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(list(argv))
+        class Result:
+            returncode = 0
+            stderr = ""
+        if argv[:2] == ["docker", "pull"]:
+            present.add(argv[2])
+        if argv[:2] == ["docker", "build"]:
+            tag = argv[argv.index("-t") + 1]
+            present.add(tag)
+        return Result()
+
+    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
+    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
+    recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
+    assert calls[0][:3] == ["docker", "pull", "ubuntu:24.04"]
+    assert calls[1][:2] == ["docker", "build"]
+    assert "--build-arg" in calls[1]
+    assert "FROM_IMAGE=ubuntu:24.04" in calls[1]
+    assert "-t" in calls[1]
+    assert "codingbench-base/ubuntu:24.04" in calls[1]
+    assert str(recipe_image.BASE_IMAGE_DOCKERFILE_DIR) in calls[1]
+    assert (recipe_image.BASE_IMAGE_DOCKERFILE_DIR / "Dockerfile").is_file()
+    assert "codingbench-base/ubuntu:24.04" in present
+
+
+def test_ensure_base_image_pulls_public_tag_without_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cbrun import recipe_image
+
+    calls: list[list[str]] = []
+    present: set[str] = set()
+
+    def fake_exists(tag: str) -> bool:
+        return tag in present
+
+    def fake_run(argv, **kwargs):  # noqa: ANN001, ARG001
+        calls.append(list(argv))
+        class Result:
+            returncode = 0
+            stderr = ""
+        if argv[:2] == ["docker", "pull"]:
+            present.add(argv[2])
+        return Result()
+
+    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
+    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
+    recipe_image._ensure_base_image("ubuntu:24.04")
+    assert calls == [["docker", "pull", "ubuntu:24.04"]]
+    assert not any(c[:2] == ["docker", "build"] for c in calls)
+
+
+def test_ensure_base_image_skips_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cbrun import recipe_image
+
+    def fake_exists(tag: str) -> bool:
+        return tag == "codingbench-base/ubuntu:24.04"
+
+    def fake_run(*args, **kwargs):  # noqa: ANN001, ARG001
+        raise AssertionError("docker must not run when the base image exists")
+
+    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
+    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
+    recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
+
+
+def test_ensure_base_image_raises_when_pull_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cbrun import recipe_image
+
+    monkeypatch.setattr(recipe_image, "image_exists", lambda tag: False)
+
+    class Result:
+        returncode = 1
+        stderr = "denied"
+
+    monkeypatch.setattr(
+        recipe_image.subprocess, "run", lambda *a, **k: Result()  # noqa: ARG005
+    )
+    with pytest.raises(RecipeLockError, match="docker pull failed"):
+        recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
+
+
+def test_base_image_dockerfile_uses_official_sources() -> None:
+    from cbrun.recipe_image import BASE_IMAGE_DOCKERFILE_DIR
+
+    text = (BASE_IMAGE_DOCKERFILE_DIR / "Dockerfile").read_text(encoding="utf-8")
+    assert "FROM ${FROM_IMAGE}" in text
+    assert "nodejs.org/dist" in text
+    assert "repo.anaconda.com/miniconda" in text
+    assert "mirrors.aliyun.com" not in text
+    assert "tuna.tsinghua" not in text
+    assert "npmmirror.com" not in text
+    script = BASE_IMAGE_DOCKERFILE_DIR / "build.sh"
+    assert script.is_file()
 
 
 def test_released_cases_locks_are_env_install_valid() -> None:

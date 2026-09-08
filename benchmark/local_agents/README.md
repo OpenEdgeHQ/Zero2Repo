@@ -17,13 +17,13 @@ cp cursor.env.example cursor.env
 # edit each *.env — keys stay on your machine (gitignored)
 ```
 
-2. Ensure the shared pipeline base is present, then let cbrun rebuild the
-   case `:deliverable` from `recipe.lock` if it is missing (CPU-only smoke
-   default is `case001`):
+2. Let cbrun pull official Ubuntu and build the shared toolchain base
+   (`codingbench-base/ubuntu:24.04`) if it is missing, then rebuild the case
+   `:deliverable` (CPU-only smoke default is `case001`):
 
 ```bash
-docker images codingbench-base/ubuntu:24.04
 cbrun --case case001 --build-images
+# optional one-shot: ./cbrun/base_image/build.sh
 ```
 
 3. Run smoke tests (container-only; does **not** run a full 2h solve):
