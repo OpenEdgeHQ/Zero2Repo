@@ -1,7 +1,7 @@
 # <img src="icon.svg" width="36" height="36" alt="" valign="middle"> Zero2Repo
 
 Formerly CodingBench. Same exam. Clearer name.
-[bench.zero2repo.ai](https://bench.zero2repo.ai/)
+[zero2repo.ai](https://zero2repo.ai/)
 
 Zero2Repo evaluates coding agents on **repo-scale, from-scratch** tasks.
 

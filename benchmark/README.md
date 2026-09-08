@@ -1,6 +1,6 @@
 # zero2repo — Benchmark Harness
 
-Standalone evaluation layer for [zero2repo bench](https://bench.zero2repo.ai/)
+Standalone evaluation layer for [zero2repo](https://zero2repo.ai/)
 cases (formerly CodingBench).
 
 - **Input:** public PRD + Interface Contract (+ optional Hardware Requirements)

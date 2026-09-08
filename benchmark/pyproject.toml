@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://bench.zero2repo.ai/"
+Homepage = "https://zero2repo.ai/"
 Repository = "https://github.com/OpenEdgeHQ/Zero2Repo"
 
 [project.optional-dependencies]

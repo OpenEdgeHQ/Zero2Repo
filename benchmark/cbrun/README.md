@@ -1,6 +1,6 @@
 # cbrun — zero2repo Solver Benchmark Runner
 
-`cbrun` is a Harbor-independent benchmark runner for [zero2repo bench](https://bench.zero2repo.ai/)
+`cbrun` is a Harbor-independent benchmark runner for [zero2repo](https://zero2repo.ai/)
 (formerly CodingBench). It evaluates an autonomous coding agent by giving it
 only the public task specification and letting it build the project from
 scratch, then scoring the result against hidden acceptance tests.
