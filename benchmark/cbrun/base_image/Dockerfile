@@ -1,11 +1,21 @@
 # Shared pipeline base used by recipe.lock as codingbench-base/ubuntu:24.04.
-# FROM official Ubuntu, then the toolchain hidden tests and per-case
-# install_command assume. Node and Miniconda installers are checksum-pinned
-# to the versions in the golden image. Not a retag of ubuntu:24.04.
+# Replays the golden image's layer recipe FROM official Ubuntu, then the
+# toolchain hidden tests and per-case install_command assume.
+#
+# ARG defaults are the official URLs the golden image was actually built
+# with (the Dockerfile ARG stubs still listed China mirrors; build-args
+# overrode them). Node and Miniconda installers are checksum-pinned to the
+# versions in the golden image.
 
 ARG FROM_IMAGE=ubuntu:24.04
 FROM ${FROM_IMAGE}
 
+ARG UBUNTU_VERSION=24.04
+ARG APT_MIRROR=archive.ubuntu.com
+ARG PIP_INDEX=https://pypi.org/simple/
+ARG PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org"
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG NODE_MIRROR=https://nodejs.org/dist
 ARG NODE_VERSION=20.18.1
 ARG NODE_TARBALL_SHA256=c6fa75c841cbffac851678a472f2a5bd612fff8308ef39236190e1f8dbb0e567
 ARG VITEST_VERSION=3.2.6
@@ -13,16 +23,31 @@ ARG TYPESCRIPT_VERSION=5.9.3
 ARG TYPES_NODE_VERSION=20
 ARG PYTEST_VERSION=9.0.3
 ARG SYS_PYTEST_VERSION=9.1.0
-ARG MINICONDA_INSTALLER=Miniconda3-py313_26.3.2-2-Linux-x86_64.sh
+ARG MINICONDA_URL=https://repo.anaconda.com/miniconda/Miniconda3-py313_26.3.2-2-Linux-x86_64.sh
 ARG MINICONDA_SHA256=2284bafb7863a23411b19874d216e237964d4b32dd9beb6807fa8b2d84570961
+ARG CONDA_PKGS_MAIN=https://repo.anaconda.com/pkgs/main
+ARG CONDA_PKGS_R=https://repo.anaconda.com/pkgs/r
+ARG CONDA_PKGS_MSYS2=https://repo.anaconda.com/pkgs/msys2
+ARG CONDA_CLOUD=https://conda.anaconda.org
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     PIP_NO_CACHE_DIR=1 \
-    NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+    NPM_CONFIG_REGISTRY=${NPM_REGISTRY}
 
 RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+      sed -i \
+        "s|http://archive.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g; \
+         s|http://security.ubuntu.com/ubuntu|http://${APT_MIRROR}/ubuntu|g" \
+        /etc/apt/sources.list.d/ubuntu.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+      sed -i \
+        "s|http://archive.ubuntu.com|http://${APT_MIRROR}|g; \
+         s|http://security.ubuntu.com|http://${APT_MIRROR}|g" \
+        /etc/apt/sources.list; \
+    fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -41,17 +66,23 @@ RUN set -eux; \
 RUN set -eux; \
     printf '%s\n' \
       '[global]' \
-      'index-url = https://pypi.org/simple/' \
-      'trusted-host = pypi.org files.pythonhosted.org' \
+      "index-url = ${PIP_INDEX}" \
+      "trusted-host = ${PIP_TRUSTED_HOST}" \
       > /etc/pip.conf
+# PIP_TRUSTED_HOST must stay a quoted ARG: unquoted spaces truncate to "pypi.org".
 
 RUN set -eux; \
-    python3 -m pip install --no-cache-dir --break-system-packages \
-        "pytest==${SYS_PYTEST_VERSION}"
+    if [ "${UBUNTU_VERSION}" = "24.04" ]; then \
+      python3 -m pip install --no-cache-dir --break-system-packages \
+        -i "${PIP_INDEX}" "pytest==${SYS_PYTEST_VERSION}"; \
+    else \
+      python3 -m pip install --no-cache-dir \
+        -i "${PIP_INDEX}" "pytest==${SYS_PYTEST_VERSION}"; \
+    fi
 
 RUN set -eux; \
     curl -fsSL \
-        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+        "${NODE_MIRROR}/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
         -o /tmp/node.tar.xz; \
     echo "${NODE_TARBALL_SHA256}  /tmp/node.tar.xz" | sha256sum -c -; \
     tar -xJ -C /usr/local --strip-components=1 -f /tmp/node.tar.xz; \
@@ -62,9 +93,7 @@ RUN set -eux; \
         "@types/node@${TYPES_NODE_VERSION}"
 
 RUN set -eux; \
-    curl -fsSL \
-        "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" \
-        -o /tmp/miniconda.sh; \
+    curl -fsSL "${MINICONDA_URL}" -o /tmp/miniconda.sh; \
     echo "${MINICONDA_SHA256}  /tmp/miniconda.sh" | sha256sum -c -; \
     bash /tmp/miniconda.sh -b -p /opt/conda; \
     rm -f /tmp/miniconda.sh; \
@@ -73,17 +102,14 @@ RUN set -eux; \
       '  - defaults' \
       'show_channel_urls: true' \
       'default_channels:' \
-      '  - https://repo.anaconda.com/pkgs/main' \
-      '  - https://repo.anaconda.com/pkgs/r' \
-      '  - https://repo.anaconda.com/pkgs/msys2' \
+      "  - ${CONDA_PKGS_MAIN}" \
+      "  - ${CONDA_PKGS_R}" \
+      "  - ${CONDA_PKGS_MSYS2}" \
       'custom_channels:' \
-      '  conda-forge: https://conda.anaconda.org' \
-      '  bioconda: https://conda.anaconda.org' \
+      "  conda-forge: ${CONDA_CLOUD}" \
+      "  bioconda: ${CONDA_CLOUD}" \
       | tee /opt/conda/.condarc /root/.condarc > /dev/null; \
-    for ch in \
-        https://repo.anaconda.com/pkgs/main \
-        https://repo.anaconda.com/pkgs/r \
-        https://repo.anaconda.com/pkgs/msys2; do \
+    for ch in "${CONDA_PKGS_MAIN}" "${CONDA_PKGS_R}" "${CONDA_PKGS_MSYS2}"; do \
       /opt/conda/bin/conda tos accept --override-channels --channel "$ch"; \
     done; \
     /opt/conda/bin/conda install -y "pytest=${PYTEST_VERSION}"; \
