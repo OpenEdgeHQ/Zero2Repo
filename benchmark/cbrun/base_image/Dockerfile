@@ -1,10 +1,7 @@
 # Shared pipeline base used by recipe.lock as codingbench-base/ubuntu:24.04.
-# Starts from official Ubuntu, then installs the toolchain hidden tests and
-# per-case install_command assume (Python, pytest, compilers, Node, Miniconda).
-# Not a retag of ubuntu:24.04.
-#
-# Official download URLs only (no regional mirrors). Node is checksum-pinned.
-# Miniconda uses the official "latest" installer, matching the original recipe.
+# FROM official Ubuntu, then the toolchain hidden tests and per-case
+# install_command assume. Node and Miniconda installers are checksum-pinned
+# to the versions in the golden image. Not a retag of ubuntu:24.04.
 
 ARG FROM_IMAGE=ubuntu:24.04
 FROM ${FROM_IMAGE}
@@ -15,12 +12,15 @@ ARG VITEST_VERSION=3.2.6
 ARG TYPESCRIPT_VERSION=5.9.3
 ARG TYPES_NODE_VERSION=20
 ARG PYTEST_VERSION=9.0.3
-ARG MINICONDA_INSTALLER=Miniconda3-latest-Linux-x86_64.sh
+ARG SYS_PYTEST_VERSION=9.1.0
+ARG MINICONDA_INSTALLER=Miniconda3-py313_26.3.2-2-Linux-x86_64.sh
+ARG MINICONDA_SHA256=2284bafb7863a23411b19874d216e237964d4b32dd9beb6807fa8b2d84570961
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    NPM_CONFIG_REGISTRY=https://registry.npmjs.org
 
 RUN set -eux; \
     apt-get update; \
@@ -39,8 +39,15 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
+    printf '%s\n' \
+      '[global]' \
+      'index-url = https://pypi.org/simple/' \
+      'trusted-host = pypi.org files.pythonhosted.org' \
+      > /etc/pip.conf
+
+RUN set -eux; \
     python3 -m pip install --no-cache-dir --break-system-packages \
-        "pytest==${PYTEST_VERSION}"
+        "pytest==${SYS_PYTEST_VERSION}"
 
 RUN set -eux; \
     curl -fsSL \
@@ -58,10 +65,28 @@ RUN set -eux; \
     curl -fsSL \
         "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" \
         -o /tmp/miniconda.sh; \
+    echo "${MINICONDA_SHA256}  /tmp/miniconda.sh" | sha256sum -c -; \
     bash /tmp/miniconda.sh -b -p /opt/conda; \
     rm -f /tmp/miniconda.sh; \
-    CONDA_PLUGINS_AUTO_ACCEPT_TOS=1 \
-        /opt/conda/bin/conda install -y "pytest=${PYTEST_VERSION}"; \
+    printf '%s\n' \
+      'channels:' \
+      '  - defaults' \
+      'show_channel_urls: true' \
+      'default_channels:' \
+      '  - https://repo.anaconda.com/pkgs/main' \
+      '  - https://repo.anaconda.com/pkgs/r' \
+      '  - https://repo.anaconda.com/pkgs/msys2' \
+      'custom_channels:' \
+      '  conda-forge: https://conda.anaconda.org' \
+      '  bioconda: https://conda.anaconda.org' \
+      | tee /opt/conda/.condarc /root/.condarc > /dev/null; \
+    for ch in \
+        https://repo.anaconda.com/pkgs/main \
+        https://repo.anaconda.com/pkgs/r \
+        https://repo.anaconda.com/pkgs/msys2; do \
+      /opt/conda/bin/conda tos accept --override-channels --channel "$ch"; \
+    done; \
+    /opt/conda/bin/conda install -y "pytest=${PYTEST_VERSION}"; \
     /opt/conda/bin/conda clean -afy; \
     ln -sf /opt/conda/etc/profile.d/conda.sh /etc/profile.d/conda.sh
 
@@ -74,3 +99,9 @@ RUN python3 --version \
     && npm --version \
     && vitest --version \
     && tsc --version
+
+# Present on the golden image (added after the toolchain layers).
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo \
+    && command -v sudo \
+    && rm -rf /var/lib/apt/lists/*
