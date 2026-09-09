@@ -11,7 +11,7 @@ tests** (binary reward: `1.0` / `0.0`). No LLM-as-judge.
 
 This repository ships:
 
-- **4 released cases** under `benchmark/cases/` (Python): Tomlparse, PathSel, Tomlparse, and Signtoken
+- **6 released cases** under `benchmark/cases/` (Python): Tomlparse, PathSel, Tomlparse, Signtoken, httpwire, and Optlyn
 - The **`cbrun`** harness (recommended)
 - An optional **Harbor** adapter
 
@@ -59,7 +59,7 @@ the agent cannot simply recall the upstream repository.
 ### Language-agnostic by construction
 
 The authoring process makes no assumptions about language, build system or test
-framework. This release currently ships four Python cases.
+framework. This release currently ships six Python cases.
 New ecosystems are a matter of adding seed repositories, not rewriting the
 harness.
 
