@@ -6,19 +6,19 @@ a mandatory profile is not a substitute.
 
 ## Summary
 
-This is a pure-Python library that parses TOML documents into native mappings, sequences, and scalars. The default path has no compiled extensions, no runtime third-party dependencies, and no GPU or accelerator requirements. The documented interpreter floor is Python 3.8 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite. Optional compiled wheels exist for performance on some platforms; they are not required for the mandatory CPU profile.
+This is a CPU-only TypeScript/JavaScript library that parses and serializes YAML 1.2 (with optional YAML 1.1 types). It has no compiled native extensions, no GPU or accelerator requirement, and one declared runtime dependency used only by the command-line entry. A standard Linux, macOS, or Windows host with a current Node.js LTS interpreter and npm is sufficient to install from this repository, run the documented bundle step, and exercise a parse of a one-key mapping against the locally built artifact.
 
 ## Execution profiles
 
 ### CPU baseline (**mandatory**)
 
-Standard CPU-only Python execution path. Core capability is parsing a TOML document from this repository's source tree into native Python dict, list, and scalar values.
+Build the YAML parser/serializer from this repository's TypeScript sources and run one real load of a one-key mapping against the locally produced ESM artifact.
 
 - **Profile id:** `cpu_baseline`
 - **Platforms:** linux, darwin, windows
 - **Required on:** linux
 - **Verification** (what the readiness check exercises, in neutral language — no real
   package/module names, no raw command):
-  - Load the parser from this repository's source tree (not a separately published wheel), confirm the imported module file lives under the source layout, parse a short in-memory TOML document containing one integer assignment, and assert the result equals the expected native mapping.
-- **Setup:** Python 3.8 or newer. Zero runtime third-party dependencies. Tests use the standard-library unit-test runner. Optional compiled-extension wheels exist for performance on some platforms and are not required for this profile. No extra system libraries are required beyond a normal interpreter.
-- **Build:** No native compile step for the default path. The package is src-layout, built with a PEP 517 backend. An editable install from the project root, or putting the source directory on the import path, is enough to import from this tree.
+  - Run the documented from-source bundle step, import the locally produced ESM artifact from the distribution directory (not a separately published registry package), parse a one-key YAML mapping whose value is an integer, and assert the loaded object carries that integer under the expected key.
+- **Setup:** A current Node.js LTS interpreter and npm. The suite uses the runtime's built-in test runner. The only declared runtime dependency is a command-line argument parser used by the CLI entry, not by the library load/dump path. No extra system libraries beyond a normal JavaScript toolchain; no GPU or accelerator.
+- **Build:** TypeScript sources are bundled into ESM, CommonJS, and browser artifacts plus type declarations under the distribution directory. There is no native compile step.

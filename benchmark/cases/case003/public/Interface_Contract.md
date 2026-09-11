@@ -4,282 +4,180 @@
 
 ### Product overview
 
-**Tomlparse** is a Python library that reads TOML text and returns ordinary Python values. It is a parser only: it does not write TOML, and it does not preserve comments, ordering of presentation, or other style. The language this product implements is **TOML v1.1.0**.
+**ymlcodec** is a YAML parser and writer for JavaScript. It reads YAML text into ordinary JavaScript values and writes JavaScript values back as YAML text. The default load dialect is YAML 1.2 Core. The YAML 1.1 type set is available when the caller selects that dialect. Completeness against the YAML 1.2 specification is background; graded behavior is the parse, type-resolution, and dump outcomes of the published library entries.
 
-A first-time integrator hands Tomlparse a short document such as two array-of-tables items, each with a name and a number, and receives a mapping whose sequence contains those two mappings with a Python string and a Python integer. Leaving the number as a string, accepting a document that TOML v1.1.0 forbids, or returning a custom comment-preserving node instead of a plain mapping is a failure of the product.
+A common first use is to take a one-key mapping such as `answer: 42` and obtain a plain object whose `answer` property is the number 42, then write that object back as YAML. Leaving `42` as the string `42`, or writing a document that re-parses as a different value, is a failure of the product.
 
-The finished product is an **importable Python library**, not a command-line program, not a network service, and not a wire protocol. Integrators install the Tomlparse package and call the published parse entries. There is no dump, write, or encode entry. There is no product-owned configuration file.
+The finished product is a **library**, not a network service and not an importable Python package. Integrators install the ymlcodec package and call the published parse and dump entries. A command-line convenience also named ymlcodec can turn a YAML file into JSON text, or a JSON file into YAML text; it is the same parse-and-dump behavior, not a separate product.
 
-The product is a pure-Python library with zero runtime third-party dependencies. Optional compiled wheels may exist on some platforms for speed; they are not required. The language is Python 3.8 or newer, including CPython and PyPy. Platforms are Linux, macOS, and Windows. Hardware is CPU-only.
+There are no compiled native extensions. A current Node.js LTS interpreter and npm are sufficient to install from this repository, run the documented bundle step, and exercise a parse against the locally built artifact. Platforms are Linux, macOS, and Windows; documented execution is Linux. Hardware is CPU-only.
 
-Exact parameter lists, return shapes, and raised types for individual symbols belong with those symbols, not here.
+JavaScript-specific tags that construct functions, regular expressions, or other host-only values are not part of this library. The low-level event stream, document tree, and tree visitor exist so advanced callers can build their own pipeline; they are not a separate graded product. Speed is a design goal, not a graded oracle.
 
 ### Shape of the public surface
 
-The public surface is the importable package `tomlparse`. Callers write `import `tomlparse`` or `from `tomlparse` import …` and obtain the published entries from that package root. The importable package is a single top-level directory named `tomlparse` under `src`. Importing the package performs no I/O against caller files, starts no processes, and opens no sockets.
+The public surface is a **JavaScript library** published as an ESM module, plus an optional convenience CLI that applies the same parse-and-dump entries to a file. There is no wire protocol and no product configuration-file format.
 
-The independently verifiable library entries, grouped by role, are:
+**Distribution and import.** The installable package name and the import specifier are both ymlcodec. Callers write `import { `load` } from 'ymlcodec'` (and the same form for the other named exports below). The library is not a default-export singleton.
 
-- `loads` — parse one TOML v1.1.0 document from a Python text string into a document mapping, or fail.
-- `load` — parse the same language from a binary file object whose bytes are interpreted as `UTF-8`, or fail.
-- `TOMLDecodeError` — the documented parse-failure exception. It is a kind of `ValueError`.
+The package manifest is `package.json` at the built repository root. The ESM library artifact is the file named by `exports``["."].``import`, or, if that field is absent, by `module`. That file must exist and must be importable as an ES module. A CommonJS build and a browser export may ship alongside; they are not required for this surface. The convenience CLI, when published, is the file named by `bin` (the ymlcodec key, or the sole / first `bin` path).
 
-Both parse entries accept an optional float converter (keyword `parse_float`) so TOML floats, including `inf` and `nan` spellings, can be built as something other than a Python float. When that converter is omitted, floats are Python floats. The converter does not change table or array structure, and it is not applied to integers, strings, booleans, or date-times.
+Importing the module performs no I/O against caller files, starts no processes, and opens no sockets. Each call is self-contained: schema objects and custom tags constructed for one call do not leak into another unless the caller passes them again.
 
-**Not in this surface.** Encoding or writing TOML. Comment-preserving or style-preserving round-trip parsing. A command-line program, a web server, or a configuration framework. A fallback import of the standard-library TOML module. Parse throughput is not a published interface.
+**Library entries.** The three published call entries are:
+
+- `load` — single-document parse. The first argument is YAML text. An optional options object may follow. Returns exactly one constructed value. Throws when the stream is empty, contains only whitespace and comments, or contains more than one document.
+- `loadAll` — multi-document parse. The first argument is YAML text. An optional options object may follow. Returns every constructed document, in order, as an array. An empty stream, or a stream of only whitespace and comments, returns an empty array.
+- `dump` — serialize one JavaScript value as YAML text. The first argument is the value. An optional options object may follow.
+
+Parameter defaults, return shapes, and thrown conditions for each entry belong with those symbols.
+
+**Schemas.** The four built-in schemas are named exports: `FAILSAFE_SCHEMA`, `JSON_SCHEMA`, `CORE_SCHEMA`, and `YAML11_SCHEMA`. They are values of `Schema`. Both parse entries use `CORE_SCHEMA` when the caller does not pass `schema`. The default dump schema is `YAML11_SCHEMA` extended so that YAML 1.2 `0o` integers and exponent-only floats count as typed scalars when deciding whether a string needs quotes. A schema is extended by `withTags` on that schema object.
+
+**Tags.** Custom scalar, sequence, and mapping tags are created with `defineScalarTag`, `defineSequenceTag`, and `defineMappingTag`, then attached with `withTags`. Built-in tags that callers attach by name include `mergeTag` (YAML 1.1 merge keys on a schema that does not already have them), `realMapTag` (`!!map` stored as a JavaScript `Map`), `legacyMapTag` (`!!map` that stringifies complex keys), and `mapTag` (the default plain-object `!!map`). Attaching `realMapTag` or `legacyMapTag` replaces the default map for that schema; the three mapping tags share the `!!map` name and are not three simultaneous containers. A schema must include the default string tag `!!str`.
+
+**CLI.** The convenience binary is ymlcodec. It reads one file (or standard input) and writes JSON or YAML on standard output using `loadAll` and `dump`. It is the same library behavior. Exact flags and process exit codes belong with that entry if it is specified; they are not a separate product.
+
+Exact signatures, option defaults, and raised conditions for individual symbols belong with those symbols, not here.
 
 ### Naming conventions
 
-**Product and package.** The product identity is Tomlparse. The installable distribution name and the importable top-level package are spelled `tomlparse`.
+**Product and package.** The product identity is ymlcodec. The package name, the import specifier, the `bin` key, and the convenience CLI basename are spelled ymlcodec.
 
-**Parse entries.** String parse is `loads` (plural). Binary-file parse is `load` (singular). The first argument of `loads` is the document as a Python text string, passed positionally. The first argument of `load` is a file object opened for binary reading. The optional float converter on both entries is the keyword `parse_float`.
+**Parse and dump entries.** Single-document parse is `load`. Multi-document parse is `loadAll` (camelCase, capital A). Serialize is `dump`.
 
-**Decode error.** Parse failure of invalid TOML is `TOMLDecodeError`. That name is PascalCase. It is a subclass of `ValueError`. It is not `RecursionError` and it is not `TypeError`.
+**Schema exports.** Failsafe is `FAILSAFE_SCHEMA`. JSON is `JSON_SCHEMA`. Core is `CORE_SCHEMA`. YAML 1.1 is `YAML11_SCHEMA`. The constructor / type name is `Schema`. The attach operation is `withTags`.
 
-**TOML keyword spellings.** Boolean values are only the lowercase tokens `true` and `false`. Special float spellings are `inf`, `+inf`, `-inf`, `nan`, `+nan`, and `-nan`. The same four words `true`, `false`, `inf`, and `nan` are valid **keys** when used as bare keys.
+**Parse option keys.** The options object accepted by `load` and `loadAll` uses these keys: `filename` (source-path label for failure reports), `schema`, `json` (JSON-parse compatibility for duplicate keys), `maxDepth` (collection nesting), `maxAliases` (alias count per document), `maxTotalMergeKeys` (merge-key work across the whole call).
 
-**Layout.** The importable package directory is `tomlparse` under `src`.
+**Dump option keys.** The options object accepted by `dump` uses `schema` plus these presentation keys: `indent`, `flowLevel`, `seqNoIndent`, `seqInlineFirst`, `skipInvalid`, `sortKeys`, `lineWidth`, `noRefs`, `quoteStyle`, `forceQuotes`, `flowBracketPadding`, `flowSkipCommaSpace`, `flowSkipColonSpace`, `quoteFlowKeys`, `tagBeforeAnchor`, `transform`. When quotes are required, `quoteStyle` is `single` or `double`.
+
+**Tag factories and attachable tags.** Factories: `defineScalarTag`, `defineSequenceTag`, `defineMappingTag`. Attachable replacements and extras: `mapTag`, `realMapTag`, `legacyMapTag`, `mergeTag`.
+
+**YAML type names.** The Failsafe / JSON / Core tags are `!!null`, `!!bool`, `!!int`, `!!float`, `!!str`, `!!seq`, `!!map`. The YAML 1.1 extras are `!!binary`, `!!timestamp`, `!!set`, `!!omap`, `!!pairs`. The merge key is `<<`. A local tag is written with a single `!` (for example `!point`). The long form of the standard prefix is `tag:yaml.org,2002:`. A `%TAG` directive may put digits in the handle.
+
+**Document markers.** Documents may be separated by the document-start marker `---` and the document-end marker `...`.
+
+**Constructed JavaScript types.** Default `!!map` is a plain object. `!!seq` is an array. `!!null` is JavaScript `null`. `!!bool` is boolean. `!!int` / `!!float` are numbers when they fit in a JavaScript number; an integer that does not fit stays a string. `realMapTag` constructs a `Map`. `!!set` constructs a `Set`. `!!binary` constructs a `Uint8Array`. `!!timestamp` constructs a date value. The prototype-accessor key `__proto__` is stored as an own data property.
 
 ### Global observables an implementer must reproduce
 
 **No product config file.** The library does not read a configuration-file syntax of its own and does not require a config file to be present.
 
-**No command-line product.** There is no console-script entry and no `python -m` program that is part of this surface. Outcomes are returned or raised from library calls. Parse entries do not exit the host process.
+**Built artifact.** The graded surface is the locally built ESM module named from `package.json` as above. When that artifact is absent from the module search path, a parse of `answer: 42` does not produce a successful ymlcodec document.
 
-**Library substrate.** When the `tomlparse` package is not importable, a program that does `from `tomlparse` import `loads`` and then calls `loads` on the one-line document `name = "probe"` does not run to completion and does not yield a successful document mapping. When the package is importable, that same document yields a mapping whose `name` value is the string `probe`.
+**Success versus failure.** A successful parse returns the constructed value (`load`) or the array of constructed documents (`loadAll`). A failed parse throws and does not yield a usable document. The caller can tell success from failure before reading any constructed value. The exact exception class name, the exact wording of the message, and whether reported line numbers are zero-based or one-based are not part of this surface.
 
-**Document mapping.** A successful parse returns a Python mapping whose keys are strings and whose values are ordinary Python mappings, sequences, and scalars (strings, integers, floats, booleans, and standard-library date, time, and datetime values). The product does not return custom node types in order to keep comments or layout. Integers are integers and not booleans; booleans are booleans and not the integers 1 and 0 and not strings.
+**Source-path label.** When `filename` is supplied (for example `my.yml`) and parse fails, an observer can see that label in the failure report. A parse of `@` with that label fails and the report includes that label. A parse of `a: 1` then a carriage-return/line-feed then `@`, with a source-path label, fails on the later line; the report identifies that later line, not the first.
 
-**Empty document.** A parse of empty text, of text that is only whitespace, or of text that is only comments succeeds and yields an empty mapping. A document whose only content is the comment `#no newlines at all here` (no line feed) yields an empty mapping. A binary file with no bytes yields the same empty mapping.
+**The two parse entries differ on empty and multi-document streams.** `load` of empty text, or of text that is only whitespace and comments, fails. `loadAll` of the same text succeeds with an empty array. `load` of a stream that contains more than one document fails. `loadAll` of that stream succeeds with one array element per document, in order. Two document-start markers and nothing else are two empty documents: `loadAll` returns two null values; `load` fails.
 
-**TOML v1.1.0.** The dialect is TOML v1.1.0. Documents that v1.0.0 forbids and v1.1.0 allows are accepted, including newlines and trailing commas in inline tables. A table header must close on the same line. Keys may be bare, quoted as a basic or literal string, or dotted. Letter case is significant. Duplicate keys in the same table are refused. An inline table cannot be mutated after it is built.
+**Byte-order mark.** A leading byte-order mark is ignored. A single-document parse of a stream that begins with a byte-order mark and then `foo: bar` yields the same object as a parse of `foo: bar` alone.
 
-**Comments and line endings.** A comment starts at `#` and runs to the end of the line. A hash inside a string is not a comment. Indentation may be spaces or tabs and does not change meaning. A carriage-return/line-feed pair in the input is treated as a single line feed, including inside string values.
+**Default load dialect.** Implicit type resolution on both parse entries is YAML 1.2 Core unless the caller passes `schema`. Merge keys and the YAML 1.1-only types are off until the caller selects `YAML11_SCHEMA` or attaches those tags. Switching schema is the only way those implicit rules change.
 
-**Binary input.** `load` reads a **binary** file object and interprets the bytes as `UTF-8`. A file object opened in text mode is refused with `TypeError`, not `TOMLDecodeError`. Bytes that are not valid `UTF-8` do not yield a document mapping. For the same TOML characters, `load` after `UTF-8` decoding yields the same document mapping as `loads`.
+**Default dump dialect.** `dump` quotes strings that the default dump schema would otherwise read back as a different type (for example the string `yes`, the string `true`, the string `42`, the string `null`, and the document markers `---` / `...`). Presentation defaults are two-space indent and an 80-column line width. Shared object identity becomes an anchor plus an alias unless `noRefs` is on.
 
-**Wrong Python type versus invalid TOML.** `loads` accepts a Python text string only. Passing a bytes object or a boolean fails with `TypeError`, not `TOMLDecodeError`. The observer can tell “wrong Python type” from “invalid TOML”.
+**Duplicate keys.** Duplicate keys in one mapping are rejected by default. When `json` is true, the later pair wins. That switch applies to every document of a multi-document parse.
 
-**Decode error.** When the document is not valid TOML, the parse does not succeed and does not deliver a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError`: a caller who handles `ValueError` also handles parse failures, and a caller who handles only `TOMLDecodeError` does not catch unrelated type errors. Wording of the decode-error report is not a compatibility contract. When the problem is at a character inside the document, an observer can recover a 1-based line number and a 1-based column number for that character. When the document ended too early, an observer can tell the failure is at the end of the document. From the same failure, the unformatted reason, the original document text, and a 0-based character offset are each recoverable, separately from the formatted report.
+**Anchors and aliases.** An `&name` label and a later `*name` refer to the same constructed value (same identity, not a copy). A recursive alias is allowed for the default sequence and mapping tags.
 
-**Recursion versus decode.** An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That failure is not `TOMLDecodeError`. The observer can tell those two failure kinds apart.
+**Limits.** Default collection nesting (`maxDepth`) is 100 levels and does not count aliases. Default alias budget (`maxAliases`) is unlimited (`-1`; `0` rejects every alias). Default merge-key budget (`maxTotalMergeKeys`) is 10000 keys processed by `<<` across one `load` / `loadAll` call (`-1` disables). Crossing a limit fails the parse and yields no document. The alias budget is per document; the merge-key budget is per call. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
 
-**Float converter.** Any callable that accepts the token text and returns a value that is not a dictionary or a list (and not a subtype of either) is allowed as `parse_float`. If the converter returns a dictionary or a list, the parse fails with `ValueError`. That failure is not `TOMLDecodeError`.
+**Untrusted input.** The YAML design allows a tiny document to expand into a huge object graph. Walking a constructed value after a successful parse (for example by converting it to JSON) is the caller’s responsibility.
 
-## `tomlparse`
+**No product-owned process exit codes on the library path.** `load`, `loadAll`, and `dump` report outcomes by returning a value or throwing. They do not exit the host process.
 
-The installable distribution and the importable top-level package are both `tomlparse`. Callers declare the interface from this package root (`import `tomlparse`` or `from `tomlparse` import …`). Importing the package performs no I/O, starts no processes, and opens no sockets.
+## `Schema`
 
-The importable package is a single top-level directory named `tomlparse` under `src`.
+Named export. Constructor / type name for a schema. Callers write `import { `Schema` } from 'ymlcodec'`. The four built-in schemas `FAILSAFE_SCHEMA`, `JSON_SCHEMA`, `CORE_SCHEMA`, and `YAML11_SCHEMA` are values of `Schema`.
 
-These names are importable as ``tomlparse`.<name>` and as `from `tomlparse` import <name>`:
+### Create call
 
-- `loads`
-- `load`
-- `TOMLDecodeError`
+The create call is `new `Schema`(tagArray)`: one argument, the complete tag list as an array. That list is the whole schema, not an extension of a built-in. A successful instance has `withTags`.
 
-Typical import used to parse a TOML string and handle invalid input:
+A schema must include the default string tag `!!str`. A list without `!!str` cannot be used:
 
-```
-from `tomlparse` import `TOMLDecodeError`, `loads`
-```
+- `new `Schema`([])` fails. The caller does not obtain a usable schema.
+- `new `Schema`(tags)` whose array is nonempty but still has no `!!str` (for example one custom scalar from `defineScalarTag`) also fails. The caller does not obtain a usable schema.
 
-A script that only needs a subset may import that subset, for example `from `tomlparse` import `loads`` or `from `tomlparse` import `TOMLDecodeError``. Binary-file parse is `from `tomlparse` import `load``.
+Failure is a throw. A later parse failure is not evidence that create failed.
 
-When `tomlparse` is not importable, a program that does `from `tomlparse` import `loads`` does not run to completion and does not yield a document mapping. When the package is importable, `loads` of the one-line document `name = "probe"` yields a mapping whose `name` value is the string `probe`.
+Extending a built-in schema is `withTags` on that schema, not a second `Schema` create. Custom tags are built with `defineScalarTag`, `defineSequenceTag`, and `defineMappingTag` and then either attached with `withTags` or, when creating from scratch, included in the `Schema` list together with `!!str`.
 
-## `tomlparse.TOMLDecodeError`
+## `defineMappingTag`
 
-Import `TOMLDecodeError` from the package root `tomlparse` (`from `tomlparse` import `TOMLDecodeError``). Exception class raised when a document is not valid TOML. It is a class (a type), not a factory function and not a string.
+Named export. Factory for a mapping custom tag. Callers write `import { `defineMappingTag` } from 'ymlcodec'`.
 
-### Signature
+The call is a tag-name string plus one options object: `defineMappingTag``(name, options)`. The name is the handle (`!space`, `!Include`, or another local tag). The options object uses these keys: `matchByTagPrefix`, `create`, `addPair`, `has`, `keys`, `get`, `identify`, `represent`, and `representTagName`. Keys a given tag does not use may be omitted. The return is a tag object attached with `withTags` or passed in the list given to `Schema`.
 
-```
-`TOMLDecodeError`(`msg`, `doc`, `pos`)
-```
+The same tag name may be registered for more than one node kind. A schema that defines both a scalar `!Include` (via `defineScalarTag`) and a mapping `!Include` parses `!Include foobar` as the scalar result and `!Include` followed by a `location: foobar` mapping as the mapping result. Those two results are distinct.
 
-- `msg` — the unformatted reason, as text.
-- `doc` — the TOML document text being parsed, as text.
-- `pos` — the 0-based character offset into `doc` where parsing failed, as an integer.
+### Options
 
-A caller can produce the exception by supplying those three values. The resulting failure identifies that place the same way a parse failure does: reason, document, offset, 1-based line, and 1-based column are each recoverable, and the formatted report includes that location. Supplying reason `error parsing`, document `v=1` then a line feed then `[table]` then a line feed then `v='val'`, and offset 13, the recovered line is 3 and the recovered column is 2.
+- `matchByTagPrefix` — boolean. Same exact-versus-prefix rule as `defineScalarTag`. A prefix-matching `!` mapping accepts `!unknown_mapping_tag { foo: 1, bar: 2 }` and remembers that name plus the constructed pairs.
+- `create` — start the container. Invoked with no arguments, or as `(tagName)` so a prefix catch-all can store the original node name. A `!space` tag that understands `height`, `width`, and `points` starts a space object.
+- `addPair` — receive each key/value pair. Invoked as `(container, key, value)`. A parse of a `!space` node with those three keys stores the numbers and the `points` sequence on the space object. A nested `!point` item inside `points` is constructed by the sequence tag on the same schema.
+- `has` — dump membership. Invoked as `(container, key)`.
+- `keys` — dump key list. Invoked as `(container)` and returns the keys to write (`height`, `width`, `points` for a space).
+- `get` — dump lookup. Invoked as `(container, key)` and returns the value for that key.
+- `identify` — dump predicate. A true result means this tag owns the value. Dump of a space writes `!space`. Dump of a plain object with the same keys does not write `!space`.
+- `represent` — dump body. Receives the identified value. May return a `Map` of pairs that dump must write. Dump of a `!space` object writes `height`, `width`, and `points` under `!space`. Dump of a never-parsed space-shaped value that `identify` accepts writes `!space` and those keys. Dump-then-parse restores the tagged form and the same numbers.
+- `representTagName` — dump tag name. A prefix catch-all that stored `tagName` writes that same name back (`!unknown_mapping_tag`).
 
-### Inheritance and discrimination
+Without an attached matching tag, a parse of a `!space` node or of an unknown local mapping fails and yields no document.
 
-`TOMLDecodeError` is a subclass of `ValueError`. An instance raised for invalid TOML is both a `TOMLDecodeError` and a `ValueError`. It is not a `RecursionError`. A `RecursionError` raised when nesting exceeds the interpreter’s recursion limit is not a `TOMLDecodeError`. A `TypeError` raised for the wrong Python input type (for example a bytes object or a boolean passed to `loads`, or a text-mode file passed to `load`) is not a `TOMLDecodeError`.
+## `defineScalarTag`
 
-### Recoverable location
+Named export. Factory for a scalar custom tag. Callers write `import { `defineScalarTag` } from 'ymlcodec'`.
 
-A raised instance exposes:
+The call is a tag-name string plus one options object: `defineScalarTag``(name, options)`. The name is the handle (`!tag2`, `!foo`, `!`, or another local tag). The options object uses these keys: `matchByTagPrefix`, `implicit`, `resolve`, `identify`, `represent`, and `representTagName`. Keys a given tag does not use may be omitted. The return is a tag object, not a schema. Callers attach it with `withTags` or pass it in the list given to `Schema`.
 
-- `msg` — the unformatted reason.
-- `doc` — the original document text.
-- `pos` — the 0-based character offset.
-- `lineno` — the 1-based line corresponding to `pos`.
-- `colno` — the 1-based column corresponding to `pos`.
+### Options
 
-These values are recoverable separately from the formatted report that includes the location. Wording of that formatted report is not a compatibility contract. When `pos` is at or past the end of `doc`, an observer can tell the failure is at the end of the document rather than at a line and column in the interior.
+- `matchByTagPrefix` — boolean. `false` is an exact name. `true` matches any node whose tag begins with the given name. An exact name wins over a prefix: a schema that has an exact `!foo` scalar and prefix-matching `!foo` and `!` scalars uses the exact tag for `!foo 1`, the `!foo` prefix for `!foo2 2`, and the `!` prefix for `!bar 3`. Prefix-matching `!` tags are the supported way to accept an otherwise unknown local tag.
+- `implicit` — boolean. `true` marks an implicit scalar. A tag that is both `implicit` and `matchByTagPrefix` cannot be used: `withTags` of that combination fails and the caller does not obtain a usable schema. The same name with `matchByTagPrefix` true and `implicit` false attaches and then matches a longer handle that starts with that name.
+- `resolve` — construct the tagged scalar. Invoked as `(source)` with the scalar text, and as `(source, second, tagName)` so a prefix catch-all can see the original node name in `tagName`. A `!tag2` tag that reads a decimal integer into a caller-defined object parses `!tag2 10` and a block `!tag2` plus `10` as that object, not as the bare number 10 and not as the text `10`. A prefix `!` tag that remembers `tagName` plus the source text parses `!unknown_scalar_tag foo bar` as a value that still holds that name and that text.
+- `identify` — dump predicate. Receives the JavaScript value. A true result means this tag owns the value. Dump of a value that `identify` accepts writes this tag. Dump of a plain number does not write this tag.
+- `represent` — dump body. Receives the identified value and returns the scalar text to write. Dump-then-parse of a `!tag2` object that holds 10 still holds 10. Dump of a never-parsed object that `identify` accepts writes the tag and that same body.
+- `representTagName` — dump tag name. Receives the identified value and returns the handle to write. A prefix catch-all that stored `tagName` writes that same name back (`!unknown_scalar_tag`, not only `!`).
 
-### Raised by parse
+Without an attached matching tag, a parse of `!tag2 10` or of an unknown local scalar fails and yields no document.
 
-`loads` and `load` raise `TOMLDecodeError` when the input is not valid TOML v1.1.0. The call does not return a document mapping. Duplicate keys, frozen inline-table mutation, overwrite of a value by a table or array-of-tables header, a missing value, a multiline string used as a key or table name, a header that spans lines or shares its line with a following pair, and other invalid documents fail this way. Nesting past the interpreter’s recursion limit does **not** raise `TOMLDecodeError`; that failure is `RecursionError`.
+## `defineSequenceTag`
 
-## `tomlparse.load`
+Named export. Factory for a sequence custom tag. Callers write `import { `defineSequenceTag` } from 'ymlcodec'`.
 
-Import `load` from the package root `tomlparse` (`from `tomlparse` import `load``). Parse one TOML v1.1.0 document from a binary file object whose bytes are interpreted as `UTF-8` and return a document mapping, or fail. The file object is passed as the first positional argument.
+The call is a tag-name string plus one options object: `defineSequenceTag``(name, options)`. The name is the exact handle (`!point` or another local tag). The options object uses these keys: `matchByTagPrefix`, `create`, `addItem`, `finalize`, `identify`, `represent`, and `representTagName`. Keys that a given tag does not use may be omitted. The return is a tag object attached with `withTags` or passed in the list given to `Schema`.
 
-### Signature
+### Options
 
-```
-`load`(fp, *, `parse_float`=float)
-```
+- `matchByTagPrefix` — boolean. Same exact-versus-prefix rule as `defineScalarTag`. A prefix-matching `!` sequence accepts `!unknown_sequence_tag [1, 2, 3]` and remembers that name plus the constructed items.
+- `create` — start the container. Invoked with no arguments, or as `(tagName)` so a prefix catch-all can store the original node name. A `!point` tag that stores three numbers as `x` / `y` / `z` starts a point object; a converting tag starts a collector that is not the final value.
+- `addItem` — receive each item in order. Invoked as `(container, item, index)`. A `!point` parse of `!point [10, 43, 23]` puts 10 at `x`, 43 at `y`, and 23 at `z`. A parse of those three numbers in another order keeps that order on dump-then-parse. The two-argument form `(container, item)` is also used when the tag only appends.
+- `finalize` — finish the collection. Invoked as `finalize``(container)`. This is how a converting tag yields a different value than the collector, or refuses a wrong-length collection. A `!point` tag that converts two numbers into a frozen point parses `!point [10, 20]` as a value that holds 10 and 20; an alias to that node refers to the same converted value (same identity). That same tag fails a parse of `!point [10]` and yields no document. A recursive alias into that converting tag (`&point !point [*point]`) fails. A recursive alias into the default sequence (`&a [*a]`) on the same attached schema still succeeds: the one item is the sequence itself.
+- `identify` — dump predicate. A true result means this tag owns the value. Dump of a point writes `!point`. Dump of a plain three-number array does not write `!point`.
+- `represent` — dump body. Receives the identified value and returns the item list to write. Dump-then-parse of `!point [10, 43, 23]` still has those three coordinates. Dump of a never-parsed point-shaped value that `identify` accepts writes `!point` and those numbers.
+- `representTagName` — dump tag name. A prefix catch-all that stored `tagName` writes that same name back (`!unknown_sequence_tag`).
 
-- `fp` — an already-open file object for **binary** reading. Passed positionally. The call reads that object’s current contents (a `read` that yields bytes). It does not take a filesystem path as the document. On-disk files opened in binary mode and in-memory binary buffers are both accepted.
-- `parse_float` — optional callable that receives the spelling of a TOML float (including `inf` and `nan` tokens) and returns the constructed value. Keyword-only. The default is the builtin `float`. Integers, strings, booleans, and date-times are not passed through this converter. If the converter returns a dictionary or a list (including a subtype of either), the parse fails with `ValueError`, not `TOMLDecodeError`. This keyword applies the same way it applies to `loads`.
+Without an attached matching tag, a parse of `!point [10, 43, 23]` or of an unknown local sequence fails and yields no document.
 
-### Return shape
+## `withTags`
 
-On success, returns a mapping whose keys are strings. Nested tables are mappings. Arrays and arrays of tables are sequences (not strings). Successful parses do not return `None` in place of a mapping. An empty file (no bytes) yields an empty mapping (length 0), not `None`.
+Attach operation on a schema object. Not a free function. The four built-in named exports `FAILSAFE_SCHEMA`, `JSON_SCHEMA`, `CORE_SCHEMA`, and `YAML11_SCHEMA` each have `withTags`. The value returned by `withTags` is itself a schema that still has `withTags`, so a caller can attach again.
 
-Integers in the mapping are integers and are not booleans. Booleans are booleans (`True` / `False`) and are not the integers 1 and 0 and not strings. Floats are floats (when `parse_float` is left at the default). Strings are strings.
+### Call shape
 
-The call reads from the supplied file object. It does not open a path of its own, does not write files, does not mutate the process environment, and does not exit the host process.
+Custom tags from `defineScalarTag`, `defineSequenceTag`, and `defineMappingTag` are attached by calling `withTags` with one array of tag objects: `schema.`withTags`(tags)` and `schema.`withTags`([...])`. An implementation that only accepted rest arguments would not match that call.
 
-### Same mapping as string parse after UTF-8
+Named attachable tags (`mergeTag`, `realMapTag`, `legacyMapTag`) are also passed as individual arguments: `schema.`withTags`(tag)` and `schema.`withTags`(tag, ...)`. Both shapes must work.
 
-The file’s bytes are interpreted as `UTF-8`. For the same TOML characters, `load` after that decoding yields a document mapping equal to `loads` on that text. Every structural and scalar rule of the string-parse entry applies to that decoded text.
+The return is passed to `load` and `dump` as the `schema` option: ``load`(text, { `schema` })` and ``dump`(value, { `schema` })`. Sequential attach assigns the return back: `schema = schema.`withTags`([...])`.
 
-- A binary file whose `UTF-8` bytes are `one=1` then a line feed then `two='two'` then a line feed then `arr=[]` yields `one` equal to the integer 1, `two` equal to the string `two`, and `arr` equal to an empty sequence, matching `loads` on that text.
-- A two-key root document encoded as `UTF-8` yields those integer and string values and matches `loads` on the same characters.
-- A binary file with no bytes yields an empty mapping, the same as empty text through `loads`. An in-memory binary buffer with no bytes is the same empty mapping.
-- A carriage-return/line-feed pair in the file is treated as a single line feed. A binary file whose `UTF-8` bytes are `one=1`, a carriage-return/line-feed pair, then `two='two'` parses to those two keys and matches both `loads` on that text and the same document written with line feeds only.
-- Multi-byte `UTF-8` letters in keys or string values parse as those Unicode characters and match `loads` on the same characters.
-- Two array-of-tables items `[[players]]` then `name = "Lehtinen"` then `number = 26` then `[[players]]` then `name = "Numminen"` then `number = 27` yield `players` as a two-element sequence of mappings, matching `loads`. A runtime pair of double-bracket headers with a shared integer key is the same: a two-element sequence matching `loads`.
-- A dotted key `prefix.leaf = n` nested under `prefix` then `leaf` matches `loads`. The dotted spelling of those two parts is not a key of the root.
-- A basic string `k = "\e"` yields the string of code point 27. A basic string using `\x` plus two hex digits yields the corresponding character. Both match `loads`.
-- An inline table that spans lines and has a trailing comma, `t = {` then a line feed then `c = 1,` then a line feed then `}`, yields `t` as a one-key mapping whose `c` is the integer 1, matching `loads`.
+### Observable attach rules
 
-### Text-mode file object
-
-A file object opened in **text** mode is refused with `TypeError`. The call does not return a document mapping. This is not a decode error: the exception is not `TOMLDecodeError`. The observer can tell a wrong file mode from invalid TOML.
-
-That refusal applies to an on-disk file opened as text and to an in-memory text-mode file object, including when the text itself is valid TOML that the same characters would parse through a binary file or through `loads`.
-
-### Bytes that are not valid UTF-8
-
-Bytes that are not valid `UTF-8` do not yield a document mapping. The call does not succeed. Those bytes are not silently treated as some other 8-bit encoding even when that other decoding would be valid TOML.
-
-This includes at least:
-
-- A quoted key whose bytes contain one value in the range 0xA0–0xFF, followed by ASCII ` = 10001` and a line feed.
-- A quoted key whose bytes contain a lone 0xC3 (an incomplete two-byte `UTF-8` sequence), followed by the same ASCII assignment.
-
-A neighboring binary file of valid `UTF-8` TOML still succeeds.
-
-### Invalid TOML after a successful UTF-8 decode
-
-When the bytes are valid `UTF-8` but the decoded text is not valid TOML v1.1.0, the call does not return a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `TypeError`. Nesting past the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping; that exception is not `TOMLDecodeError`.
-
-The recoverable document on that failure is the decoded text, not the raw bytes. The identified place matches `loads` on that same text. That holds for an on-disk binary file and for an in-memory binary buffer. A neighboring binary file of valid `UTF-8` TOML still succeeds.
-
-Documents that fail this way include at least `val=.`, `]] this is invalid TOML [[`, an unclosed basic string `v = "abc`, and duplicate keys `a = 1` then `a = 2`. Two leading line feeds before `val=.` shift the recovered 1-based line from 1 to 3.
-
-### Float converter
-
-A binary file whose `UTF-8` bytes are `precision-matters = 0.982492`, parsed with a converter that builds a standard-library decimal from the token text, binds `precision-matters` to a decimal of the characters `0.982492`, not a binary float. The same file without a converter binds a Python float. A token `inf` is also passed to the converter. In `a = 1` then `b = 1.0`, the integer is not passed through the converter; only the float token is. A custom converter’s return value is the bound value. A converter that returns a dictionary or a list (including a subtype of either) fails with `ValueError`, not `TOMLDecodeError`.
-
-## `tomlparse.loads`
-
-Import `loads` from the package root `tomlparse` (`from `tomlparse` import `loads``). Parse one TOML v1.1.0 document from a Python text string and return a document mapping, or fail. The document is passed as the first positional argument.
-
-### Signature
-
-```
-`loads`(s, *, `parse_float`=float)
-```
-
-- `s` — the TOML document as a Python text string. Passed positionally. A bytes object, a boolean, a file object, or any other non-text value is refused with `TypeError`, not `TOMLDecodeError`.
-- `parse_float` — optional callable that receives the spelling of a TOML float (including `inf` and `nan` tokens) and returns the constructed value. Keyword-only. The default is the builtin `float`. Integers, strings, booleans, and date-times are not passed through this converter. If the converter returns a dictionary or a list (including a subtype of either), the parse fails with `ValueError`, not `TOMLDecodeError`.
-
-### Return shape
-
-On success, returns a mapping whose keys are strings. Nested tables are mappings. Arrays and arrays of tables are sequences (not strings). Successful parses do not return `None` in place of a mapping. An empty document yields an empty mapping (length 0), not `None`.
-
-Integers in the mapping are integers and are not booleans. Booleans are booleans (`True` / `False`) and are not the integers 1 and 0 and not strings. Floats are floats (when `parse_float` is left at the default). Strings are strings.
-
-The call does not read or write files, does not mutate the process environment, and does not exit the host process.
-
-### Empty document and root pairs
-
-- Empty text, whitespace-only text, and comment-only text (with or without a trailing line feed) succeed as an empty mapping. `#no newlines at all here` with no line feed is an empty mapping.
-- `one = 1` then a line feed then `two = 'two'` then a line feed then `arr = []` yields `one` equal to the integer 1, `two` equal to the string `two`, and `arr` equal to an empty sequence.
-- A single root pair `key = n` yields a one-key mapping whose bound value is that integer, not the decimal spelling of that integer as a string.
-- When the package is importable, `name = "probe"` yields a mapping whose `name` value is the string `probe`.
-
-### Keys are strings
-
-- Keys are strings. A bare key `1234` is the string `1234`, not the integer 1234.
-- A bare key may contain letters, digits, underscores, and hyphens: `bare_key`, `bare-key`, and `barekey` are three distinct keys.
-- Letter case is significant: `name` and `Name` are different keys; a table header `[section]` is a different table from `[Section]`.
-- The words `true`, `false`, `inf`, and `nan` are valid keys. A document `false = false` then a line feed then `true = 1` then a line feed then `inf = 100000000` then a line feed then `nan = "ceci n'est pas un nombre"` yields those four string keys with a boolean, an integer, an integer, and a string respectively. The boolean `True`, the boolean `False`, and the float infinity are not keys of that mapping.
-- A key may be written as a basic string or as a literal string. A quoted key may be empty: `"" = "blank"` binds the empty string as a key. A quoted key may contain characters a bare key cannot, including `#`, spaces, dots, and non-ASCII letters. The header `["key#group"]` names a table whose key is `key#group`. The quoted key `"with.dot"` is a single key containing a dot, not two dotted parts. A literal quoted key (single quotes) binds the interior text as the key.
-
-### Dotted keys
-
-- A dotted key creates nested mappings. `name.first = "Arthur"` then `"name".'last' = "Dent"` yields a mapping `name` with string keys `first` and `last`. The string `name.first` is not a key of the root.
-- Spaces around dots are ignored: `a   .   b  =  1` is the same nesting as `a.b = 1`. The same spacing is allowed in table headers: `[ g . h . i ]` is the same nesting as `[g.h.i]`.
-- Intermediate tables created this way may later receive more dotted keys under the same prefix: `apple.type = "fruit"` then `apple.color = "red"` yields one `apple` mapping with both keys.
-- An unquoted dotted key `with.dot = 1` nests under `with` then `dot`. A quoted key `"with.dot" = 1` is a single root key. Those two documents are not equal.
-
-### Square-bracket headers
-
-- A table header `[owner]` opens a table. Key/value pairs after that header belong to `owner` until another header appears. Those pairs are not keys of the root.
-- A header `[servers.alpha]` creates `servers` if needed and opens `alpha` inside it. Super-tables may be omitted: a document whose first header is `[x.y.z.w]` succeeds and yields nested empty tables `x`, `y`, `z`, and `w`, each containing only the next name in that chain, with the innermost table empty. Declaring a super-table afterwards is allowed: that same document may later contain `[x]` with a sibling key that is not on the omitted chain.
-- After dotted keys have created a nested table, a **new sub-table** that was not already opened as a header may still be declared. A document `[fruit]` then `apple.color = "red"` then `apple.taste.sweet = true` then `[fruit.apple.texture]` then `smooth = true` succeeds: `fruit.apple` has `color`, `taste`, and `texture`.
-
-### Arrays of tables
-
-- An array of tables is opened with a double-square-bracket header. Each repetition appends one new mapping to that sequence. A document `[[players]]` then `name = "Lehtinen"` then `number = 26` then `[[players]]` then `name = "Numminen"` then `number = 27` yields `players` as a two-element sequence of mappings.
-- Nested arrays of tables attach to the **most recently appended** parent item: two `[[albums]]` items, each followed by two `[[albums.songs]]` items, yield two albums whose `songs` sequences each have two mappings.
-- An array-of-tables header may imply parent tables. `[[albums.songs]]` then `name = "Glory Days"` yields `albums` as a mapping (not a sequence) that contains a `songs` sequence of one mapping. After `[[albums]]` then `[[albums.songs]]`, `albums` is a sequence (not a mapping). Those two parent kinds are not the same.
-- After `[[a.b]]` then `x = 1`, a later `[a]` then `y = 2` is allowed and yields `a` as a mapping that has both `b` (the sequence) and `y`. After one or more `[[parent-table.arr]]` headers, a later `[parent-table]` may still add a sibling key that is not `arr`.
-- After `[[tab.arr]]` then `[tab]`, a later `arr.val1 = 1` is refused: `arr` is a sequence of tables, not a table that can take a dotted key. A sibling key that is not `arr` on that same `[tab]` is allowed.
-
-### Inline tables
-
-- An inline table is a mapping written as a value. `point = { x = 1, y = 2 }` yields `point` as a mapping whose string keys `x` and `y` have integer values 1 and 2. An empty inline table `{ }` (spaces allowed) is an empty mapping.
-- Dotted keys work inside inline tables: `{ a.b = 1 }` is a nested mapping `a` containing `b`.
-- Inline tables may span lines, may contain comments, and may have a trailing comma after the last pair. `{ c = 1, }` and a brace, a line feed, `c = 1,`, a line feed, and a closing brace are both a one-key mapping. Comments may sit after the opening brace, after commas, and after the closing brace on the same line as other tokens (`{ c = 1, }#comment`). Comment text is not a key of the table or of the root.
-
-### Arrays
-
-- An array is a sequence written in square brackets. `[]` is empty. Arrays may mix types: `[1, 1.1]` is an integer then a float; the second element is not an integer. Arrays may nest: `[ ["gamma", "delta"], [1, 2] ]` is a sequence of two sequences, not a flat four-element sequence.
-- Arrays may span lines, may contain comments between elements, and may have a trailing comma: `[1,]` and `[1, 2,]` are valid. Comment text between elements is not an array element.
-
-### Comments, indent, CRLF
-
-- A comment starts at `#` and runs to the end of the line. A hash inside a string is not a comment: `another = "# This is not a comment"` yields that string including the hash.
-- A comment may follow a value with no space: `true=true#true` is boolean true for key `true`. Non-ASCII text is allowed in comments and is not a key.
-- A comment may follow a table header, an array-of-tables header, and a date-time value. Those comment words are not keys of the document or of the table they follow.
-- Indentation may be spaces or tabs and does not change meaning: `k = 1`, two spaces then `k = 1`, and a tab then `k = 1` are the same mapping.
-- A carriage-return/line-feed pair in the input is treated as a single line feed, including inside string values. A document that uses only carriage-return/line-feed between two keys parses as those two keys, equal to the same document with line feeds. A carriage return does not remain inside a multiline basic string that used carriage-return/line-feed as line endings.
-
-### Structural refusal
-
-These documents do not return a mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `RecursionError`. A neighboring document that omits only the illegal part succeeds.
-
-- Duplicate keys in the same table: `a = 1` then `a = 2`. Two `[table]` headers for the same table. A second key of the same name inside one inline table. Duplicate keys under a header table.
-- A table already opened by a header cannot be reopened. `[a.b.c]` then `z = 9` then `[a]` then `b.c.t = 9` fails. `[t1]` then `t2.t3.v = 0` then `[t1.t2]` fails. `[fruit]` with `apple.color` set, then a later `[fruit.apple]` header, fails.
-- A value cannot be overwritten by a table or array-of-tables header. `a = 1` then `[a.b.c.d]` fails. `a = true` then `[[a]]` fails. An inline table cannot be mutated afterwards: `a = { b = 1 }` then `a.b = 2` fails.
-- A key/value pair must have a value. A line `key =` with nothing after the equals (except whitespace or a comment) fails. A line with no key before the equals (`= 1`) fails.
-- A pair whose key is a multiline string fails: `"""key""" = 1` and `'''key''' = 1` do not yield a mapping. A table header whose name is a multiline string fails: `["""tbl"""]` and `['''tbl''']`.
-- A table header must close on the same line: `[tbl` then a line feed then `]` then `k = 1` fails. A header cannot share its line with a following pair: `[tbl] k = 1` on one line fails.
-
-### Nesting limits
-
-- An inline array nested 470 levels deep (`arr =` then 470 opening brackets then 470 closing brackets) succeeds as a chain of one-element sequences whose innermost sequence is empty.
-- An inline table nested 310 levels deep (`key = {` repeated 310 times then 310 closing braces) succeeds as nested mappings under `key` whose innermost mapping is empty.
-- A dotted key with 310 parts (`a.a.…a = 1`) succeeds as nested mappings whose leaf integer is 1.
-- Intermediate nesting well below those depths also succeeds.
-- An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That exception is not `TOMLDecodeError`. The same entry still raises `TOMLDecodeError` (not `RecursionError`) for an ordinary invalid document such as a duplicate key.
+- Attaching one or more tags to `CORE_SCHEMA`, `JSON_SCHEMA`, `FAILSAFE_SCHEMA`, or `YAML11_SCHEMA` preserves the default string tag `!!str`. A plain word on that extended schema is still a string. Built-in tags of that schema stay available (Core still constructs `42` as a number and `true` as a boolean; YAML 1.1 still constructs `yes` as a boolean and `!!set`; Failsafe still constructs `42` as a string; JSON still constructs `true` as a boolean and `yes` as a string).
+- A newly attached tag with the same name, node kind, and prefix-match flag replaces the earlier one. Replacing an exact `!tag2` scalar does not drop a different prefix tag. Sequential attach is the observed replacement path.
+- A tag that is both `implicit` and `matchByTagPrefix` cannot be attached: `withTags` fails and the caller does not obtain a usable schema.
+- Each attach is self-contained. Tags constructed for one call do not leak into another unless the caller passes the extended schema again.
 

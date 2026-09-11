@@ -96,7 +96,7 @@ Point standard env vars at any OpenAI-compatible endpoint:
 ```bash
 export OPENAI_API_KEY=your-key
 export OPENAI_BASE_URL=https://your-gateway.example/v1
-cbrun --case case002 --backend codex --model openai/gpt-4o-mini
+cbrun --case case001 --backend codex --model openai/gpt-4o-mini
 ```
 
 cbrun writes `openai_base_url` into `~/.codex/config.toml` during setup. Use
@@ -114,7 +114,7 @@ names only.
 Pass a local **AgentSpec** file instead of `--backend`:
 
 ```bash
-cbrun --case case002 --agent-spec ./my-agent.json --model my/model
+cbrun --case case001 --agent-spec ./my-agent.json --model my/model
 ```
 
 Example `my-agent.json`:
@@ -192,12 +192,12 @@ cbrun --case case001 --build-images
 cbrun --case case001 --backend codex --model openai/gpt-5.5
 
 # Several backends, reward matrix
-cbrun --case case002 \
+cbrun --case case001 \
   --backend codex --backend opencode --backend claude-code --backend cursor \
   --model openai/gpt-5.5
 
 # Custom agent spec
-cbrun --case case002 --agent-spec ./agents/echo.json --model dummy/model
+cbrun --case case001 --agent-spec ./agents/echo.json --model dummy/model
 
 # Every case under the cases root
 cbrun --all --backend codex --model openai/gpt-5.5

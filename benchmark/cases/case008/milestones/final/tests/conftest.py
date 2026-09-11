@@ -19,24 +19,13 @@ _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
-from _harness import library_module, repo_root, workspace  # noqa: E402
+from _harness import repo_root, workspace  # noqa: E402
 
 
 @pytest.fixture
 def workspace_root() -> Path:
     """Absolute path of the built repository root (pytest process cwd)."""
     return repo_root()
-
-
-@pytest.fixture
-def product_module(workspace_root: Path) -> Path:
-    """Absolute path of the recipe-built library module.
-
-    Raises ``FileNotFoundError`` at fixture setup if the module is
-    missing — that is a build/substrate gap, not a product-behavior
-    judgment.
-    """
-    return library_module(root=workspace_root)
 
 
 @pytest.fixture

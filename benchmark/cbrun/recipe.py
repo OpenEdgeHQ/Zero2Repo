@@ -36,6 +36,10 @@ __all__ = [
 ]
 
 SCHEMA_VERSION = 1
+# Pipeline v2 adds resolved package pins. Public extract drops that block,
+# so a v2 lock on disk is still env-install-only and can be replayed like v1.
+SCHEMA_VERSION_RESOLVED = 2
+SUPPORTED_SCHEMA_VERSIONS = (SCHEMA_VERSION, SCHEMA_VERSION_RESOLVED)
 RECIPE_LOCK_NAME = "recipe.lock.json"
 ENV_RECIPE_TAG_SUFFIX = "recipe-env"
 # Local tag used in recipe.lock. Built FROM the public suffix
@@ -139,7 +143,7 @@ def resolve_lock_runner(lock: dict[str, Any], manifest_runner: dict[str, Any]) -
 
 def validate_lock_env_install(lock: dict[str, Any]) -> None:
     """Validate recipe.lock for env-install-only rebuild (no seed repo)."""
-    if lock.get("schema_version") != SCHEMA_VERSION:
+    if lock.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
         raise RecipeLockError(
             f"unsupported schema_version: {lock.get('schema_version')!r}"
         )

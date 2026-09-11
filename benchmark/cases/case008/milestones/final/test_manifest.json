@@ -5,16 +5,14 @@
     "tests/F01_acceptance.py",
     "tests/F02_acceptance.py",
     "tests/F03_acceptance.py",
-    "tests/F04_acceptance.py",
-    "tests/F05_acceptance.py",
-    "tests/F06_acceptance.py",
-    "tests/F07_acceptance.py"
+    "tests/F04_acceptance.py"
   ],
   "support_files": [
+    "tests/CMakeLists.txt",
     "tests/_harness.py",
     "tests/conftest.py"
   ],
-  "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F05_acceptance.py tests/F06_acceptance.py tests/F07_acceptance.py",
+  "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py",
   "test_command_template": "python3 -m pytest {test_files}",
   "workdir": ".",
   "execution_groups": [
@@ -53,33 +51,6 @@
         "tests/F04_acceptance.py"
       ],
       "test_command": "python3 -m pytest tests/F04_acceptance.py"
-    },
-    {
-      "feature_ids": [
-        "F05"
-      ],
-      "test_files": [
-        "tests/F05_acceptance.py"
-      ],
-      "test_command": "python3 -m pytest tests/F05_acceptance.py"
-    },
-    {
-      "feature_ids": [
-        "F06"
-      ],
-      "test_files": [
-        "tests/F06_acceptance.py"
-      ],
-      "test_command": "python3 -m pytest tests/F06_acceptance.py"
-    },
-    {
-      "feature_ids": [
-        "F07"
-      ],
-      "test_files": [
-        "tests/F07_acceptance.py"
-      ],
-      "test_command": "python3 -m pytest tests/F07_acceptance.py"
     }
   ],
   "execution_policy": {

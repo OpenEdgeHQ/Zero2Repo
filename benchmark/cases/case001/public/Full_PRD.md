@@ -50,7 +50,7 @@ Feature points below group these entries by independently verifiable capability.
 - **Form factor:** A pure-Python library with zero runtime third-party dependencies. Optional compiled wheels exist on some platforms for speed; they are not required. The default, graded path is the pure-Python parser.
 - **Language:** Python 3.8 or newer, including the CPython and PyPy implementations the project tests.
 - **Platforms:** Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter.
-- **Hardware:** CPU-only. No GPU or accelerator is required or claimed. The mandatory execution substrate is a real host that can import Tomlparse from this repository’s source tree and parse a one-table document.
+- **Hardware:** CPU-only. No GPU or accelerator is required or claimed. The mandatory execution substrate is a real host that can import tomlparse from this repository’s source tree and parse a one-table document.
 - **TOML dialect:** TOML v1.1.0. Behaviors that exist only in older Tomlparse releases (TOML v1.0.0-only, text-mode file objects as parse input) are not this product.
 - **Result types:** Successful parses return plain mappings, sequences, and scalars from Python and its standard library. The product does not return custom node types in order to keep comments or layout.
 - **Error text:** Wording of decode-error messages is informational. Graded behavior is success versus failure, the exception kind, and (when a parse fails) that the failure identifies the offending place in the document — not a particular sentence.
