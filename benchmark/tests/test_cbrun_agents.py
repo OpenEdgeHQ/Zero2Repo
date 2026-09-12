@@ -35,7 +35,8 @@ def test_codex_command_shape() -> None:
     assert "--model openai/gpt-5.5" in cmd or "--model 'openai/gpt-5.5'" in cmd
     assert "--json" in cmd
     assert "--enable unified_exec" in cmd
-    assert "cat /tmp/cbrun/instruction.md" in cmd
+    assert "< /tmp/cbrun/instruction.md" in cmd
+    assert "$(cat" not in cmd
     assert "tee /logs/agent/agent.txt" in cmd
 
 
@@ -243,6 +244,13 @@ def test_cli_install_command_is_idempotent_and_uses_pin() -> None:
     assert "command -v opencode" in cmd
     assert "npm install -g" in cmd
     assert "opencode-ai@9.9.9" in cmd
+
+
+def test_cli_install_command_exposes_npm_prefix_binary_on_path() -> None:
+    cmd = agents.cli_install_command("codex", environ={})
+    assert 'CBRUN_CLI_PATH="$(npm prefix -g)/bin/codex"' in cmd
+    assert 'ln -sfn "$CBRUN_CLI_PATH" /usr/local/bin/codex' in cmd
+    assert '"$CBRUN_CLI_PATH" --version' in cmd
 
 
 def test_cursor_command_shape() -> None:

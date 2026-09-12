@@ -102,7 +102,16 @@ def cli_install_command(backend: str, environ: dict[str, str] | None = None) -> 
         f"if command -v {bin_name} >/dev/null 2>&1; then {bin_name} --version; exit 0; fi; "
         "command -v npm >/dev/null 2>&1 || { "
         "echo 'cbrun: npm not found in agent image' >&2; exit 1; }; "
-        f"npm install -g {shlex.quote(pkg + spec)} && {bin_name} --version"
+        f"npm install -g {shlex.quote(pkg + spec)}; "
+        f"CBRUN_CLI_PATH=\"$(npm prefix -g)/bin/{bin_name}\"; "
+        "[ -x \"$CBRUN_CLI_PATH\" ] || { "
+        f"echo 'cbrun: npm install did not produce {bin_name}' >&2; exit 1; "
+        "}; "
+        f"if [ \"$CBRUN_CLI_PATH\" != /usr/local/bin/{bin_name} ]; then "
+        "mkdir -p /usr/local/bin; "
+        f"ln -sfn \"$CBRUN_CLI_PATH\" /usr/local/bin/{bin_name}; "
+        "fi; "
+        '"$CBRUN_CLI_PATH" --version'
     )
 
 

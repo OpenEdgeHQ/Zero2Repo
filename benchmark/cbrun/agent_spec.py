@@ -369,8 +369,8 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
             "--model {model_quoted} "
             "--json "
             "--enable unified_exec "
-            '-- "$(cat {instruction_quoted})" '
-            "2>&1 </dev/null | stdbuf -oL tee {log_quoted}"
+            "< {instruction_quoted} "
+            "2>&1 | stdbuf -oL tee {log_quoted}"
         ),
     ),
     "opencode": AgentSpec(
