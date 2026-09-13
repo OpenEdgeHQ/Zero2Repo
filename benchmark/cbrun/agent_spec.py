@@ -349,7 +349,15 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
   printf '%s\\n' "{\\"OPENAI_API_KEY\\": \\"${OPENAI_API_KEY}\\"}" > "$CODEX_HOME/auth.json"
 fi
 if [ -n "${OPENAI_BASE_URL:-}" ]; then
-  printf '%s\\n' "openai_base_url = \\"${OPENAI_BASE_URL}\\"" >> "$CODEX_HOME/config.toml"
+  cat > "$CODEX_HOME/config.toml" <<TOML
+model_provider = "cbrun_gateway"
+
+[model_providers.cbrun_gateway]
+name = "OpenAI-compatible gateway"
+base_url = "${OPENAI_BASE_URL}"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"
+TOML
 fi
 """
 

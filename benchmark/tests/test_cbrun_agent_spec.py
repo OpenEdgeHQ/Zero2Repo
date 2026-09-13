@@ -22,6 +22,36 @@ def test_builtin_specs_are_stable() -> None:
         assert spec.spec_hash()
 
 
+def test_codex_gateway_setup_is_valid_and_repeatable(tmp_path: Path) -> None:
+    import os
+    import subprocess
+    from dataclasses import replace
+
+    tomllib = pytest.importorskip("tomllib")
+    spec = replace(agent_spec.builtin_spec("codex"), home=str(tmp_path))
+    invocation = agent_spec.resolve_agent(
+        spec=spec,
+        model="openai/test-model",
+        environ={"OPENAI_API_KEY": "test-only-key", "OPENAI_BASE_URL": "https://gateway.example/v1"},
+    )
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", "-c", invocation.setup_script],
+            env={**os.environ, **invocation.env},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        config_text = (tmp_path / "config.toml").read_text()
+        config = tomllib.loads(config_text)
+        provider = config["model_providers"][config["model_provider"]]
+        assert provider["base_url"] == "https://gateway.example/v1"
+        assert provider["wire_api"] == "responses"
+        assert provider["env_key"] == "OPENAI_API_KEY"
+        assert "test-only-key" not in config_text + result.stdout + result.stderr
+        assert json.loads((tmp_path / "auth.json").read_text())["OPENAI_API_KEY"] == "test-only-key"
+
+
 def test_load_agent_spec_from_json(tmp_path: Path) -> None:
     path = tmp_path / "echo-agent.json"
     path.write_text(

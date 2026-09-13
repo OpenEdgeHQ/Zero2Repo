@@ -102,7 +102,13 @@ export OPENAI_BASE_URL=https://your-gateway.example/v1
 cbrun --case case001 --backend codex --model openai/gpt-4o-mini
 ```
 
-cbrun writes `openai_base_url` into `~/.codex/config.toml` during setup. Use
+When `OPENAI_BASE_URL` is set, cbrun writes an explicit `cbrun_gateway` model
+provider in the trial container's Codex configuration. It uses the Responses API
+and reads authentication from `OPENAI_API_KEY`. This avoids relying on the legacy
+`openai_base_url` key and the built-in OpenAI provider's WebSocket transport for
+an HTTPS-only gateway. Repeated setup writes a valid configuration.
+
+Without `OPENAI_BASE_URL`, the default provider setup is unchanged. Use
 `model_prefix: strip` in a custom spec if your Codex install expects leaf model
 names only.
 
