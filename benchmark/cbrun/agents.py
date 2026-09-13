@@ -97,12 +97,34 @@ def cli_install_command(backend: str, environ: dict[str, str] | None = None) -> 
     pkg, _env_key = _CLI_PACKAGES[backend]
     spec = cli_version_spec(backend, environ)
     bin_name = _CLI_BINS[backend]
+    verify = shlex.quote(f"command -v {bin_name} && {bin_name} --version")
+    dest_bin = f"/usr/local/bin/{bin_name}"
     return (
         "set -eu; "
-        f"if command -v {bin_name} >/dev/null 2>&1; then {bin_name} --version; exit 0; fi; "
+        f"if [ -x {dest_bin} ]; then bash -lc {verify}; exit 0; fi; "
         "command -v npm >/dev/null 2>&1 || { "
         "echo 'cbrun: npm not found in agent image' >&2; exit 1; }; "
-        f"npm install -g {shlex.quote(pkg + spec)} && {bin_name} --version"
+        f"npm install -g {shlex.quote(pkg + spec)}; "
+        'prefix="$(npm prefix -g)"; '
+        f'CBRUN_CLI_PATH="$prefix/bin/{bin_name}"; '
+        '[ -x "$CBRUN_CLI_PATH" ] || { '
+        f'echo "cbrun: {pkg} installed but $CBRUN_CLI_PATH missing (PATH=$PATH)" >&2; '
+        "exit 1; }; "
+        "mkdir -p /usr/local/bin; "
+        f'if [ "$CBRUN_CLI_PATH" != {dest_bin} ]; then '
+        f'ln -sfn "$CBRUN_CLI_PATH" {dest_bin}; '
+        "fi; "
+        'NODE_SRC="$(command -v node)"; '
+        '[ -n "$NODE_SRC" ] || { '
+        'echo "cbrun: node not found after npm install (PATH=$PATH)" >&2; exit 1; }; '
+        'if [ "$NODE_SRC" != /usr/local/bin/node ]; then '
+        'ln -sfn "$NODE_SRC" /usr/local/bin/node; '
+        "fi; "
+        'NPM_SRC="$(command -v npm)"; '
+        'if [ -n "$NPM_SRC" ] && [ "$NPM_SRC" != /usr/local/bin/npm ]; then '
+        'ln -sfn "$NPM_SRC" /usr/local/bin/npm; '
+        "fi; "
+        f"bash -lc {verify}"
     )
 
 

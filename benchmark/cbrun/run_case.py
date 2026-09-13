@@ -58,9 +58,18 @@ def _probe_cli_version(container: Container, spec_name: str) -> str | None:
     bin_name = _CLI_BIN.get(spec_name)
     if not bin_name:
         return None
-    probe = container.exec(f"command -v {bin_name} >/dev/null && {bin_name} --version", timeout_sec=30.0)
+    probe = container.exec(
+        f"command -v {bin_name} >/dev/null && {bin_name} --version",
+        timeout_sec=30.0,
+    )
     if probe.exit_code != 0:
-        return None
+        path_probe = container.exec("printf '%s' \"$PATH\"", timeout_sec=10.0)
+        path_text = (path_probe.tail or "").strip()
+        detail = (probe.tail or "").strip()
+        extra = f": {detail}" if detail else ""
+        raise RuntimeError(
+            f"cbrun: {bin_name} not found in login-shell PATH={path_text!r}{extra}"
+        )
     return (probe.tail or "").strip() or None
 
 
@@ -359,9 +368,7 @@ def _run_step(
 ) -> bool:
     """Run the solve+judge for one step; return True iff its gate passed."""
     base_instruction = build_instruction(
-        step.prd_text,
-        step.contract_text,
-        hardware_text=case.hardware_text,
+        has_hardware=bool((case.hardware_text or "").strip()),
         build_command=case.build_command,
         workdir=case.workdir,
     )

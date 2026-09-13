@@ -36,11 +36,15 @@ _CASE_IDS = [path.name for path in iter_benchmark_case_dirs(BENCHMARK_ROOT / "ca
 # --- instruction --------------------------------------------------------------
 
 def test_instruction_contains_spec_and_environment_notes() -> None:
-    out = instr_mod.build_instruction("PRD BODY", "CONTRACT BODY")
-    assert "PRD BODY" in out
-    assert "CONTRACT BODY" in out
+    out = instr_mod.build_instruction()
+    assert "PRD BODY" not in out
+    assert "CONTRACT BODY" not in out
+    assert "# Product Requirements Document" not in out
+    assert "# Interface Contract" not in out
     assert "/app" in out
     assert "/environment/prd/Full_PRD.md" in out
+    assert "/environment/Interface_Contract.md" in out
+    assert "read them in full" in out.lower() or "read those files" in out.lower()
     assert "hidden acceptance test" in out.lower()
     # Free development with only a time limit is stated.
     assert "no limit on the number of steps" in out
@@ -53,18 +57,15 @@ def test_instruction_contains_spec_and_environment_notes() -> None:
 
 
 def test_instruction_includes_hardware_when_provided() -> None:
-    out = instr_mod.build_instruction(
-        "PRD BODY",
-        "CONTRACT BODY",
-        hardware_text="GPU required",
-    )
-    assert "GPU required" in out
+    out = instr_mod.build_instruction(has_hardware=True)
     assert "/environment/Hardware_Requirements.md" in out
-    assert "# Hardware Requirements" in out
+    assert "# Hardware Requirements" not in out
+    absent = instr_mod.build_instruction(has_hardware=False)
+    assert "/environment/Hardware_Requirements.md" not in absent
 
 
 def test_instruction_does_not_leak_hidden_test_paths() -> None:
-    out = instr_mod.build_instruction("prd", "contract")
+    out = instr_mod.build_instruction()
     assert "/tests/final" not in out
     assert "test_manifest" not in out
     assert "no build step" in out
@@ -73,12 +74,7 @@ def test_instruction_does_not_leak_hidden_test_paths() -> None:
 
 def test_instruction_includes_nonempty_build_command() -> None:
     cmd = "cmake -G Ninja -B build && cmake --build build"
-    out = instr_mod.build_instruction(
-        "PRD BODY",
-        "CONTRACT BODY",
-        build_command=cmd,
-        workdir=".",
-    )
+    out = instr_mod.build_instruction(build_command=cmd, workdir=".")
     assert cmd in out
     assert "does **not** run any install or build" in out
     assert "no build step" not in out
@@ -86,23 +82,17 @@ def test_instruction_includes_nonempty_build_command() -> None:
 
 
 def test_instruction_states_test_workdir_only_when_not_root() -> None:
-    root = instr_mod.build_instruction(
-        "P", "C", build_command="make", workdir="."
-    )
+    root = instr_mod.build_instruction(build_command="make", workdir=".")
     assert "as their working directory" not in root
     assert "from the `/app` root" in root
 
-    nested = instr_mod.build_instruction(
-        "P", "C", build_command="make", workdir="src"
-    )
+    nested = instr_mod.build_instruction(build_command="make", workdir="src")
     assert "`/app/src` as their working directory" in nested
     assert "from the `/app` root" in nested
 
 
 def test_instruction_empty_build_command_declares_no_build_step() -> None:
-    out = instr_mod.build_instruction(
-        "PRD BODY", "CONTRACT BODY", build_command="", workdir="."
-    )
+    out = instr_mod.build_instruction(build_command="", workdir=".")
     assert "no build step" in out
     assert "does **not** run any install or build" in out
 
@@ -113,8 +103,7 @@ def test_instruction_surfaces_each_case_build_command(case_id: str) -> None:
 
     case = load_case(BENCHMARK_ROOT / "cases" / case_id)
     out = instr_mod.build_instruction(
-        "PRD",
-        "CONTRACT",
+        has_hardware=bool((case.hardware_text or "").strip()),
         build_command=case.build_command,
         workdir=case.workdir,
     )
@@ -126,6 +115,10 @@ def test_instruction_surfaces_each_case_build_command(case_id: str) -> None:
         assert "no build step" in out
     assert "/tests/final" not in out
     assert "does **not** run any install or build" in out
+    sample = (case.prd_text or "").strip()[:80]
+    if sample:
+        assert sample not in out
+    assert len(out.encode("utf-8")) < 10_000
 
 
 # --- limits -------------------------------------------------------------------

@@ -129,15 +129,10 @@ def _cli_install_snippet(environ: dict[str, str] | None, backend: str | None = N
         return agents.cli_install_command("cursor", environ)
     if backend is not None:
         return agents.cli_install_command(backend, environ)
-    pkgs = []
-    for name, (pkg, _env_key) in agents._CLI_PACKAGES.items():
-        pkgs.append(pkg + agents.cli_version_spec(name, environ))
-    pkg_args = " ".join(pkgs)
-    return (
-        f"npm install -g {pkg_args} && "
-        "codex --version && opencode --version && claude --version && "
-        f"{agents.cli_install_command('cursor', environ)}"
+    npm_clis = " && ".join(
+        agents.cli_install_command(name, environ) for name in agents._CLI_PACKAGES
     )
+    return f"{npm_clis} && {agents.cli_install_command('cursor', environ)}"
 
 
 def _agent_user_snippet() -> str:

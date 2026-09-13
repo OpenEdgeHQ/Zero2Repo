@@ -51,6 +51,8 @@ def test_resolve_agent_renders_placeholders() -> None:
     )
     assert "/tmp/instr.md" in inv.command or "/tmp/instr" in inv.command
     assert "openai/gpt-4o-mini" in inv.command
+    assert "$(cat" not in inv.command
+    assert "< /tmp/instr.md" in inv.command
     assert inv.run_as is None
 
 

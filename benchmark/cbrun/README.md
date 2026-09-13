@@ -11,9 +11,12 @@ The agent's job is to **write the implementation**. The test code is a hidden
 benchmark asset, never an agent output.
 
 * **Input** the agent sees: the PRD (`/environment/prd/Full_PRD.md`) and the
-  Interface Contract (`/environment/Interface_Contract.md`), both also embedded
-  in the instruction prompt, plus the case `build_command` (when non-empty)
-  as the Build contract. The agent's workspace `/app` starts empty.
+  Interface Contract (`/environment/Interface_Contract.md`) as files inside
+  the container (the instruction prompt names those paths and does **not**
+  inline the bodies), plus the case `build_command` (when non-empty) as the
+  Build contract. The agent's workspace `/app` starts empty. Built-in Codex
+  and OpenCode CLIs read the instruction file from stdin so a large prompt
+  never becomes a single `execve` argument (Linux `MAX_ARG_STRLEN` is 128KiB).
 * **Output** the agent produces: the implementation in `/app`. When the case
   has a `build_command`, leave the outputs that command would produce; the
   judge does not rebuild.
@@ -124,7 +127,7 @@ Example `my-agent.json`:
   "name": "my-agent",
   "env_passthrough": ["MY_API_KEY"],
   "setup_script": "mkdir -p \"$HOME/.myagent\" && echo ok > \"$HOME/.myagent/ready\"",
-  "command": "my-cli --model {model_quoted} --workdir {workdir_quoted} \"$(cat {instruction_quoted})\" 2>&1 | tee {log_quoted}",
+  "command": "my-cli --model {model_quoted} --workdir {workdir_quoted} < {instruction_quoted} 2>&1 | tee {log_quoted}",
   "run_as": "root",
   "model_prefix": "keep",
   "setup_timeout_sec": 120
@@ -148,7 +151,9 @@ Example `my-agent.json`:
 
 Placeholders in `command` / `setup_script`: `{model}`, `{model_quoted}`,
 `{instruction_quoted}`, `{log_quoted}`, `{workdir}` (`/app`), `{workdir_quoted}`,
-`{home}`.
+`{home}`. Redirect `{instruction_quoted}` into stdin (or pass the path as a
+file argument). Do **not** expand the file with `$(cat …)`: that puts the
+whole prompt into one argv slot and fails once it exceeds 128KiB.
 
 ### Security boundaries
 
@@ -236,8 +241,10 @@ version when available.
 
 ## Reused components
 
-* `coding_bench_harbor.adapter`: case discovery, `CaseAssets`, the from-scratch
-  `_INSTRUCTION_PREAMBLE`, `build_contract_notes`, runner normalization.
+* `coding_bench_harbor.adapter`: case discovery, `CaseAssets`,
+  `build_contract_notes`, runner normalization. cbrun writes its own
+  instruction preamble and points the agent at the spec files rather than
+  inlining Harbor's `_INSTRUCTION_PREAMBLE` + PRD/Contract bodies.
 * `coding_bench_harbor.final_judge`: the scoring engine (single source of truth,
   shared with the Harbor adapter).
 

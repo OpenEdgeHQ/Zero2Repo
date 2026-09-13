@@ -54,6 +54,20 @@ def test_agent_dockerfile_clears_app_workspace() -> None:
     assert "rm -rf /tests/final" in df
 
 
+def test_agent_dockerfile_all_backends_uses_per_cli_install() -> None:
+    from cbrun.images import _build_dockerfile  # noqa: WPS433
+
+    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", None)
+    assert "npm prefix -g" in df
+    assert "@openai/codex" in df
+    assert "opencode-ai" in df
+    assert "@anthropic-ai/claude-code" in df
+    assert "cursor.com/install" in df
+    # Each npm CLI is installed on its own; the old concatenated line is gone.
+    assert "codex@latest opencode-ai" not in df
+    assert "opencode-ai@latest @anthropic" not in df
+
+
 def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
     from cbrun.images import _build_dockerfile, agent_tag  # noqa: WPS433
 
@@ -210,3 +224,31 @@ def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) 
     )
     assert outcome.reward == 1.0
     assert started == [("codingbench-benchmark/demo:agent", {"gpus": None, "network": "none"})]
+
+
+def test_probe_cli_version_fails_fast_with_path() -> None:
+    from cbrun.run_case import _probe_cli_version  # noqa: WPS433
+
+    class _MissingCli:
+        def exec(self, command, **_kwargs):
+            if "command -v" in command:
+                return ExecResult(exit_code=127, tail="codex: not found")
+            if "PATH" in command:
+                return ExecResult(exit_code=0, tail="/usr/bin:/bin")
+            return ExecResult(exit_code=0)
+
+    try:
+        _probe_cli_version(_MissingCli(), "codex")  # type: ignore[arg-type]
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "codex" in msg
+        assert "/usr/bin:/bin" in msg
+        assert "not found" in msg
+    else:
+        raise AssertionError("expected RuntimeError when the CLI is missing")
+
+
+def test_probe_cli_version_unknown_spec_returns_none() -> None:
+    from cbrun.run_case import _probe_cli_version  # noqa: WPS433
+
+    assert _probe_cli_version(_FakeContainer(None, ExecResult(exit_code=0)), "custom") is None

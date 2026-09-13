@@ -2,15 +2,14 @@
 
 The prompt tells the agent exactly what it has (inputs + environment), what its
 goal is, and how it will be scored, without leaking anything about the hidden
-acceptance tests. It reuses the Harbor adapter's ``_INSTRUCTION_PREAMBLE`` so
-the from-scratch task framing stays identical across the two runners, then adds
-cbrun-specific notes about the container environment, free development with only
-a wall-clock limit, and the visible-vs-hidden test boundary.
+acceptance tests. Specification bodies (PRD, Interface Contract, optional
+hardware) stay on disk at fixed container paths; the prompt only names those
+paths so it stays well under the Linux per-argument size limit.
 """
 
 from __future__ import annotations
 
-from coding_bench_harbor.adapter import _INSTRUCTION_PREAMBLE, build_contract_notes
+from coding_bench_harbor.adapter import build_contract_notes
 
 from .submit import CONTAINER_SUBMIT_PATH, SUBMIT_TOKEN
 
@@ -22,13 +21,30 @@ CONTRACT_CONTAINER_PATH = "/environment/Interface_Contract.md"
 HARDWARE_CONTAINER_PATH = "/environment/Hardware_Requirements.md"
 WORKSPACE_CONTAINER_PATH = "/app"
 
+_INSTRUCTION_PREAMBLE = """\
+# Development Task
+
+You are an autonomous software engineer. Build the complete project described
+in the specification files listed below, from scratch, in your current working
+directory. Implement every step of the development plan so that the finished
+project fully satisfies the specification.
+
+Read those files in full before you start writing code.
+
+When you are done, the workspace must be in a state the hidden tests can use
+directly. See the Build contract below for whether a build step is required
+and where outputs must remain.
+
+---
+
+"""
+
 
 def _environment_notes(*, has_hardware: bool) -> str:
     hardware_line = ""
     if has_hardware:
         hardware_line = (
-            f"* Hardware requirements are at `{HARDWARE_CONTAINER_PATH}` "
-            "(also appended below when provided).\n"
+            f"* Hardware requirements are at `{HARDWARE_CONTAINER_PATH}`.\n"
         )
     return f"""\
 ## Your environment
@@ -36,9 +52,9 @@ def _environment_notes(*, has_hardware: bool) -> str:
 * Your workspace is `{WORKSPACE_CONTAINER_PATH}` (your current working directory).
   Build the project here. See the Build contract below for how the judge
   locates outputs.
-* The full specification is also available as files inside the container:
+* The full specification is in these files. Read them in full before you start:
   the PRD at `{PRD_CONTAINER_PATH}` and the Interface Contract at
-  `{CONTRACT_CONTAINER_PATH}` (identical to the text below).
+  `{CONTRACT_CONTAINER_PATH}`.
 {hardware_line}* Language runtimes and dependencies the project needs are already installed in
   this image. You have network access for your own model/tool calls.
 
@@ -82,34 +98,20 @@ ENVIRONMENT_NOTES = _environment_notes(has_hardware=False)
 
 
 def build_instruction(
-    prd_text: str,
-    contract_text: str,
     *,
-    hardware_text: str | None = None,
+    has_hardware: bool = False,
     build_command: str = "",
     workdir: str = ".",
 ) -> str:
-    """Assemble the full agent prompt from the public spec.
+    """Assemble the agent prompt: preamble, environment notes, build contract.
 
-    Order: shared from-scratch preamble, cbrun environment/scoring notes, the
-    build contract, then the verbatim PRD and Interface Contract. No
-    hidden-test content is included. Optional hardware requirements are
-    appended when provided.
+    Specification bodies are not inlined. The agent must read the files at
+    ``PRD_CONTAINER_PATH``, ``CONTRACT_CONTAINER_PATH``, and (when present)
+    ``HARDWARE_CONTAINER_PATH``. No hidden-test content is included.
     """
-    hw = (hardware_text or "").strip()
     parts: list[str] = [_INSTRUCTION_PREAMBLE.rstrip(), "\n\n"]
-    parts.append(_environment_notes(has_hardware=bool(hw)).rstrip())
+    parts.append(_environment_notes(has_hardware=has_hardware).rstrip())
     parts.append("\n\n")
     parts.append(build_contract_notes(build_command, workdir).rstrip())
-    parts.append("\n\n---\n\n")
-    parts.append("# Product Requirements Document\n\n")
-    parts.append(prd_text.strip())
-    parts.append("\n\n---\n\n")
-    parts.append("# Interface Contract\n\n")
-    parts.append(contract_text.strip())
-    if hw:
-        parts.append("\n\n---\n\n")
-        parts.append("# Hardware Requirements\n\n")
-        parts.append(hw)
     parts.append("\n")
     return "".join(parts)
