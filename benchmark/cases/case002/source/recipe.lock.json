@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "case_id": "case002",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "resolved": {
+    "python": {
+      "asttokens": "3.0.2",
+      "executing": "2.2.1",
+      "ipython": "9.17.1",
+      "ipython_pygments_lexers": "1.1.1",
+      "jedi": "0.20.0",
+      "matplotlib-inline": "0.2.2",
+      "parso": "0.8.7",
+      "pexpect": "4.9.0",
+      "prompt_toolkit": "3.0.53",
+      "psutil": "7.2.2",
+      "ptyprocess": "0.7.0",
+      "pure_eval": "0.2.3",
+      "stack-data": "0.6.3",
+      "traitlets": "5.16.1",
+      "wcwidth": "0.8.3"
+    },
+    "apt": {}
+  },
+  "public": true,
+  "runner": {
+    "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest>=9.0.3' 'setuptools>=77.0' 'click>=5.0' ipython && /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest>=9.0.3' 'setuptools>=77.0' 'click>=5.0' ipython && rm -rf /var/lib/apt/lists/*",
+    "build_command": "true"
+  }
+}
