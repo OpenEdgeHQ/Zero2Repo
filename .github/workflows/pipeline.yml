@@ -46,7 +46,7 @@ jobs:
       - name: Build shared runtime
         run: ./cbrun/base_image/build.sh
       - name: Test success, failure, timeout and cache paths without a model
-        run: python -m pytest tests/test_cbrun_docker.py tests/test_cbrun_reliability.py -q -m slow -k 'generic or real_docker or real_cache'
+        run: python -m pytest tests/test_cbrun_docker.py tests/test_cbrun_reliability.py -q -m slow -k 'generic or real_docker or real_cache or custom_cli'
       - name: Check every released case environment
         run: cbrun --all --preflight --check-images --out output/image-preflight
       - name: Exercise every real judge with an empty submission

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -87,7 +88,9 @@ def check_container(container, case_dir: Path, *, phase: str) -> dict:
              ("Hardware_Requirements.md", "/environment/Hardware_Requirements.md")]
     expected = {dest: hashlib.sha256((case_dir / "public" / source).read_bytes()).hexdigest()
                 for source, dest in pairs if (case_dir / "public" / source).is_file()}
-    program = ("import hashlib,json,pathlib,pytest; "
+    test_manifest = json.loads((case_dir / "milestones/final/test_manifest.json").read_text())
+    pytest_import = "import pytest; " if re.search(r"\bpytest\b", test_manifest.get("test_command", "")) else ""
+    program = ("import hashlib,json,pathlib; " + pytest_import +
                f"expected=json.loads({json.dumps(json.dumps(expected))}); "
                "assert all(hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()==h for p,h in expected.items()), 'public input hash mismatch'; "
                "assert not pathlib.Path('/tests/final').exists(), 'hidden tests present before injection'; "

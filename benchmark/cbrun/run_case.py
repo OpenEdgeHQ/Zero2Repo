@@ -181,7 +181,6 @@ def run_trial(
         container = Container.start(result.agent_image_id, gpus=case.docker_gpus or None, network="host",
                                     block_hosts=GITHUB_BLOCK_HOSTS if block_github else None)
         check_container(container, case_dir, phase="solve")
-        result.cli_version = _probe_cli_version(container, invocation.spec.name)
         passed_steps = []
         for step in steps:
             passed = _run_step(container, case=case, case_dir=case_dir, step=step, image=image,
@@ -458,6 +457,8 @@ def _run_step(
         result.failed_phase = "setup"
         result.reward = 0.0
         return False
+
+    result.cli_version = _probe_cli_version(container, invocation.spec.name)
 
     solve_start = time.monotonic()
     _checkpoint(result, out_dir, "solve")

@@ -199,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.preflight:
         from .preflight import validate_case, check_container
+        from .assets import load_case
         from .images import ensure_agent_image
         from .docker_env import Container
         from .judge_profiles import start_judge_container
@@ -208,13 +209,14 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 report = validate_case(case_dir, allow_leakage=args.allow_leakage, require_denylist=args.require_denylist)
                 if args.check_images:
+                    gpus = load_case(case_dir).docker_gpus or None
                     report["images"] = []
                     for backend in backends:
                         with capture_builds(args.out / case_dir.name / (backend or "custom") / "image_build.log"):
                             built = ensure_agent_image(case_dir.name, case_dir=case_dir, cache_root=args.cache_root,
                                                        force=args.force_image, backend=backend or "custom")
                         identity = image_identity(built.agent_image)
-                        solve = Container.start(identity["id"], network="none")
+                        solve = Container.start(identity["id"], gpus=gpus, network="none")
                         try:
                             solve_checks = check_container(solve, case_dir, phase="solve")
                             if backend is not None:
@@ -222,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                                 solve_checks["cli_version"] = _probe_cli_version(solve, backend)
                         finally:
                             solve.remove()
-                        judge = start_judge_container(identity["id"], case_dir=case_dir)
+                        judge = start_judge_container(identity["id"], case_dir=case_dir, gpus=gpus)
                         try:
                             judge_checks = check_container(judge, case_dir, phase="judge")
                         finally:

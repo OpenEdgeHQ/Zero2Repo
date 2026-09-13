@@ -247,3 +247,61 @@ def test_resource_archives_cannot_escape_the_model_directory(tmp_path):
     with pytest.raises(ValueError, match='unsafe archive'):
         module.extract(archive, tmp_path / 'models', 100)
     assert not (tmp_path / 'outside').exists()
+
+
+def test_image_preflight_forwards_declared_gpus(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from cbrun import cli, images, preflight, run_case
+    case = make_case(tmp_path / 'cases')
+    path = case / 'source/manifest.json'
+    data = json.loads(path.read_text())
+    data['runner']['docker_gpus'] = 'all'
+    atomic_json(path, data)
+    calls = []
+    class Fake:
+        def remove(self): pass
+    def start(image, **kwargs):
+        calls.append(kwargs)
+        return Fake()
+    monkeypatch.setattr(Container, 'start', start)
+    monkeypatch.setattr(images, 'ensure_agent_image', lambda *a, **k: SimpleNamespace(agent_image='fixture'))
+    monkeypatch.setattr(cli, 'image_identity', lambda *a: {'id': 'fixture'})
+    monkeypatch.setattr(preflight, 'check_container', lambda *a, **k: {})
+    monkeypatch.setattr(run_case, '_probe_cli_version', lambda *a: 'fixture-cli')
+    assert main(['--all', '--cases-root', str(case.parent), '--preflight', '--check-images', '--out', str(tmp_path/'out')]) == 0
+    assert len(calls) == 2
+    assert all(call['gpus'] == 'all' for call in calls)
+
+
+def test_non_pytest_case_does_not_require_pytest(tmp_path):
+    from cbrun.preflight import check_container
+    from cbrun.docker_env import ExecResult
+    case = make_case(tmp_path)
+    path = case / 'milestones/final/test_manifest.json'
+    manifest = json.loads(path.read_text())
+    manifest['test_command'] = 'node --test'
+    atomic_json(path, manifest)
+    source = case / 'source/manifest.json'
+    data = json.loads(source.read_text())
+    data['runner']['environment_checks'] = []
+    atomic_json(source, data)
+    commands = []
+    class Fake:
+        def exec(self, command, **kwargs):
+            commands.append(command)
+            return ExecResult(exit_code=0)
+    check_container(Fake(), case, phase='judge')
+    assert all('import pytest' not in command for command in commands)
+
+
+@pytest.mark.slow
+def test_custom_cli_can_be_installed_before_version_probe(docker_case):
+    case, root = docker_case
+    spec = root / 'custom-install.json'
+    command = "mkdir -p /app/src; printf 'def value():\\n    return 42\\n' > /app/src/answer.py; printf 'CODINGBENCH_SUBMIT\\n' > /logs/agent/submit"
+    atomic_json(spec, {'name': 'codex', 'command': command, 'env_passthrough': [],
+        'install_script': "printf '#!/bin/sh\\nprintf custom-cli-version\\n' > /usr/local/bin/codex; chmod +x /usr/local/bin/codex"})
+    result = run_trial(case, agent_spec_path=spec, model='offline/no-model', out_dir=root/'custom-install-run',
+                       cache_root=root/'cache', limits=Limits(10,20,0))
+    assert result.evaluated, result.to_dict()
+    assert result.cli_version == 'custom-cli-version'
