@@ -171,7 +171,7 @@ class Container:
         (typically ``/app``) both stay quiet for ``stall_window_sec``.
         """
         wrapped = (
-            f"timeout --signal=KILL {int(wall_timeout_sec)} bash -lc {_shq(command)}"
+            f"timeout --signal=KILL {int(wall_timeout_sec)} bash -o pipefail -lc {_shq(command)}"
         )
         argv = self._exec_argv(wrapped, workdir=workdir, env=env, user=user)
 

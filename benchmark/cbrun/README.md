@@ -61,6 +61,10 @@ wall-clock budgets:
 A conservative stall watchdog stops a wedged CLI when both stdout and `/app`
 stay quiet, without treating a long compile or a long model turn as a hang.
 
+The solve shell enables `pipefail`, so a failed agent command remains nonzero
+when its output is piped through `tee`. Logging success does not turn a CLI
+failure into a successful solve exit.
+
 ## Termination and submit
 
 The agent submits by writing `/logs/agent/submit` with the single line
