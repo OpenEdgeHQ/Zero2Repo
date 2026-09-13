@@ -95,3 +95,34 @@ def test_prepare_workspace_nonroot_chowns_app() -> None:
     inv = agent_spec.resolve_agent(backend="claude-code", model="claude-sonnet-4")
     assert "cbagent" in inv.prepare_workspace
     assert "/app" in inv.prepare_workspace
+
+
+def test_codex_gateway_setup_is_idempotent_and_serializes_credentials(tmp_path):
+    import os
+    import subprocess
+    from dataclasses import replace
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    from cbrun.agent_spec import builtin_spec, resolve_agent
+    spec = replace(builtin_spec('codex'), home=str(tmp_path / 'codex-home'))
+    key = 'dummy-key-with-"-and-\\-characters'
+    invocation = resolve_agent(spec=spec, model='openai/gpt-6-astra', environ={
+        'OPENAI_API_KEY': key, 'OPENAI_BASE_URL': 'https://gateway.invalid/v1',
+        'CBRUN_CODEX_REASONING_EFFORT': 'low'})
+    for _ in range(2):
+        process = subprocess.run(['bash', '-lc', invocation.setup_script],
+            env={**os.environ, **invocation.env}, capture_output=True, text=True)
+        assert process.returncode == 0, process.stderr
+        assert key not in process.stdout + process.stderr
+    config = tomllib.loads((tmp_path / 'codex-home/config.toml').read_text())
+    assert config['model_provider'] == 'cbrun_gateway'
+    assert config['model_reasoning_effort'] == 'low'
+    provider = config['model_providers']['cbrun_gateway']
+    assert provider['wire_api'] == 'responses'
+    assert provider['env_key'] == 'OPENAI_API_KEY'
+    assert key not in str(config)
+    auth = tmp_path / 'codex-home/auth.json'
+    assert json.loads(auth.read_text())['OPENAI_API_KEY'] == key
+    assert auth.stat().st_mode & 0o777 == 0o600

@@ -167,7 +167,9 @@ def validate_lock_env_install(lock: dict[str, Any]) -> None:
 def _benchmark_ignore(directory: str, names: list[str]) -> set[str]:  # noqa: ARG001
     ignored: set[str] = set()
     for name in names:
-        if name in _BENCHMARK_EXCLUDED_NAMES:
+        if name == "__pycache__" or name.endswith((".pyc", ".pyo")):
+            ignored.add(name)
+        elif name in _BENCHMARK_EXCLUDED_NAMES:
             ignored.add(name)
         elif name.endswith(_BENCHMARK_EXCLUDED_SUFFIXES):
             ignored.add(name)
@@ -203,15 +205,11 @@ def stage_benchmark_bundle(case_dir: Path, final_dir: Path) -> Iterator[Path]:
         env_root = bundle / "environment"
         prd_dir = env_root / "prd"
         prd_dir.mkdir(parents=True)
-        (prd_dir / "Full_PRD.md").write_text(prd_text + "\n", encoding="utf-8")
-        (env_root / "Interface_Contract.md").write_text(
-            contract_text + "\n", encoding="utf-8"
-        )
+        shutil.copyfile(prd_path, prd_dir / "Full_PRD.md")
+        shutil.copyfile(contract_path, env_root / "Interface_Contract.md")
         hw_path = public / "Hardware_Requirements.md"
         if hw_path.is_file():
-            (env_root / "Hardware_Requirements.md").write_text(
-                hw_path.read_text(encoding="utf-8").strip() + "\n", encoding="utf-8"
-            )
+            shutil.copyfile(hw_path, env_root / "Hardware_Requirements.md")
         shutil.copytree(
             final_dir,
             bundle / "final",

@@ -343,20 +343,36 @@ def _claude_config_dir(spec: AgentSpec) -> str:
     return f"{home}/{AGENT_CLAUDE_CONFIG_DIRNAME}"
 
 
-_CODEX_SETUP = """set -eu
-mkdir -p "$CODEX_HOME"
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  printf '%s\\n' "{\\"OPENAI_API_KEY\\": \\"${OPENAI_API_KEY}\\"}" > "$CODEX_HOME/auth.json"
-fi
-if [ -n "${OPENAI_BASE_URL:-}" ]; then
-  printf '%s\\n' "openai_base_url = \\"${OPENAI_BASE_URL}\\"" >> "$CODEX_HOME/config.toml"
-fi
+_CODEX_SETUP = r"""set -eu
+python3 - <<'CBRUN_CONFIG'
+import json, os
+from pathlib import Path
+home = Path(os.environ["CODEX_HOME"])
+home.mkdir(parents=True, exist_ok=True)
+key = os.environ.get("OPENAI_API_KEY")
+if key:
+    auth = home / "auth.json"
+    auth.write_text(json.dumps({"OPENAI_API_KEY": key}) + "\n")
+    auth.chmod(0o600)
+lines = []
+effort = os.environ.get("CBRUN_CODEX_REASONING_EFFORT", "").strip()
+if effort:
+    lines.append("model_reasoning_effort = " + json.dumps(effort))
+base = os.environ.get("OPENAI_BASE_URL", "").strip()
+if base:
+    lines += ['model_provider = "cbrun_gateway"',
+              '[model_providers.cbrun_gateway]',
+              'name = "OpenAI-compatible gateway"',
+              'base_url = ' + json.dumps(base),
+              'wire_api = "responses"', 'env_key = "OPENAI_API_KEY"']
+(home / "config.toml").write_text("\n".join(lines) + "\n")
+CBRUN_CONFIG
 """
 
 _BUILTIN_SPECS: dict[str, AgentSpec] = {
     "codex": AgentSpec(
         name="codex",
-        env_passthrough=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+        env_passthrough=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CBRUN_CODEX_REASONING_EFFORT"),
         setup_script=_CODEX_SETUP,
         run_as="root",
         model_prefix="keep",

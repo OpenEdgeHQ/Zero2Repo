@@ -133,7 +133,15 @@
     "build_command": "",
     "env_probe_command": "PYTHONPATH=src python3 -c \"import os, otpkit; assert os.path.realpath(otpkit.__file__).startswith(os.path.realpath('src')); totp = otpkit.TOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'); assert totp.at(1111111111) == '050471'; hotp = otpkit.HOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'); assert hotp.at(1) == '287082'; assert hotp.verify('287082', 1)\"",
     "test_command_template": "PYTHONPATH=src python3 -m unittest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "environment_checks": [
+      {
+        "name": "case_toolchain",
+        "command": "python3 -c 'import hatchling,pytest'",
+        "phase": "both",
+        "timeout_sec": 30
+      }
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "otpkit",

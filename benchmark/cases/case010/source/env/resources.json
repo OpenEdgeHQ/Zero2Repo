@@ -1,0 +1,75 @@
+{
+  "source_revision": "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a",
+  "resources": [
+    {
+      "id": "averaged_perceptron_tagger_eng",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/taggers/averaged_perceptron_tagger_eng.zip",
+      "sha256": "6025f530624335c67d6547d44757b357b4e79bae030a0383e9887a92c1718f0b",
+      "size": 1539115,
+      "unpacked_size": 5703817,
+      "directory": "taggers",
+      "license": "MIT License",
+      "source": "https://github.com/sloria/textblob-aptagger"
+    },
+    {
+      "id": "averaged_perceptron_tagger_rus",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/taggers/averaged_perceptron_tagger_rus.zip",
+      "sha256": "b69239b2b42029edf536f6643e4ccf4c641b9d602830d5eab2724f4bd36c7155",
+      "size": 5997187,
+      "unpacked_size": 30246815,
+      "directory": "taggers",
+      "license": "MIT License",
+      "source": "http://www.ruscorpora.ru/en/"
+    },
+    {
+      "id": "maxent_ne_chunker_tab",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/chunkers/maxent_ne_chunker_tab.zip",
+      "sha256": "1370234c7770045d0c50f41e08bc627ec92450324a946de14b93cd7d5e362a86",
+      "size": 5449208,
+      "unpacked_size": 14621652,
+      "directory": "chunkers",
+      "license": "See included data documentation",
+      "source": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/index.xml"
+    },
+    {
+      "id": "punkt_tab",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/tokenizers/punkt_tab.zip",
+      "sha256": "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106",
+      "size": 4319076,
+      "unpacked_size": 10885330,
+      "directory": "tokenizers",
+      "license": "See included data documentation",
+      "source": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/index.xml"
+    },
+    {
+      "id": "stopwords",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/corpora/stopwords.zip",
+      "sha256": "48c0e52d8b52546e827f53761fb30300c0ab94f70660d28bd65ba0a86270946b",
+      "size": 37733,
+      "unpacked_size": 89446,
+      "directory": "corpora",
+      "license": "See included data documentation",
+      "source": "ftp://ftp.cs.cornell.edu/pub/smart/english.stop and http://snowball.tartarus.org/ and others"
+    },
+    {
+      "id": "universal_tagset",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/taggers/universal_tagset.zip",
+      "sha256": "d490e1ae8f5625dcdfdda04be15c22a2aade8c2561a36a61edcdf0c7d6aa8352",
+      "size": 19095,
+      "unpacked_size": 37147,
+      "directory": "taggers",
+      "license": "CC-BY-SA-4.0",
+      "source": "https://github.com/slavpetrov/universal-pos-tags"
+    },
+    {
+      "id": "words",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/corpora/words.zip",
+      "sha256": "54ed02917d6771dcc3e8141218960d020947f7f2ccfd9ac9b320979349746015",
+      "size": 757777,
+      "unpacked_size": 2498552,
+      "directory": "corpora",
+      "license": "public domain",
+      "source": "http://en.wikipedia.org/wiki/Words_(Unix)"
+    }
+  ]
+}

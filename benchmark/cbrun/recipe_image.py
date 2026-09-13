@@ -24,11 +24,15 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from .docker_env import docker_available, image_exists
+from .build_logs import run_build
 from .images import deliverable_tag
+from .state import (FINGERPRINT_LABEL, case_manifest, digest, file_manifest,
+                    image_identity, image_matches, platform_name, versioned_tag)
 from .recipe import (
     RecipeLockError,
     env_recipe_tag,
@@ -60,7 +64,7 @@ _REGISTRY_ENV_KEYS = (
 
 
 def _remove_container(name: str) -> None:
-    subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, timeout=30)
 
 
 def _env_build_retries() -> int:
@@ -135,53 +139,60 @@ def _load_manifest_runner(case_dir: Path) -> dict[str, Any]:
     return runner
 
 
-def _ensure_base_image(base_image: str) -> None:
+def _ensure_base_image(base_image: str) -> str:
     """Make *base_image* available locally.
 
     Public tags are pulled. ``codingbench-base/<public>`` is built FROM the
     public image using ``base_image/Dockerfile`` (toolchain, not a retag).
     """
-    if image_exists(base_image):
-        return
     from_image = public_base_pull_ref(base_image)
-    print(f"[cbrun] pulling {from_image}", flush=True)
-    proc = subprocess.run(["docker", "pull", from_image])
-    if proc.returncode != 0:
-        raise RecipeLockError(
-            f"docker pull failed for {from_image} "
-            f"(exit {proc.returncode}; see streamed docker output above)"
-        )
+    if from_image != base_image and platform_name() != "linux/amd64":
+        raise RecipeLockError("the bundled toolchain requires linux/amd64; use CBRUN_PLATFORM=linux/amd64 or a compatible custom base")
+    try:
+        parent = image_identity(from_image)
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        print(f"[cbrun] pulling {from_image} for {platform_name()}", flush=True)
+        proc = run_build(["docker", "pull", "--platform", platform_name(), from_image], timeout=900)
+        if proc.returncode != 0:
+            raise RecipeLockError(f"docker pull failed for {from_image} (exit {proc.returncode})")
+        parent = image_identity(from_image)
     if from_image == base_image:
-        if not image_exists(base_image):
-            raise RecipeLockError(f"base image still missing after pull: {base_image}")
-        return
+        return parent["id"]
 
     dockerfile = BASE_IMAGE_DOCKERFILE_DIR / "Dockerfile"
     if not dockerfile.is_file():
         raise RecipeLockError(f"missing base-image Dockerfile: {dockerfile}")
+    fingerprint = digest({"parent": parent["id"], "platform": platform_name(),
+                          "dockerfile": file_manifest(dockerfile)})
+    tag = versioned_tag(base_image, fingerprint)
+    if image_matches(tag, fingerprint):
+        return tag
     print(
         f"[cbrun] building {base_image} FROM {from_image} "
         f"({dockerfile})",
         flush=True,
     )
-    proc = subprocess.run(
+    proc = run_build(
         [
             "docker",
             "build",
+            "--platform", platform_name(),
+            "--label", f"{FINGERPRINT_LABEL}={fingerprint}",
             "--build-arg",
             f"FROM_IMAGE={from_image}",
             "-t",
-            base_image,
+            tag,
             str(BASE_IMAGE_DOCKERFILE_DIR),
-        ]
+        ], timeout=1800,
     )
     if proc.returncode != 0:
         raise RecipeLockError(
             f"docker build failed for {base_image} "
             f"(exit {proc.returncode}; see streamed docker output above)"
         )
-    if not image_exists(base_image):
-        raise RecipeLockError(f"base image still missing after build: {base_image}")
+    if not image_matches(tag, fingerprint):
+        raise RecipeLockError(f"base image identity invalid after build: {tag}")
+    return tag
 
 
 def _build_env_image(
@@ -195,23 +206,28 @@ def _build_env_image(
         raise RecipeLockError("docker is unavailable")
 
     case_id = case_dir.name
-    tag = env_recipe_tag(case_id)
-    if not force and image_exists(tag):
+    base_image = _ensure_base_image(resolve_lock_base_image(lock))
+    base_id = image_identity(base_image)["id"]
+    fingerprint = digest({"base": base_id, "platform": platform_name(),
+                          "install": runner.get("install_command"),
+                          "env_assets": file_manifest(case_dir / "source/env"),
+                          "registry": digest({k: os.environ[k] for k in _REGISTRY_ENV_KEYS if k in os.environ}),
+                          "builder": file_manifest(Path(__file__))})
+    tag = versioned_tag(env_recipe_tag(case_id), fingerprint)
+    if not force and image_matches(tag, fingerprint):
         print(f"[cbrun] reusing env image {tag}", flush=True)
         return tag
-
-    base_image = resolve_lock_base_image(lock)
-    _ensure_base_image(base_image)
 
     install = str(runner.get("install_command") or "").strip()
     if not install or install.lower() == "true":
         raise RecipeLockError("runner.install_command is empty")
 
-    container_name = f"z2r-recipe-env-{case_id}"
+    container_name = f"z2r-recipe-env-{case_id}-{uuid.uuid4().hex[:12]}"
     gpus = _runner_docker_gpus(runner)
     argv = [
         "docker",
         "run",
+        "--platform", platform_name(),
         "--name",
         container_name,
         "--network",
@@ -221,7 +237,7 @@ def _build_env_image(
     if gpus:
         argv.extend(["--gpus", gpus])
     argv.extend(_volume_mounts(case_dir))
-    argv.extend([base_image, "bash", "-lc", install])
+    argv.extend([base_id, "bash", "-o", "pipefail", "-lc", install])
 
     retries = _env_build_retries()
     delay = _env_build_retry_delay_sec()
@@ -233,9 +249,14 @@ def _build_env_image(
             f"(attempt {attempt}/{retries})",
             flush=True,
         )
-        proc = subprocess.run(argv)
+        try:
+            proc = run_build(argv, timeout=1800)
+        except BaseException:
+            _remove_container(container_name)
+            raise
         if proc.returncode == 0:
             break
+        _remove_container(container_name)
         last_output = f"exit {proc.returncode} (see streamed docker output above)"
         if attempt < retries:
             print(
@@ -251,12 +272,14 @@ def _build_env_image(
             f"env-only install failed after {retries} attempts:\n{last_output}"
         )
 
-    commit = subprocess.run(
-        ["docker", "commit", container_name, tag],
-        capture_output=True,
-        text=True,
-    )
-    _remove_container(container_name)
+    clear_registry = [arg for key in _REGISTRY_ENV_KEYS if key in os.environ
+                      for arg in ("-c", f"ENV {key}=")]
+    try:
+        commit = subprocess.run(
+            ["docker", "commit", "-c", f"LABEL {FINGERPRINT_LABEL}={fingerprint}", *clear_registry, container_name, tag],
+            capture_output=True, text=True, timeout=300)
+    finally:
+        _remove_container(container_name)
     if commit.returncode != 0:
         raise RecipeLockError(f"docker commit failed: {commit.stderr.strip()}")
     print(f"[cbrun] committed env image {tag}", flush=True)
@@ -270,43 +293,52 @@ def _stage_deliverable(
     force: bool,
 ) -> str:
     case_id = case_dir.name
-    tag = deliverable_tag(case_id)
-    if not force and image_exists(tag):
+    env_id = image_identity(env_tag)["id"]
+    fingerprint = digest({"env": env_id, "case": case_manifest(case_dir),
+                          "staging": staging_shell_command(),
+                          "recipe_code": file_manifest(Path(__file__).with_name("recipe.py"))})
+    tag = versioned_tag(deliverable_tag(case_id), fingerprint)
+    if not force and image_matches(tag, fingerprint):
         print(f"[cbrun] reusing deliverable image {tag}", flush=True)
         return tag
 
     final_dir = case_dir / "milestones" / "final"
-    container_name = f"z2r-recipe-deliverable-{case_id}"
+    container_name = f"z2r-recipe-deliverable-{case_id}-{uuid.uuid4().hex[:12]}"
     with stage_benchmark_bundle(case_dir, final_dir) as bundle:
         _remove_container(container_name)
         argv = [
             "docker",
             "run",
+            "--platform", platform_name(),
             "--name",
             container_name,
             "--network",
             _docker_network(),
             "-v",
             f"{bundle}:/src:ro",
-            env_tag,
+            env_id,
             "bash",
             "-lc",
             staging_shell_command(),
         ]
         print(f"[cbrun] staging deliverable {tag} from {env_tag}", flush=True)
-        proc = subprocess.run(argv)
+        try:
+            proc = run_build(argv, timeout=120)
+        except BaseException:
+            _remove_container(container_name)
+            raise
         if proc.returncode != 0:
             _remove_container(container_name)
             raise RecipeLockError(
                 f"deliverable staging failed (exit {proc.returncode}; "
                 "see streamed docker output above)"
             )
-        commit = subprocess.run(
-            ["docker", "commit", "-c", "WORKDIR /app", container_name, tag],
-            capture_output=True,
-            text=True,
-        )
-        _remove_container(container_name)
+        try:
+            commit = subprocess.run(
+                ["docker", "commit", "-c", "WORKDIR /app", "-c", f"LABEL {FINGERPRINT_LABEL}={fingerprint}", container_name, tag],
+                capture_output=True, text=True, timeout=300)
+        finally:
+            _remove_container(container_name)
         if commit.returncode != 0:
             raise RecipeLockError(f"docker commit failed: {commit.stderr.strip()}")
     print(f"[cbrun] committed deliverable image {tag}", flush=True)
@@ -320,15 +352,11 @@ def ensure_deliverable_image(
 ) -> str:
     """Build or reuse ``codingbench-benchmark/<case>:deliverable``.
 
-    Idempotent when ``force`` is false and the tag already exists.
+    Cache identities include the base, recipe and current case contents.
     """
     case_dir = Path(case_dir).resolve()
-    tag = deliverable_tag(case_dir.name)
-    if not force and image_exists(tag):
-        return tag
-
     lock = load_lock(case_dir)
     validate_lock_env_install(lock)
     runner = resolve_lock_runner(lock, _load_manifest_runner(case_dir))
     env_tag = _build_env_image(case_dir, lock, runner, force=force)
-    return _stage_deliverable(case_dir, env_tag, force=True)
+    return _stage_deliverable(case_dir, env_tag, force=force)

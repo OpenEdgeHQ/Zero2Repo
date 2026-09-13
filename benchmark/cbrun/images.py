@@ -19,14 +19,15 @@ runtime), and are re-injected only for the judge phase.
 Note on a shared CLI base: the published ``:deliverable`` images have
 heterogeneous bases (e.g. ``python:3.13-slim`` vs ``cuda:13.0-devel-ubuntu24.04``),
 so a single shared ``FROM`` base cannot be overlaid onto all of them. cbrun
-instead installs pinned CLI versions per case with idempotent caching (skip when
-the ``:agent`` image already exists), which gives the same reproducibility goal
+instead installs pinned CLI versions per case with content-validated caching,
+which gives the same reproducibility goal
 without an impossible image merge.
 """
 
 from __future__ import annotations
 
 import subprocess
+import json
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,9 @@ from pathlib import Path
 from . import agents
 from .denylist import write_shim_assets
 from .docker_env import image_exists
+from .build_logs import run_build
+from .state import (FINGERPRINT_LABEL, atomic_json, cache_lock, digest, file_manifest,
+                    image_identity, image_matches, platform_name, versioned_tag)
 
 # Defense in depth when :deliverable was built before workspace sanitization existed.
 _AGENT_APP_SANITIZE = (
@@ -81,9 +85,10 @@ def extract_hidden_tests(deliverable_image: str, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     create = subprocess.run(
-        ["docker", "create", deliverable_image],
+        ["docker", "create", "--platform", platform_name(), deliverable_image],
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if create.returncode != 0:
         raise RuntimeError(f"docker create {deliverable_image} failed: {create.stderr.strip()}")
@@ -93,6 +98,7 @@ def extract_hidden_tests(deliverable_image: str, dest_dir: Path) -> Path:
             ["docker", "cp", f"{container_id}:{CONTAINER_TESTS_FINAL}", str(dest_dir / "final")],
             capture_output=True,
             text=True,
+            timeout=120,
         )
         if cp.returncode != 0:
             raise RuntimeError(
@@ -100,7 +106,7 @@ def extract_hidden_tests(deliverable_image: str, dest_dir: Path) -> Path:
                 f"{cp.stderr.strip()}"
             )
     finally:
-        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, text=True)
+        subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, text=True, timeout=30)
 
     final_dir = dest_dir / "final"
     if not (final_dir / "test_manifest.json").is_file():
@@ -125,6 +131,8 @@ def _node_install_snippet() -> str:
 
 
 def _cli_install_snippet(environ: dict[str, str] | None, backend: str | None = None) -> str:
+    if backend == "custom":
+        return "true"
     if backend == "cursor":
         return agents.cli_install_command("cursor", environ)
     if backend is not None:
@@ -159,8 +167,8 @@ def _build_dockerfile(
     if denylist_snippet:
         denylist_block = f"RUN mkdir -p /opt/cbrun/bin\n{denylist_snippet}"
     cli = _cli_install_snippet(environ, backend)
-    # Cursor installs from the official script; other backends need npm.
-    if backend == "cursor":
+    # Custom specs install their own tools; Cursor uses its official script.
+    if backend in {"cursor", "custom"}:
         install = f"RUN set -eux; {cli}; {_agent_user_snippet()}\n"
     else:
         install = (
@@ -188,31 +196,31 @@ def ensure_agent_image(
 ) -> AgentImage:
     """Build (or reuse) the ``:agent`` image and extract hidden tests.
 
-    Idempotent: when the ``:agent`` image and the tests cache already exist and
-    ``force`` is False, returns immediately.
+    Reuse requires a matching deliverable identity, installer fingerprint,
+    platform and intact test cache. Legacy tag existence is insufficient.
     """
-    deliverable = deliverable_image or deliverable_tag(case_id)
-    if not image_exists(deliverable) or (force and case_dir is not None):
-        if case_dir is None:
-            raise RuntimeError(
-                f"deliverable image not found: {deliverable}. Pass case_dir so "
-                "cbrun can rebuild it from recipe.lock + the shared base image."
-            )
+    if deliverable_image is None and case_dir is not None:
         from .recipe_image import ensure_deliverable_image
-
         deliverable = ensure_deliverable_image(case_dir, force=force)
-
-    tag = agent_tag(case_id, backend)
-    tests_cache = Path(cache_root) / case_id / "tests"
-    final_dir = tests_cache / "final"
-
-    cached_ready = (final_dir / "test_manifest.json").is_file()
-    if image_exists(tag) and cached_ready and not force:
-        return AgentImage(case_id, deliverable, tag, tests_cache)
-
-    # Always (re)extract hidden tests so the host cache matches the deliverable.
-    extract_hidden_tests(deliverable, tests_cache)
-
+    else:
+        # An explicit imported image is an operator override; its actual ID
+        # still determines every downstream cache identity.
+        deliverable = deliverable_image or deliverable_tag(case_id)
+    deliverable_id = image_identity(deliverable)["id"]
+    tests_cache = Path(cache_root) / case_id / deliverable_id.removeprefix("sha256:") / "tests"
+    record_path = tests_cache.parent / "tests.json"
+    with cache_lock(tests_cache.parent / ".lock"):
+        try:
+            record = json.loads(record_path.read_text())
+        except (OSError, ValueError):
+            record = {}
+        current = file_manifest(tests_cache / "final")
+        if (record.get("deliverable_id") != deliverable_id or not current
+                or record.get("files") != current
+                or not (tests_cache / "final/test_manifest.json").is_file()):
+            extract_hidden_tests(deliverable_id, tests_cache)
+            atomic_json(record_path, {"deliverable_id": deliverable_id,
+                                      "files": file_manifest(tests_cache / "final")})
     with tempfile.TemporaryDirectory() as ctx:
         build_ctx = Path(ctx)
         denylist_snippet = ""
@@ -221,17 +229,27 @@ def ensure_agent_image(
         dockerfile = _build_dockerfile(
             deliverable, environ, denylist_snippet=denylist_snippet, backend=backend
         )
+        fingerprint = digest({"deliverable_id": deliverable_id, "dockerfile": dockerfile,
+                              "platform": platform_name(), "shim_assets": file_manifest(build_ctx),
+                              "images_code": file_manifest(Path(__file__))})
+        tag = versioned_tag(agent_tag(case_id, backend), fingerprint)
+        if not force and image_matches(tag, fingerprint):
+            return AgentImage(case_id, deliverable, tag, tests_cache)
         df_path = build_ctx / "Dockerfile"
         df_path.write_text(dockerfile, encoding="utf-8")
         print(
             f"[cbrun] building agent image {tag} (cli={backend or 'all'})",
             flush=True,
         )
-        build = subprocess.run(
-            ["docker", "build", "-t", tag, "-f", str(df_path), ctx],
+        build = run_build(
+            ["docker", "build", "--platform", platform_name(), "--label",
+             f"{FINGERPRINT_LABEL}={fingerprint}", "-t", tag, "-f", str(df_path), ctx],
+            timeout=1800,
         )
         if build.returncode != 0:
             raise RuntimeError(f"docker build of {tag} failed (exit {build.returncode})")
+        if not image_matches(tag, fingerprint):
+            raise RuntimeError(f"agent image identity invalid after build: {tag}")
     return AgentImage(case_id, deliverable, tag, tests_cache)
 
 

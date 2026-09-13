@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import pytest
 from pathlib import Path
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +97,9 @@ class _FakeContainer:
         self.injected: list[str] = []
         self.written: list[str] = []
 
+    def pause(self):
+        self.paused = True
+
     def exec(self, command, *, env=None, timeout_sec=None, workdir=None, user=None):
         if "final_judge.py" in command:
             return self._exec_result
@@ -126,7 +130,7 @@ def _seed_tests_dir(tmp_path: Path) -> Path:
 def test_run_judge_parses_reward_from_report(tmp_path: Path) -> None:
     final_dir = _seed_tests_dir(tmp_path)
     fake = _FakeContainer(
-        report={"reward": 1.0, "judge_error": None},
+        report={"reward": 1.0, "judge_error": None, "final": {"counts_parsed": True, "total_count": 1, "passed_count": 1, "failed_count": 0, "error_count": 0}},
         exec_result=ExecResult(exit_code=0),
     )
     outcome = judge.run_judge(
@@ -200,7 +204,7 @@ def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) 
     solve.cp_from = _cp_from  # type: ignore[method-assign]
 
     judge_fake = _FakeContainer(
-        report={"reward": 1.0, "judge_error": None},
+        report={"reward": 1.0, "judge_error": None, "final": {"counts_parsed": True, "total_count": 1, "passed_count": 1, "failed_count": 0, "error_count": 0}},
         exec_result=ExecResult(exit_code=0),
     )
     started: list[tuple[str, dict]] = []
@@ -252,3 +256,21 @@ def test_probe_cli_version_unknown_spec_returns_none() -> None:
     from cbrun.run_case import _probe_cli_version  # noqa: WPS433
 
     assert _probe_cli_version(_FakeContainer(None, ExecResult(exit_code=0)), "custom") is None
+
+
+@pytest.mark.parametrize("report", [
+    {"reward": 1.0, "judge_error": None},
+    {"reward": float("nan"), "judge_error": None},
+    {"reward": 1.0, "judge_error": None, "final": {"counts_parsed": True, "total_count": 2, "passed_count": 1, "failed_count": 1}},
+])
+def test_invalid_judge_report_cannot_be_a_success(tmp_path, report):
+    outcome = judge.run_judge(_FakeContainer(report, ExecResult(exit_code=0)),
+        tests_final_dir=_seed_tests_dir(tmp_path), task_toml=b"x=1\n", test_timeout_sec=10,
+        artifacts_dir=tmp_path / "artifacts")
+    assert outcome.reward == 0 and outcome.judge_error
+    assert (tmp_path / "artifacts/judge_result.json").is_file()
+
+
+def test_failed_workspace_copy_is_not_graded_as_empty_submission(tmp_path):
+    with pytest.raises(RuntimeError, match="export candidate"):
+        judge.export_app(_FakeContainer(None, ExecResult(exit_code=0)), tmp_path / "export")

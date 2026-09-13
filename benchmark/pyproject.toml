@@ -16,6 +16,7 @@ Homepage = "https://zero2repo.ai/"
 Repository = "https://github.com/OpenEdgeHQ/Zero2Repo"
 
 [project.optional-dependencies]
+test = ["pytest>=8", "tomli>=2; python_version < '3.11'"]
 # The Harbor engine itself. Kept optional so the adapter/judge can be installed
 # and unit-checked without pulling the full harness toolchain.
 harbor = ["harbor"]
@@ -35,6 +36,7 @@ build-backend = "setuptools.build_meta"
 include = ["coding_bench_harbor*", "cbrun*"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "slow: docker-gated integration tests that build/run case images",
 ]

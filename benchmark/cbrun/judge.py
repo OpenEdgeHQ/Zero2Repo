@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .docker_env import Container
+from .state import atomic_json
 
 __all__ = [
     "JudgeOutcome",
@@ -57,8 +58,7 @@ def export_app(container: Container, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     ok = container.cp_from(CONTAINER_APP, dest)
     if not ok:
-        # Empty or missing /app: leave an empty tree the judge can still mount.
-        (dest / "app").mkdir(parents=True, exist_ok=True)
+        raise RuntimeError("could not export candidate /app; refusing to judge an empty replacement")
     workspace = dest / "app"
     return workspace if workspace.is_dir() else dest
 
@@ -128,12 +128,23 @@ def run_judge(
     if got_report and report_local.is_file():
         try:
             report = json.loads(report_local.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (ValueError, OSError):
             report = {}
+    if not isinstance(report, dict):
+        report = {}
 
     if report:
-        reward = float(report.get("reward", 0.0) or 0.0)
+        raw_reward = report.get("reward")
+        reward = float(raw_reward) if isinstance(raw_reward, (int, float)) and not isinstance(raw_reward, bool) else -1.0
         judge_error = report.get("judge_error")
+        final = report.get("final")
+        if not judge_error:
+            if reward not in (0.0, 1.0):
+                judge_error = "invalid non-binary reward in judge report"
+            elif not isinstance(final, dict) or final.get("counts_parsed") is not True or not final.get("total_count"):
+                judge_error = "judge report has no verified test counts"
+            elif reward == 1.0 and (final.get("failed_count", 0) or final.get("error_count", 0) or not final.get("passed_count")):
+                judge_error = "passing reward contradicts test counts"
     else:
         reward = 0.0
         if res.timed_out:
@@ -143,6 +154,15 @@ def run_judge(
                 f"final_judge produced no report (exit {res.exit_code}); "
                 f"tail: {res.tail[-800:]}"
             )
+    if res.timed_out:
+        judge_error = f"judge timed out after {test_timeout_sec}s"
+    elif res.exit_code and not judge_error:
+        judge_error = f"judge process failed (exit {res.exit_code})"
+    if judge_error:
+        reward = 0.0
+    atomic_json(artifacts_dir / "judge_result.json", {"reward": reward, "judge_error": judge_error,
+                "exit_code": res.exit_code, "timed_out": res.timed_out,
+                "seconds": res.seconds, "report_available": bool(report)})
 
     return JudgeOutcome(
         reward=reward,
@@ -163,6 +183,7 @@ def run_isolated_judge(
     artifacts_dir: Path,
     workspace_export_dir: Path,
     gpus: str | None = None,
+    case_dir: Path | None = None,
 ) -> JudgeOutcome:
     """Judge ``/app`` from *solve_container* inside a fresh copy of *image*.
 
@@ -170,9 +191,14 @@ def run_isolated_judge(
     started from the image default environment (no solve env) and
     ``--network none``.
     """
+    solve_container.pause()
     host_app = export_app(solve_container, workspace_export_dir)
-    judge_container = Container.start(image, gpus=gpus, network="none")
+    from .judge_profiles import start_judge_container
+    judge_container = start_judge_container(image, case_dir=case_dir, gpus=gpus)
     try:
+        if case_dir is not None:
+            from .preflight import check_container
+            check_container(judge_container, case_dir, phase="judge")
         import_app(judge_container, host_app)
         return run_judge(
             judge_container,

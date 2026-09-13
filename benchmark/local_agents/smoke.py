@@ -49,7 +49,7 @@ SMOKE_INSTRUCTION = (
 PROBE_PATH = f"{CONTAINER_WORKDIR}/smoke_probe.txt"
 AGENT_TIMEOUT_SEC = 600.0
 STALL_WINDOW_SEC = 300.0
-JUDGE_TIMEOUT_SEC = 300.0
+JUDGE_TIMEOUT_SEC = 600.0
 
 
 def _cases_root(cases_root: Path | None = None) -> Path:
@@ -225,7 +225,7 @@ def run_smoke(
 
         leaked = _logs_contain_secrets(agent_log + setup_log, secrets)
         if leaked:
-            print(f"  FAIL secret(s) found in logs: {leaked}", flush=True)
+            print(f"  FAIL {len(leaked)} secret value(s) detected in logs", flush=True)
             ok = False
         else:
             print("  OK   logs contain no literal secrets", flush=True)
@@ -238,7 +238,8 @@ def run_smoke(
             print("  OK   /app/smoke_probe.txt contains AGENT_OK", flush=True)
 
         if solve.exit_code != 0 and not solve.timed_out:
-            print(f"  WARN agent exit={solve.exit_code} (probe may still pass)", flush=True)
+            print(f"  FAIL agent exit={solve.exit_code}", flush=True)
+            ok = False
         elif solve.timed_out:
             print("  FAIL agent timed out", flush=True)
             ok = False
@@ -253,6 +254,7 @@ def run_smoke(
             artifacts_dir=out_dir,
             workspace_export_dir=out_dir / "judge_workspace",
             gpus=case.docker_gpus or None,
+            case_dir=case_dir,
         )
         judge_sec = round(time.monotonic() - t0, 1)
         judge_ok, judge_msg = _smoke_judge_ok(outcome)

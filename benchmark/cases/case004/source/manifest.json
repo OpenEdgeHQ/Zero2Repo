@@ -6,11 +6,7 @@
     "JSONWebSignatureSerializer",
     "Pallets",
     "TimedJSONWebSignatureSerializer",
-    "TimedSerializer",
-    "TimestampSigner",
-    "URLSafeSerializer",
     "URLSafeSerializerMixin",
-    "URLSafeTimedSerializer",
     "contact@palletsprojects.com",
     "discord.gg/pallets",
     "github.com/pallets",
@@ -92,23 +88,11 @@
     "testitsdangerous",
     "tests/test_itsdangerous",
     "timed-json-web-signature-serializer",
-    "timed-serializer",
     "timed_json_web_signature_serializer",
-    "timed_serializer",
     "timedjsonwebsignatureserializer",
-    "timedserializer",
-    "timestamp-signer",
-    "timestamp_signer",
-    "timestampsigner",
-    "url-safe-serializer",
     "url-safe-serializer-mixin",
-    "url-safe-timed-serializer",
-    "url_safe_serializer",
     "url_safe_serializer_mixin",
-    "url_safe_timed_serializer",
-    "urlsafeserializer",
-    "urlsafeserializermixin",
-    "urlsafetimedserializer"
+    "urlsafeserializermixin"
   ],
   "runner": {
     "schema_version": 1,
@@ -118,7 +102,15 @@
     "build_command": "",
     "env_probe_command": "PYTHONPATH=src python3 -c \"import os; import signtoken; from signtoken import URLSafeSerializer; assert os.path.realpath(signtoken.__file__).startswith(os.path.realpath('src')); s=URLSafeSerializer('secret key', 'auth'); token=s.dumps({'id': 5, 'name': 'probe'}); assert s.loads(token)=={'id': 5, 'name': 'probe'}\"",
     "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "environment_checks": [
+      {
+        "name": "case_toolchain",
+        "command": "python3 -c 'import flit_core,freezegun,pytest'",
+        "phase": "both",
+        "timeout_sec": 30
+      }
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "signtoken",

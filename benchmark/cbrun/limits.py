@@ -10,6 +10,7 @@ compiling or thinking for a long time.
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass
 
 __all__ = [
@@ -97,18 +98,18 @@ def resolve_limits(
     applied to both wall-clock budgets (but not the stall window). Per-case
     overrides take precedence over the defaults before the multiplier.
     """
-    if multiplier <= 0:
+    if not math.isfinite(multiplier) or multiplier <= 0:
         raise ValueError(f"timeout multiplier must be positive, got {multiplier}")
 
     agent = agent_timeout_sec if agent_timeout_sec is not None else DEFAULT_AGENT_TIMEOUT_SEC
     test = test_timeout_sec if test_timeout_sec is not None else DEFAULT_TEST_TIMEOUT_SEC
     stall = stall_window_sec if stall_window_sec is not None else DEFAULT_STALL_WINDOW_SEC
 
-    if agent <= 0:
+    if not math.isfinite(agent) or agent <= 0:
         raise ValueError(f"agent timeout must be positive, got {agent}")
-    if test <= 0:
+    if not math.isfinite(test) or test <= 0:
         raise ValueError(f"test timeout must be positive, got {test}")
-    if stall < 0:
+    if not math.isfinite(stall) or stall < 0:
         raise ValueError(f"stall window must be non-negative, got {stall}")
 
     return Limits(

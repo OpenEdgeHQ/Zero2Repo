@@ -88,6 +88,9 @@ distribution, test on another".
 
 ## Quick start
 
+For release checks, failure handling and adding cases, see the
+[pipeline reliability guide](benchmark/cbrun/RELIABILITY.md).
+
 ### Requirements
 
 - Python 3.10+
@@ -103,21 +106,34 @@ cd Zero2Repo
 # vendor dependency used by cost reporting
 git submodule update --init --recursive 2>/dev/null || true
 
-cd benchmark
-pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+(cd benchmark && python -m pip install -e .)
 ```
+
+Run the following commands from the repository root with that environment active.
 
 ### Configure an agent
 
 ```bash
-cd benchmark/local_agents
-cp codex.env.example codex.env          # set OPENAI_API_KEY / MODEL
-# or: cp opencode.env.example opencode.env
-# or: cp claude-code.env.example claude-code.env
-# or: cp cursor.env.example cursor.env
+cp benchmark/local_agents/codex.env.example benchmark/local_agents/codex.env
+# Edit the copied file to set OPENAI_API_KEY / MODEL.
+# The same directory contains templates for other backends.
 ```
 
 ### Build case images from recipe (no per-case download)
+
+Validate the selected release before starting a model:
+
+```bash
+cbrun --all --preflight
+CBRUN_CODEX_VERSION=0.153.4 cbrun --all --preflight --check-images
+```
+
+The runner selects Linux amd64 by default, including on Apple Silicon. Build
+and test caches are versioned by their inputs; updated cases and CLI pins select
+new images. Outputs use unique directories. A judged score of zero is a valid
+evaluation; infrastructure failures are recorded separately.
 
 Each case ships `source/recipe.lock.json`. The lock names
 `codingbench-base/ubuntu:24.04`, which is official `ubuntu:24.04` plus a
@@ -126,25 +142,22 @@ is missing, cbrun pulls `ubuntu:24.04` and builds the toolchain image once
 (`benchmark/cbrun/base_image/`), then rebuilds `:deliverable` locally:
 
 ```bash
-cd benchmark
 cbrun --case case001 --build-images
 # or, on the first trial, cbrun builds it automatically
 # or, once by hand:
-#   ./cbrun/base_image/build.sh
+#   ./benchmark/cbrun/base_image/build.sh
 ```
 
 ### Smoke-test the container wiring
 
 ```bash
-cd benchmark
-./local_agents/run_smoke.sh codex
+./benchmark/local_agents/run_smoke.sh codex
 ```
 
 ### Run one case
 
 ```bash
-cd benchmark
-set -a && source local_agents/codex.env && set +a
+set -a && source benchmark/local_agents/codex.env && set +a
 cbrun --case case001 --backend codex --model "$MODEL"
 ```
 

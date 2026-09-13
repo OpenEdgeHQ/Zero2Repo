@@ -99,88 +99,148 @@ def run_trial(
     force_image: bool = False,
     allow_leakage: bool = False,
     enforce_denylist: bool = True,
+    require_denylist: bool = False,
     denylist_fix_retries: int = DEFAULT_FIX_RETRIES,
     block_github: bool = True,
 ) -> TrialResult:
-    """Run one (case, backend/spec, model) trial and return its result."""
-    case_dir = Path(case_dir)
-    case = load_case(case_dir)
-    _check_public_leakage(case, allow_leakage=allow_leakage)
-    steps = discover_steps(case)
-    limits = limits or resolve_limits(multiplier=timeout_multiplier)
-    denylist = load_denylist(case_dir) if enforce_denylist else None
+    """Run one trial, retaining phase metadata and artifacts on every exit."""
+    from .state import atomic_json, file_manifest, image_identity, platform_name, source_identity, utc_now
+    from .preflight import validate_case, check_container
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    image = ensure_agent_image(
-        case.case_id,
-        cache_root=Path(cache_root),
-        case_dir=case_dir,
-        force=force_image,
-        backend=backend,
-    )
-
-    gpus = case.docker_gpus or None
-    invocation = resolve_agent(
-        backend=backend,
-        agent_spec_path=agent_spec_path,
-        model=model,
-        instruction_path=CONTAINER_INSTRUCTION_PATH,
-        log_path=CONTAINER_AGENT_LOG,
-    )
-    resolved_backend = invocation.spec.name
-
-    result = TrialResult(
-        case_id=case.case_id,
-        backend=resolved_backend,
-        model=model,
-        reward=0.0,
-        terminal_status=TerminalStatus.ERROR.value,
-        deliverable_image=image.deliverable_image,
-        agent_image=image.agent_image,
-        agent_spec_name=invocation.spec.name,
-        agent_spec_hash=invocation.spec_hash,
-        resolved_model=invocation.resolved_model,
-        run_as=invocation.run_as or "root",
-        model_prefix=invocation.spec.model_prefix,
-        env_keys=list(invocation.env_keys),
-    )
-
-    block_hosts = GITHUB_BLOCK_HOSTS if block_github else None
-    container = Container.start(
-        image.agent_image,
-        gpus=gpus,
-        network="host",
-        block_hosts=block_hosts,
-    )
+    case_dir, out_dir = Path(case_dir), Path(out_dir)
+    # A trial owns its directory exclusively. Never overwrite a prior result.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(exist_ok=False)
+    result = TrialResult(case_id=case_dir.name, backend=backend or Path(agent_spec_path or "custom").stem,
+                         model=model, reward=0.0, terminal_status="error",
+                         pipeline_status="running", started_at=utc_now())
+    container = None
+    invocation = None
     try:
+        _checkpoint(result, out_dir, "preflight")
+        case = load_case(case_dir)
+        validate_case(case_dir, allow_leakage=allow_leakage, require_denylist=require_denylist)
+        result.case_id = case.case_id
+        result.platform = platform_name()
+        result.provenance = source_identity(case_dir)
+        steps = discover_steps(case)
+        limits = limits or resolve_limits(multiplier=timeout_multiplier)
+        result.provenance["limits"] = dict(max_agent_timeout_sec=limits.max_agent_timeout_sec,
+                                         max_test_timeout_sec=limits.max_test_timeout_sec,
+                                         stall_window_sec=limits.stall_window_sec)
+        denylist = load_denylist(case_dir) if enforce_denylist else None
+        result.integrity_checks = {
+            "public_leakage": "overridden" if allow_leakage else "passed",
+            "denylist": "disabled" if not enforce_denylist else ("pending" if denylist and denylist.enabled else "unavailable"),
+            "github_block": "enabled" if block_github else "disabled",
+        }
+        _checkpoint(result, out_dir, "images")
+        from .build_logs import capture_builds
+        result.logs["image_build_log"] = str(out_dir / "image_build.log")
+        with capture_builds(out_dir / "image_build.log"):
+            image = ensure_agent_image(case.case_id, cache_root=Path(cache_root), case_dir=case_dir,
+                                       force=force_image, backend=backend or "custom")
+        from .state import case_manifest
+        if case_manifest(case_dir) != result.provenance["case_files"]:
+            raise RuntimeError("case inputs changed during image provisioning")
+        agent_identity = image_identity(image.agent_image)
+        deliverable_identity = image_identity(image.deliverable_image)
+        result.agent_image, result.deliverable_image = image.agent_image, image.deliverable_image
+        result.agent_image_id, result.deliverable_image_id = agent_identity["id"], deliverable_identity["id"]
+        result.provenance["agent_image"] = agent_identity
+        result.provenance["deliverable_image"] = deliverable_identity
+        result.provenance["test_files"] = file_manifest(image.tests_cache_dir / "final")
+        raw_runner = json.loads((case_dir / "source/manifest.json").read_text())["runner"]
+        if raw_runner.get("judge_profile", "standard") != "standard":
+            from .judge_profiles import start_judge_container
+            _checkpoint(result, out_dir, "readiness")
+            probe = start_judge_container(result.agent_image_id, case_dir=case_dir, gpus=case.docker_gpus or None)
+            try:
+                result.provenance["judge_readiness"] = check_container(probe, case_dir, phase="judge")
+            finally:
+                probe.remove()
+        _checkpoint(result, out_dir, "agent_config")
+        invocation = resolve_agent(backend=backend, agent_spec_path=agent_spec_path, model=model,
+                                   instruction_path=CONTAINER_INSTRUCTION_PATH, log_path=CONTAINER_AGENT_LOG)
+        result.backend = invocation.spec.name
+        result.agent_spec_name, result.agent_spec_hash = invocation.spec.name, invocation.spec_hash
+        result.resolved_model = invocation.resolved_model
+        result.run_as, result.model_prefix = invocation.run_as or "root", invocation.spec.model_prefix
+        result.env_keys = list(invocation.env_keys)
+        if invocation.spec.name == "codex":
+            from urllib.parse import urlsplit, urlunsplit
+            url = urlsplit(invocation.env.get("OPENAI_BASE_URL", ""))
+            # Credentials/query strings do not belong in a public run record.
+            host = url.netloc.rsplit("@", 1)[-1]
+            result.provenance["model_settings"] = {
+                "provider": "cbrun_gateway" if invocation.env.get("OPENAI_BASE_URL", "").strip() else "openai",
+                "base_url": urlunsplit((url.scheme, host, url.path, "", "")),
+                "reasoning_effort": invocation.env.get("CBRUN_CODEX_REASONING_EFFORT") or "cli-default",
+            }
+        _checkpoint(result, out_dir, "container")
+        container = Container.start(result.agent_image_id, gpus=case.docker_gpus or None, network="host",
+                                    block_hosts=GITHUB_BLOCK_HOSTS if block_github else None)
+        check_container(container, case_dir, phase="solve")
         result.cli_version = _probe_cli_version(container, invocation.spec.name)
-        passed_steps: list[int] = []
+        passed_steps = []
         for step in steps:
-            step_outcome = _run_step(
-                container,
-                case=case,
-                case_dir=case_dir,
-                step=step,
-                image=image,
-                invocation=invocation,
-                limits=limits,
-                out_dir=out_dir,
-                result=result,
-                denylist=denylist,
-                denylist_fix_retries=denylist_fix_retries,
-            )
-            if step_outcome:
+            passed = _run_step(container, case=case, case_dir=case_dir, step=step, image=image,
+                               invocation=invocation, limits=limits, out_dir=out_dir, result=result,
+                               denylist=denylist, denylist_fix_retries=denylist_fix_retries)
+            if passed:
                 passed_steps.append(step.index)
             else:
                 result.failed_step = step.index
                 break
         result.passed_steps = passed_steps
+    except (Exception, KeyboardInterrupt) as exc:
+        result.failed_phase = result.phase
+        result.pipeline_status = "error"
+        if result.phase not in {"judge", "archive"}:
+            result.terminal_status = "error"
+        result.error = f"{type(exc).__name__}: {exc}"
+        if result.phase == "judge":
+            result.judge_error = result.error
+        if isinstance(exc, KeyboardInterrupt):
+            raise
     finally:
-        container.remove()
-
+        if container is not None:
+            # No-submit and setup/solve failures still have useful /app and logs.
+            try:
+                if invocation is not None and not container.paused:
+                    container._stop_agent(CONTAINER_AGENT_LOG)
+                has_logs = result.submitted or (not container.paused and container.path_exists("/logs/agent"))
+                container.pause()
+                workspace = out_dir / "workspace"
+                if not container.cp_from(CONTAINER_WORKDIR, workspace):
+                    result.artifact_errors.append("could not archive /app")
+                if has_logs:
+                    if not container.cp_from("/logs/agent", out_dir / "container_logs"):
+                        result.artifact_errors.append("could not archive /logs/agent")
+                if workspace.exists():
+                    result.logs["workspace"] = str(workspace)
+            except Exception as exc:
+                result.artifact_errors.append(f"archive: {type(exc).__name__}: {exc}")
+            finally:
+                try:
+                    container.remove()
+                except Exception as exc:
+                    result.artifact_errors.append(f"container cleanup: {exc}")
+        if result.artifact_errors:
+            result.pipeline_status = "error"
+            result.failed_phase = result.failed_phase or "archive"
+        result.finished_at = utc_now()
+        if result.pipeline_status == "running":
+            result.pipeline_status = "error"
+        _checkpoint(result, out_dir)
     return result
+
+
+def _checkpoint(result: TrialResult, out_dir: Path, phase: str | None = None) -> None:
+    from .state import atomic_json
+    if phase is not None:
+        result.phase = phase
+    atomic_json(out_dir / "trial.json", result.to_dict())
 
 
 def _run_agent_setup(
@@ -189,7 +249,10 @@ def _run_agent_setup(
     *,
     out_dir: Path,
 ) -> ExecResult | None:
-    container.exec(invocation.prepare_workspace, timeout_sec=60.0)
+    prepared = container.exec(invocation.prepare_workspace, timeout_sec=60.0)
+    if prepared.exit_code:
+        (out_dir / "agent_setup.log").write_text(prepared.tail)
+        return prepared
 
     if invocation.install_script:
         install = container.exec(
@@ -199,6 +262,7 @@ def _run_agent_setup(
             timeout_sec=300.0,
             user=invocation.run_as,
         )
+        (out_dir / "agent_install.log").write_text(install.tail)
         if install.exit_code != 0:
             return install
 
@@ -325,6 +389,7 @@ def _record_submit_outcome(
 ) -> bool:
     """Apply terminal status from this CLI + submit file. False means stop (no judge)."""
     submitted = is_valid_submit(_read_submit_text(container))
+    result.submitted = submitted
     result.terminal_status = classify_terminal(
         exit_code=solve.exit_code,
         timed_out=solve.timed_out,
@@ -336,6 +401,8 @@ def _record_submit_outcome(
         return True
     result.reward = 0.0
     result.error = NO_SUBMIT_ERROR
+    result.pipeline_status = "not_submitted"
+    result.failed_phase = "solve" if solve.exit_code or solve.timed_out else "submit"
     return False
 
 
@@ -367,6 +434,7 @@ def _run_step(
     denylist_fix_retries: int,
 ) -> bool:
     """Run the solve+judge for one step; return True iff its gate passed."""
+    _checkpoint(result, out_dir, "setup")
     base_instruction = build_instruction(
         has_hardware=bool((case.hardware_text or "").strip()),
         build_command=case.build_command,
@@ -379,21 +447,29 @@ def _run_step(
     setup_log = out_dir / "agent_setup.log"
     if setup_log.is_file():
         result.logs["agent_setup_log"] = str(setup_log)
+    if (out_dir / "agent_install.log").is_file():
+        result.logs["agent_install_log"] = str(out_dir / "agent_install.log")
     if setup_outcome is not None and setup_outcome.exit_code != 0:
         result.terminal_status = TerminalStatus.ERROR.value
         result.error = f"agent setup failed (exit {setup_outcome.exit_code})"
-        result.logs["agent_log"] = str(out_dir / "agent.log")
+        if setup_outcome.timed_out:
+            result.error = "agent setup timed out"
+        result.pipeline_status = "error"
+        result.failed_phase = "setup"
         result.reward = 0.0
         return False
 
     solve_start = time.monotonic()
+    _checkpoint(result, out_dir, "solve")
     solve = _run_solve(container, invocation, limits=limits, out_dir=out_dir, log_name="agent.log")
     result.agent_exit_code = solve.exit_code
     result.logs["agent_log"] = str(out_dir / "agent.log")
+    _checkpoint(result, out_dir, "submit")
     if not _record_submit_outcome(container, result, solve=solve, solve_start=solve_start):
         return False
 
     if denylist is not None and denylist.enabled:
+        _checkpoint(result, out_dir, "denylist")
         scratch = out_dir / "denylist_scratch"
         retries_left = denylist_fix_retries
         while True:
@@ -403,6 +479,7 @@ def _run_step(
                 f"installed:{hit.package}" for hit in scan.installed_warnings
             ]
             if not scan.has_hard_violation:
+                result.integrity_checks["denylist"] = "passed"
                 break
             if retries_left <= 0:
                 summary = "; ".join(
@@ -414,6 +491,9 @@ def _run_step(
                 result.reward = 0.0
                 result.terminal_status = TerminalStatus.ERROR.value
                 result.error = result.denylist_violation
+                result.integrity_checks["denylist"] = "failed"
+                result.pipeline_status = "rejected"
+                result.failed_phase = "denylist"
                 result.logs["denylist_scan"] = str(out_dir / "denylist_scan_rescan.json")
                 result.solve_seconds = round(time.monotonic() - solve_start, 2)
                 return False
@@ -428,6 +508,9 @@ def _run_step(
                 result.reward = 0.0
                 result.terminal_status = TerminalStatus.ERROR.value
                 result.error = result.denylist_violation
+                result.integrity_checks["denylist"] = "failed"
+                result.pipeline_status = "rejected"
+                result.failed_phase = "denylist"
                 result.solve_seconds = round(time.monotonic() - solve_start, 2)
                 return False
             _clear_submit(container)
@@ -448,25 +531,41 @@ def _run_step(
             ):
                 return False
 
+    _checkpoint(result, out_dir, "judge")
+    from .state import file_manifest, runtime_manifest, case_manifest
+    if file_manifest(image.tests_cache_dir / "final") != result.provenance.get("test_files"):
+        raise RuntimeError("hidden test cache changed during solve")
+    harness = Path(__file__).resolve().parent
+    if (runtime_manifest(harness) != result.provenance.get("runner_files")
+            or runtime_manifest(harness.parent / "coding_bench_harbor") != result.provenance.get("judge_files")):
+        raise RuntimeError("runner or judge code changed during trial")
+    if case_manifest(case_dir) != result.provenance.get("case_files"):
+        raise RuntimeError("case inputs changed during trial")
     task_toml = synthesize_task_toml(case, step)
     outcome = run_isolated_judge(
         container,
-        image=image.agent_image,
+        image=result.agent_image_id or image.agent_image,
         tests_final_dir=image.tests_cache_dir / "final",
         task_toml=task_toml,
         test_timeout_sec=limits.max_test_timeout_sec,
         artifacts_dir=out_dir,
         workspace_export_dir=out_dir / "judge_workspace",
         gpus=case.docker_gpus or None,
+        case_dir=case_dir,
     )
     result.reward = outcome.reward
     result.judge_error = outcome.judge_error
     result.judge_exit_code = outcome.exit_code
     result.judge_seconds = round(outcome.seconds, 2)
-    result.logs["judge_report"] = str(out_dir / "final_report.json")
+    result.pipeline_status = "error" if outcome.judge_error else "evaluated"
+    result.failed_phase = "judge" if outcome.judge_error else None
+    if (out_dir / "final_report.json").is_file():
+        result.logs["judge_report"] = str(out_dir / "final_report.json")
+    result.logs["judge_result"] = str(out_dir / "judge_result.json")
     result.logs["judge_log"] = str(out_dir / "judge.log")
     tests_log = out_dir / "final_tests.log"
     if tests_log.is_file():
         result.logs["final_tests_log"] = str(tests_log)
+    _checkpoint(result, out_dir, "complete")
 
     return outcome.reward >= 1.0 and not outcome.judge_error

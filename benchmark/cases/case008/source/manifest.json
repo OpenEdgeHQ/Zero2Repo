@@ -84,7 +84,15 @@
     "build_command": "cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build",
     "env_probe_command": "printf '%s\\n' '#include <hrefparse.h>' '#include <cstdlib>' '#include <iostream>' '#include <string>' 'int main() { const std::string input = std::string(\"https:\") + \"//127.0.0.1/path\"; auto url = hrefparse::parse(input); if (!url) return EXIT_FAILURE; if (url->get_hostname() != \"127.0.0.1\") return EXIT_FAILURE; if (url->get_pathname() != \"/path\") return EXIT_FAILURE; std::cout << url->get_href() << std::endl; return EXIT_SUCCESS; }' > /tmp/cb-env-probe.cpp && c++ -std=c++20 -pthread -Iinclude -Lbuild/src -Lbuild -o /tmp/cb-env-probe /tmp/cb-env-probe.cpp -lhrefparse && /tmp/cb-env-probe",
     "test_command_template": "ctest --output-on-failure --test-dir {test_dir}",
-    "workdir": "."
+    "workdir": ".",
+    "environment_checks": [
+      {
+        "name": "case_toolchain",
+        "command": "c++ --version && cmake --version && ninja --version",
+        "phase": "both",
+        "timeout_sec": 30
+      }
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "hrefparse",

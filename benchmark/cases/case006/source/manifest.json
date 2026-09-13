@@ -102,7 +102,15 @@
     "build_command": "",
     "env_probe_command": "PYTHONPATH=src python3 -c \"import optlyn, os; assert os.path.realpath(optlyn.__file__).startswith(os.path.realpath('src')); c=optlyn.Command('probe', callback=lambda: optlyn.echo('ok')); c.main([], standalone_mode=False)\"",
     "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "environment_checks": [
+      {
+        "name": "case_toolchain",
+        "command": "python3 -c 'import flit_core,pytest'",
+        "phase": "both",
+        "timeout_sec": 30
+      }
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "clikit",

@@ -136,7 +136,15 @@
     "repo_warm_command": "npm ci && npm run build",
     "build_command": "npm ci --cache /opt/npm-cache --prefer-offline && npm run build",
     "test_command_template": "node --test {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "environment_checks": [
+      {
+        "name": "case_toolchain",
+        "command": "node -e 'if(Number(process.versions.node.split(\".\")[0])<24)process.exit(1)' && npm --version",
+        "phase": "both",
+        "timeout_sec": 30
+      }
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "ymlcodec",

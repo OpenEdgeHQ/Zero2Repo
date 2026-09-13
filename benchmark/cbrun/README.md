@@ -5,6 +5,9 @@
 only the public task specification and letting it build the project from
 scratch, then scoring the result against hidden acceptance tests.
 
+See [Pipeline reliability](RELIABILITY.md) for the preflight commands, cache
+identities, retained failure artifacts, CI controls and new-case checklist.
+
 ## Task model (solver-only)
 
 The agent's job is to **write the implementation**. The test code is a hidden
@@ -65,8 +68,9 @@ stay quiet, without treating a long compile or a long model turn as a hang.
 
 The agent submits by writing `/logs/agent/submit` with the single line
 `CODINGBENCH_SUBMIT`. Ending the CLI session is **not** a submission. The
-isolated judge runs only after that file is valid **and** the denylist scan
-is clean. Missing submit or an unfixed denylist hit scores `reward=0` and
+isolated judge runs only after that file is valid and any enabled denylist scan
+is clean. Missing policy is recorded as `unavailable`; use `--require-denylist`
+to require it. Missing submit or an unfixed denylist hit scores `reward=0` and
 does not run hidden tests.
 
 The solve terminal status is recorded as one of:
@@ -208,18 +212,27 @@ cbrun --case case001 --agent-spec ./agents/echo.json --model dummy/model
 cbrun --all --backend codex --model openai/gpt-5.5
 ```
 
-Outputs go to `--out` (default `benchmark/output/cbrun/`): per-trial `agent.log`,
+Outputs go to a new `--out` directory (default `benchmark/output/cbrun/<unique-run>/`): per-trial `agent.log`,
 `agent_setup.log` (when setup runs), `judge.log`, `final_report.json`,
 `final_tests.log` (when the judge ran), plus an aggregate `summary.json` and a
-printed reward matrix.
+printed reward matrix. `trial.json` and incremental `summary.json` record phase
+progress. Image-build diagnostics, partial workspaces and available logs survive
+failed attempts; candidate containers are frozen before their files are copied.
+
+The batch exits 0 when all trials have `pipeline_status=evaluated`, even if their
+rewards are zero. Incomplete or infrastructure-failed evaluations exit 1. This
+status is separate from the solver's `terminal_status` and actual exit code.
 
 Each trial records reproducibility metadata: agent spec name/hash, resolved model,
 `run_as`, `model_prefix`, setup status, forwarded env **key** list, and CLI
-version when available.
+version when available, plus immutable image IDs, source/test hashes, timestamps,
+platform, limits and requested model settings. Secrets are excluded from metadata
+and passed to Docker through the client environment rather than command arguments.
 
 ## Pipeline (per trial)
 
-1. If `:deliverable` is missing, rebuild it from `source/recipe.lock.json`.
+1. Validate case assets and derive content-versioned image/cache identities.
+   Build a matching deliverable from `source/recipe.lock.json` when needed.
    The lock's `codingbench-base/<public>` tag is a local toolchain image
    built FROM the matching public image (Docker Hub `ubuntu:24.04` for the
    current suite) using `cbrun/base_image/Dockerfile`. cbrun pulls that
@@ -227,7 +240,7 @@ version when available.
    installs the case toolchain, copies public specs and hidden tests, and
    leaves `/app` empty. Then derive/reuse the `:agent` image (extract
    hidden tests to host cache, install pinned CLIs, create `cbagent` user,
-   `rm -rf /tests/final`). Idempotent.
+   `rm -rf /tests/final`). Reuse requires matching inputs and checksums.
 2. Start a GT-free container (`--gpus` only when the case needs it, host network
    for model APIs, **never** the Docker socket).
 3. Inject the instruction; **setup** agent auth/config; **chown** `/app` (+ HOME
@@ -235,9 +248,12 @@ version when available.
    watchdog, tee'ing output to `agent.log`.
 4. After the CLI stops, require a valid `/logs/agent/submit`; otherwise mark
    the attempt failed and skip hidden tests. Ensure no agent process lingers.
-5. When submit is valid and denylist is clean: re-inject hidden tests + a
+5. When submit is valid and any enabled denylist is clean: freeze and copy the
+   candidate into a fresh judge container, then inject hidden tests + a
    synthesized `/task.toml`, run the shared `final_judge.py` as root, parse
    the binary reward (distinguishing `judge_error`).
+6. Archive the workspace and logs and atomically finalize the trial record,
+   including on setup failure, missing submit, timeout or interruption.
 
 ## Reused components
 

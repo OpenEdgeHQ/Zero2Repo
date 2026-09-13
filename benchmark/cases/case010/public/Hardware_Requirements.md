@@ -1,5 +1,14 @@
 # Hardware Requirements
 
+## Packaged model data
+
+The public recipe installs checksum-pinned sentence-tokenization, stopword,
+English/Russian tagging, universal-tagset, named-entity and word-list resources
+under `/opt/models`. It preserves the resources' notices and source metadata.
+No separate private build-cache directory is required. The runner checks these
+resources before solving and before judging; tests access the installed data
+offline.
+
 This document lists the hardware and toolchain a submitted solution must run
 under. Hidden tests exercise the real capabilities below; a fallback that skips
 a mandatory profile is not a substitute.

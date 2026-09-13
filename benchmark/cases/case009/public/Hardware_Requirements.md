@@ -40,3 +40,14 @@ run one real CLI operation against the locally built binary.
 - **Build:** Compile the module-root main package into a CLI binary
   (`go build` at the repository root, or the equivalent `make` target that
   produces the same binary).
+
+## Copy-on-write judge filesystem
+
+The mandatory deduplication tests also need a filesystem that supports Linux
+`FICLONE`. cbrun's `cow` judge profile provisions a private btrfs loopback
+filesystem before testing and verifies real reflinks. Docker must permit this
+runner-owned initialization with `SYS_ADMIN` and loop-device cgroup access.
+Candidate/test processes run with those added capabilities removed; solve
+containers keep their standard capabilities. No host directories or physical
+block devices are mounted. An unavailable profile is an environment failure
+and must be detected by `cbrun --preflight --check-images` before solving.

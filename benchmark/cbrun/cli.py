@@ -16,6 +16,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import json
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .agent_spec import BACKENDS
@@ -24,6 +27,7 @@ from .assets import AdapterError
 from .limits import DEFAULT_AGENT_TIMEOUT_SEC, DEFAULT_TEST_TIMEOUT_SEC, resolve_limits
 from .results import TrialResult, format_reward_matrix, write_summary
 from .run_case import run_trial
+from .state import atomic_json, platform_name, image_identity
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -58,16 +62,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Path to a local AgentSpec file (.json or .yaml). Mutually exclusive with --backend.",
     )
     parser.add_argument("--model", help="Model id (e.g. openai/gpt-5.5). Required unless --build-images.")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--build-images",
         action="store_true",
         help="Build :deliverable from recipe.lock + shared base image, then exit.",
     )
+    mode.add_argument("--preflight", action="store_true", help="Validate selected case assets without calling a model.")
+    parser.add_argument("--check-images", action="store_true", help="With --preflight, build and check solve/judge images.")
+    parser.add_argument("--require-denylist", action="store_true", help="Fail preflight when a case has no enabled denylist.")
+    parser.add_argument("--platform", default=platform_name(), choices=("linux/amd64", "linux/arm64"))
     parser.add_argument("--cases-root", type=Path, default=_default_cases_root())
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "output" / "cbrun",
+        default=None,
+        help="New output directory. Defaults to a unique timestamped directory.",
     )
     parser.add_argument(
         "--cache-root",
@@ -120,6 +130,8 @@ def _iter_case_dirs(cases_root: Path, cases: list[str], run_all: bool) -> list[P
         return dirs
     out = []
     for case_id in cases:
+        if Path(case_id).name != case_id or case_id in {p.name for p in out}:
+            raise AdapterError("case IDs must be distinct direct-child names under --cases-root")
         case_dir = cases_root / case_id
         if not (case_dir / "source" / "manifest.json").is_file():
             raise AdapterError(f"case not found: {case_dir}")
@@ -129,6 +141,10 @@ def _iter_case_dirs(cases_root: Path, cases: list[str], run_all: bool) -> list[P
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    os.environ["CBRUN_PLATFORM"] = args.platform
+    if args.check_images and not args.preflight:
+        print("error: --check-images requires --preflight", file=sys.stderr)
+        return 2
     if args.agent_spec is not None and args.backend:
         print("error: --agent-spec and --backend are mutually exclusive", file=sys.stderr)
         return 2
@@ -138,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         backends = [None]
     else:
         backends = args.backend or ["codex"]
+    if len(set(backends)) != len(backends) or args.denylist_fix_retries < 0:
+        print("error: select each backend once and use non-negative denylist retries", file=sys.stderr)
+        return 2
 
     for backend in backends:
         if backend is None:
@@ -159,6 +178,65 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: no cases found under {args.cases_root}", file=sys.stderr)
         return 2
 
+    if not (args.model or args.build_images or args.preflight):
+        print("error: --model is required unless --build-images or --preflight", file=sys.stderr)
+        return 2
+    try:
+        limits = resolve_limits(agent_timeout_sec=args.agent_timeout_sec,
+                                test_timeout_sec=args.test_timeout_sec, multiplier=args.timeout_multiplier)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.out is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        args.out = Path(__file__).resolve().parent.parent / "output/cbrun" / f"{stamp}-{uuid.uuid4().hex[:8]}"
+    args.out = args.out.resolve()
+    try:
+        args.out.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        print(f"error: output directory already exists; choose a new --out: {args.out}", file=sys.stderr)
+        return 2
+
+    if args.preflight:
+        from .preflight import validate_case, check_container
+        from .images import ensure_agent_image
+        from .docker_env import Container
+        from .judge_profiles import start_judge_container
+        from .build_logs import capture_builds
+        reports = []
+        for case_dir in case_dirs:
+            try:
+                report = validate_case(case_dir, allow_leakage=args.allow_leakage, require_denylist=args.require_denylist)
+                if args.check_images:
+                    report["images"] = []
+                    for backend in backends:
+                        with capture_builds(args.out / case_dir.name / (backend or "custom") / "image_build.log"):
+                            built = ensure_agent_image(case_dir.name, case_dir=case_dir, cache_root=args.cache_root,
+                                                       force=args.force_image, backend=backend or "custom")
+                        identity = image_identity(built.agent_image)
+                        solve = Container.start(identity["id"], network="none")
+                        try:
+                            solve_checks = check_container(solve, case_dir, phase="solve")
+                            if backend is not None:
+                                from .run_case import _probe_cli_version
+                                solve_checks["cli_version"] = _probe_cli_version(solve, backend)
+                        finally:
+                            solve.remove()
+                        judge = start_judge_container(identity["id"], case_dir=case_dir)
+                        try:
+                            judge_checks = check_container(judge, case_dir, phase="judge")
+                        finally:
+                            judge.remove()
+                        report["images"].append({"backend": backend, "identity": identity,
+                                                 "solve_checks": solve_checks, "judge_checks": judge_checks})
+            except Exception as exc:
+                report = {"case_id": case_dir.name, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+            reports.append(report)
+            atomic_json(args.out / "preflight.json", {"complete": False, "cases": reports})
+            print(f"[preflight] {case_dir.name}: {report['status']}", flush=True)
+        atomic_json(args.out / "preflight.json", {"complete": True, "cases": reports})
+        return int(any(r["status"] != "ready" for r in reports))
+
     if args.build_images:
         from .recipe_image import ensure_deliverable_image
 
@@ -166,7 +244,11 @@ def main(argv: list[str] | None = None) -> int:
         for case_dir in case_dirs:
             print(f"[cbrun] build-images {case_dir.name} ...", file=sys.stderr)
             try:
-                tag = ensure_deliverable_image(case_dir, force=args.force_image)
+                from .preflight import validate_case
+                from .build_logs import capture_builds
+                validate_case(case_dir, allow_leakage=args.allow_leakage, require_denylist=args.require_denylist)
+                with capture_builds(args.out / case_dir.name / "image_build.log"):
+                    tag = ensure_deliverable_image(case_dir, force=args.force_image)
             except Exception as exc:  # noqa: BLE001 - keep the matrix going
                 print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
                 failed += 1
@@ -174,17 +256,8 @@ def main(argv: list[str] | None = None) -> int:
             print(tag)
         return 1 if failed else 0
 
-    if not args.model:
-        print("error: --model is required unless --build-images", file=sys.stderr)
-        return 2
-
-    limits = resolve_limits(
-        agent_timeout_sec=args.agent_timeout_sec,
-        test_timeout_sec=args.test_timeout_sec,
-        multiplier=args.timeout_multiplier,
-    )
-
     results: list[TrialResult] = []
+    write_summary(results, args.out, complete=False)
     for case_dir in case_dirs:
         trial_labels = backends if args.agent_spec is None else [Path(args.agent_spec).stem]
         for label, backend in zip(trial_labels, backends):
@@ -203,9 +276,15 @@ def main(argv: list[str] | None = None) -> int:
                     force_image=args.force_image,
                     allow_leakage=args.allow_leakage,
                     enforce_denylist=args.enforce_denylist,
+                    require_denylist=args.require_denylist,
                     denylist_fix_retries=args.denylist_fix_retries,
                     block_github=args.block_github,
                 )
+            except KeyboardInterrupt:
+                if (trial_out / "trial.json").is_file():
+                    results.append(TrialResult(**json.loads((trial_out / "trial.json").read_text())))
+                write_summary(results, args.out, complete=False)
+                return 130
             except Exception as exc:  # noqa: BLE001 - record, never crash the matrix
                 result = TrialResult(
                     case_id=case_dir.name,
@@ -217,11 +296,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"  FAILED: {result.error}", file=sys.stderr)
             results.append(result)
+            write_summary(results, args.out, complete=False)
 
     summary_path = write_summary(results, args.out)
     print(format_reward_matrix(results))
+    print(f"\nPipeline evaluated: {sum(r.evaluated for r in results)}/{len(results)}; candidate passes: {sum(r.passed for r in results)}")
     print(f"\nsummary: {summary_path}")
-    return 0
+    return int(any(not r.evaluated for r in results))
 
 
 if __name__ == "__main__":

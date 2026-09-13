@@ -53,78 +53,58 @@ def test_public_base_pull_ref_strips_pipeline_prefix() -> None:
         public_base_pull_ref("  ")
 
 
-def test_ensure_base_image_builds_toolchain_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_base_image_builds_toolchain_when_missing(monkeypatch):
     from cbrun import recipe_image
-
-    calls: list[list[str]] = []
-    present: set[str] = set()
-
-    def fake_exists(tag: str) -> bool:
-        return tag in present
-
-    def fake_run(argv, **kwargs):  # noqa: ANN001, ARG001
-        calls.append(list(argv))
-        class Result:
-            returncode = 0
-            stderr = ""
+    calls, present = [], set()
+    def identity(tag):
+        if tag not in present:
+            raise RuntimeError("missing")
+        return {"id": "sha256:parent"}
+    def run(argv, **kwargs):
+        from types import SimpleNamespace
+        calls.append(argv)
         if argv[:2] == ["docker", "pull"]:
-            present.add(argv[2])
+            present.add(argv[-1])
         if argv[:2] == ["docker", "build"]:
-            tag = argv[argv.index("-t") + 1]
-            present.add(tag)
-        return Result()
-
-    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
-    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
-    recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
-    assert calls[0][:3] == ["docker", "pull", "ubuntu:24.04"]
-    assert calls[1][:2] == ["docker", "build"]
-    assert "--build-arg" in calls[1]
-    assert "FROM_IMAGE=ubuntu:24.04" in calls[1]
-    assert "-t" in calls[1]
-    assert "codingbench-base/ubuntu:24.04" in calls[1]
-    assert str(recipe_image.BASE_IMAGE_DOCKERFILE_DIR) in calls[1]
-    assert (recipe_image.BASE_IMAGE_DOCKERFILE_DIR / "Dockerfile").is_file()
-    assert "codingbench-base/ubuntu:24.04" in present
+            present.add(argv[argv.index("-t") + 1])
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(recipe_image, "image_identity", identity)
+    monkeypatch.setattr(recipe_image, "image_matches", lambda tag, fingerprint: tag in present)
+    monkeypatch.setattr(recipe_image.subprocess, "run", run)
+    tag = recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
+    assert calls[0] == ["docker", "pull", "--platform", "linux/amd64", "ubuntu:24.04"]
+    build = calls[1]
+    assert "--label" in build and "--platform" in build
+    assert "FROM_IMAGE=ubuntu:24.04" in build
+    assert tag.startswith("codingbench-base/ubuntu:24.04-")
+    assert tag in present
 
 
-def test_ensure_base_image_pulls_public_tag_without_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_base_image_pulls_public_tag_without_rebuild(monkeypatch):
     from cbrun import recipe_image
-
-    calls: list[list[str]] = []
-    present: set[str] = set()
-
-    def fake_exists(tag: str) -> bool:
-        return tag in present
-
-    def fake_run(argv, **kwargs):  # noqa: ANN001, ARG001
-        calls.append(list(argv))
-        class Result:
-            returncode = 0
-            stderr = ""
-        if argv[:2] == ["docker", "pull"]:
-            present.add(argv[2])
-        return Result()
-
-    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
-    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
-    recipe_image._ensure_base_image("ubuntu:24.04")
-    assert calls == [["docker", "pull", "ubuntu:24.04"]]
-    assert not any(c[:2] == ["docker", "build"] for c in calls)
+    calls = []
+    def identity(tag):
+        if not calls:
+            raise RuntimeError("missing")
+        return {"id": "sha256:public"}
+    def run(argv, **kwargs):
+        from types import SimpleNamespace
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stderr="")
+    monkeypatch.setattr(recipe_image, "image_identity", identity)
+    monkeypatch.setattr(recipe_image.subprocess, "run", run)
+    assert recipe_image._ensure_base_image("ubuntu:24.04") == "sha256:public"
+    assert calls == [["docker", "pull", "--platform", "linux/amd64", "ubuntu:24.04"]]
 
 
-def test_ensure_base_image_skips_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_base_image_skips_when_fingerprint_matches(monkeypatch):
     from cbrun import recipe_image
-
-    def fake_exists(tag: str) -> bool:
-        return tag == "codingbench-base/ubuntu:24.04"
-
-    def fake_run(*args, **kwargs):  # noqa: ANN001, ARG001
-        raise AssertionError("docker must not run when the base image exists")
-
-    monkeypatch.setattr(recipe_image, "image_exists", fake_exists)
-    monkeypatch.setattr(recipe_image.subprocess, "run", fake_run)
-    recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04")
+    monkeypatch.setattr(recipe_image, "image_identity", lambda tag: {"id": "sha256:parent"})
+    monkeypatch.setattr(recipe_image, "image_matches", lambda tag, fingerprint: True)
+    def no_build(*a, **k):
+        raise AssertionError("cached matching base must not be rebuilt")
+    monkeypatch.setattr(recipe_image.subprocess, "run", no_build)
+    assert recipe_image._ensure_base_image("codingbench-base/ubuntu:24.04").startswith("codingbench-base/ubuntu:24.04-")
 
 
 def test_ensure_base_image_raises_when_pull_fails(monkeypatch: pytest.MonkeyPatch) -> None:

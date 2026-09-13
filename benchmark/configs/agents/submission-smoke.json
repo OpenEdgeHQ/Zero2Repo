@@ -1,0 +1,6 @@
+{
+  "name": "pipeline-control",
+  "command": "printf 'CODINGBENCH_SUBMIT\n' > /logs/agent/submit; printf 'Offline control: intentionally empty submission\n'",
+  "env_passthrough": [],
+  "run_as": "root"
+}

@@ -80,7 +80,7 @@ def test_shadow_src_pytest_py_is_judge_error(judge_env: Path) -> None:
 def test_empty_exit_zero_is_judge_error(judge_env: Path) -> None:
     _write_manifest(judge_env)
     mock_proc = MagicMock(returncode=0, stdout="", stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc):
+    with patch.object(fj, "_run_logged", return_value=mock_proc):
         rc = fj.main()
     report = _report()
     assert rc == 1
@@ -92,7 +92,7 @@ def test_empty_exit_zero_is_judge_error(judge_env: Path) -> None:
 def test_unparseable_summary_is_judge_error(judge_env: Path) -> None:
     _write_manifest(judge_env)
     mock_proc = MagicMock(returncode=0, stdout="all good\n", stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc):
+    with patch.object(fj, "_run_logged", return_value=mock_proc):
         rc = fj.main()
     report = _report()
     assert rc == 1
@@ -103,7 +103,7 @@ def test_unparseable_summary_is_judge_error(judge_env: Path) -> None:
 def test_count_mismatch_is_judge_error(judge_env: Path) -> None:
     _write_manifest(judge_env, expected_test_count=99)
     mock_proc = MagicMock(returncode=0, stdout=PYTEST_OK, stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc):
+    with patch.object(fj, "_run_logged", return_value=mock_proc):
         rc = fj.main()
     report = _report()
     assert rc == 1
@@ -114,7 +114,7 @@ def test_count_mismatch_is_judge_error(judge_env: Path) -> None:
 def test_parsed_failures_are_failed_not_harness_error(judge_env: Path) -> None:
     _write_manifest(judge_env)
     mock_proc = MagicMock(returncode=1, stdout=PYTEST_FAIL, stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc):
+    with patch.object(fj, "_run_logged", return_value=mock_proc):
         rc = fj.main()
     report = _report()
     assert rc == 0
@@ -129,7 +129,7 @@ def test_pytest_runs_as_cbagent_when_account_exists(judge_env: Path, monkeypatch
     fake = type("U", (), {"pw_name": "cbagent"})()
     monkeypatch.setattr(fj.pwd, "getpwnam", lambda name: fake if name == "cbagent" else (_ for _ in ()).throw(KeyError(name)))
     mock_proc = MagicMock(returncode=0, stdout=PYTEST_OK, stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc) as run:
+    with patch.object(fj, "_run_logged", return_value=mock_proc) as run:
         rc = fj.main()
     assert rc == 0
     argv = run.call_args.args[0]
@@ -146,7 +146,7 @@ def test_valid_pytest_summary_scores_one_and_skips_install(judge_env: Path, tmp_
     )
     fj.TASK_TOML = task
     mock_proc = MagicMock(returncode=0, stdout=PYTEST_OK, stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc) as run:
+    with patch.object(fj, "_run_logged", return_value=mock_proc) as run:
         rc = fj.main()
     report = _report()
     assert rc == 0
@@ -168,7 +168,7 @@ def test_run_acceptance_empty_exit_zero_is_judge_error(judge_env: Path) -> None:
     script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     _write_manifest(judge_env)
     mock_proc = MagicMock(returncode=0, stdout="ok\n", stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc):
+    with patch.object(fj, "_run_logged", return_value=mock_proc):
         rc = fj.main()
     report = _report()
     assert rc == 1
@@ -190,10 +190,20 @@ def test_run_acceptance_valid_summary_scores_one(judge_env: Path) -> None:
     script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     _write_manifest(judge_env)
     mock_proc = MagicMock(returncode=0, stdout=PYTEST_OK, stderr="")
-    with patch.object(fj.subprocess, "run", return_value=mock_proc) as run:
+    with patch.object(fj, "_run_logged", return_value=mock_proc) as run:
         rc = fj.main()
     report = _report()
     assert rc == 0
     assert report["judge_mode"] == "run_acceptance"
     assert report["reward"] == 1.0
     assert "run_acceptance.sh" in run.call_args.args[0]
+
+
+def test_partial_judge_log_survives_process_timeout(tmp_path):
+    import subprocess
+    import sys
+    log = tmp_path / 'partial.log'
+    with pytest.raises(subprocess.TimeoutExpired):
+        fj._run_logged([sys.executable, '-u', '-c', "print('progress-before-timeout'); import time; time.sleep(10)"],
+                       log_path=log, timeout=0.5)
+    assert 'progress-before-timeout' in log.read_text()

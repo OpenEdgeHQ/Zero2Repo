@@ -1,0 +1,71 @@
+name: Pipeline reliability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: benchmark
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e '.[harbor,test]'
+      - run: python -m pytest tests -q -m 'not slow'
+      - run: cbrun --all --preflight --out output/release-preflight
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CBRUN_PLATFORM: linux/amd64
+      CBRUN_CODEX_VERSION: '0.153.4'
+    defaults:
+      run:
+        working-directory: benchmark
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e '.[harbor,test]'
+      - name: Build shared runtime
+        run: ./cbrun/base_image/build.sh
+      - name: Test success, failure, timeout and cache paths without a model
+        run: python -m pytest tests/test_cbrun_docker.py tests/test_cbrun_reliability.py -q -m slow -k 'generic or real_docker or real_cache'
+      - name: Check every released case environment
+        run: cbrun --all --preflight --check-images --out output/image-preflight
+      - name: Exercise every real judge with an empty submission
+        run: cbrun --all --agent-spec configs/agents/submission-smoke.json --model offline/no-model --agent-timeout-sec 10 --out output/judge-smoke
+      - name: Verify complete evaluations and rejection of empty candidates
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('output/judge-smoke/summary.json').read_text())
+          expected = {p.parent.parent.name for p in Path('cases').glob('*/source/manifest.json')}
+          trials = summary['trials']
+          assert summary['complete']
+          assert {r['case_id'] for r in trials} == expected
+          assert all(r['pipeline_status'] == 'evaluated' and r['reward'] == 0 and not r['judge_error'] for r in trials)
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: pipeline-evidence
+          path: benchmark/output/
+          retention-days: 14

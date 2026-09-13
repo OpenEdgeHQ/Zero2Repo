@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .limits import TerminalStatus
+from .state import atomic_json
 
 __all__ = ["TrialResult", "write_summary", "format_reward_matrix"]
 
@@ -43,6 +44,19 @@ class TrialResult:
     denylist_violation: str | None = None
     denylist_warnings: list[str] = field(default_factory=list)
     denylist_fix_attempts: int = 0
+    # Pipeline outcome is independent of candidate correctness and solver exit.
+    pipeline_status: str = "error"  # running / evaluated / not_submitted / error
+    phase: str = "preflight"
+    failed_phase: str | None = None
+    submitted: bool = False
+    started_at: str | None = None
+    finished_at: str | None = None
+    agent_image_id: str | None = None
+    deliverable_image_id: str | None = None
+    platform: str | None = None
+    integrity_checks: dict[str, str] = field(default_factory=dict)
+    artifact_errors: list[str] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,18 +65,23 @@ class TrialResult:
     def passed(self) -> bool:
         return self.reward >= 1.0
 
+    @property
+    def evaluated(self) -> bool:
+        return self.pipeline_status == "evaluated" and not self.judge_error and not self.artifact_errors
 
-def write_summary(results: list[TrialResult], out_dir: Path) -> Path:
+
+def write_summary(results: list[TrialResult], out_dir: Path, *, complete: bool = True) -> Path:
     """Write ``summary.json`` and return its path."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "complete": complete,
         "trials": [r.to_dict() for r in results],
         "aggregate": _aggregate(results),
     }
     path = out_dir / "summary.json"
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_json(path, payload)
     return path
 
 
@@ -79,6 +98,8 @@ def _aggregate(results: list[TrialResult]) -> dict:
         "reward_mean": (sum(r.reward for r in results) / total) if total else 0.0,
         "terminal_status": by_status,
         "judge_errors": judge_errors,
+        "evaluated": sum(r.evaluated for r in results),
+        "not_evaluated": sum(not r.evaluated for r in results),
     }
 
 
