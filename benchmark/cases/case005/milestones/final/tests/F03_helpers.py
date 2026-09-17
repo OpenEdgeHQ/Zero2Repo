@@ -546,6 +546,43 @@ def substitute_placeholder(
     return joined
 
 
+def unframed_get_round_trip(target: str, host: str) -> Any:
+    """Send GET *target* with Host *host* and no framing headers, then EOM.
+
+    The matching end-of-message encodes with no extra body bytes. A new
+    server that is fed only those bytes pulls the request and then, with
+    no further feed, end-of-message — not data. Returns that request.
+    """
+    client = client_connection()
+    encoded = require_send_bytes(
+        send_event(
+            client,
+            make_request(target=target, headers=[("Host", host)]),
+        )
+    )
+    eom = require_no_extra_bytes(send_event(client, make_eom()))
+    server = server_connection()
+    feed_ok(server, encoded + eom)
+    pulled = pull_kind(server, "request")
+    immediate = require_pulled_event(pull_next(server))
+    print(
+        f"unframed_get_round_trip target={target!r} host={host!r} "
+        f"immediate={type(immediate).__name__}",
+        flush=True,
+    )
+    if not event_is_kind(immediate, "end-of-message"):
+        raise AssertionError(
+            f"unframed GET {target!r} Host {host!r}: after the request, "
+            f"expected end-of-message, got {type(immediate)!r}"
+        )
+    if event_is_kind(immediate, "data"):
+        raise AssertionError(
+            f"unframed GET {target!r} Host {host!r}: pulled a data event "
+            "instead of an empty body"
+        )
+    return pulled
+
+
 def client_sent_empty_get() -> tuple[Any, bytes]:
     """Client that has sent GET / Host example.com plus end-of-message."""
     client = client_connection()
@@ -698,5 +735,6 @@ __all__ = (
     "server_after_empty_get",
     "server_after_empty_head",
     "substitute_placeholder",
+    "unframed_get_round_trip",
     "wire_has_header",
 )

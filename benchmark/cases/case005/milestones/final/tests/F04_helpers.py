@@ -148,22 +148,42 @@ def require_neither_error(conn: Any) -> None:
     print("require_neither_error ok", flush=True)
 
 
-def require_local_cycle_refusal(result: CallResult, conn: Any) -> BaseException:
+def require_local_cycle_refusal(
+    result: CallResult,
+    conn: Any,
+    *,
+    our: str | None = None,
+    their: str | None = None,
+) -> BaseException:
     """Require start-next-cycle failed as a local protocol error.
 
-    Both sides are not IDLE (start did not succeed). Neither side is
-    ERROR. A probe crash is never classified as "start did nothing".
+    Start did not leave both sides IDLE. Neither side is ERROR. When
+    *our* or *their* is given, that side must still be the named state
+    after the refusal — a start that jumps to IDLE cannot pass. A probe
+    crash is never classified as "start did nothing".
     """
     exc = require_local_refusal(result)
-    our, their = connection_side_states(conn)
+    got_our, got_their = connection_side_states(conn)
     idle = named_state("IDLE")
-    if our == idle and their == idle:
+    if got_our == idle and got_their == idle:
         raise AssertionError(
             "start-next-cycle refused but both sides are IDLE"
         )
     require_neither_error(conn)
+    if our is not None:
+        expected = named_state(our)
+        if got_our != expected:
+            raise AssertionError(
+                f"after refused start our_state is {got_our!r}, expected {our}"
+            )
+    if their is not None:
+        expected = named_state(their)
+        if got_their != expected:
+            raise AssertionError(
+                f"after refused start their_state is {got_their!r}, expected {their}"
+            )
     print(
-        f"local_cycle_refusal our={our!r} their={their!r}",
+        f"local_cycle_refusal our={got_our!r} their={got_their!r}",
         flush=True,
     )
     return exc
@@ -321,13 +341,30 @@ def send_completed_eom(conn: Any) -> bytes:
 
 
 def require_start_succeeded(result: CallResult, conn: Any) -> None:
-    """Require start-next-cycle returned and both sides are IDLE."""
+    """Require start-next-cycle returned and both sides are IDLE.
+
+    Returning without error is not enough: a no-op that leaves both
+    sides DONE is not a successful start.
+    """
     if result.exception is not None:
         raise AssertionError(
             "start-next-cycle raised "
             f"{type(result.exception).__name__}: {result.exception!r}"
         )
-    require_both_idle(conn)
+    our, their = connection_side_states(conn)
+    idle = named_state("IDLE")
+    done = named_state("DONE")
+    if our != idle or their != idle:
+        raise AssertionError(
+            "start-next-cycle returned without error but sides are not "
+            f"both IDLE; our={our!r} their={their!r}"
+        )
+    if our == done or their == done:
+        raise AssertionError(
+            "start-next-cycle left a side in DONE; "
+            f"our={our!r} their={their!r}"
+        )
+    print("require_start_succeeded both IDLE", flush=True)
 
 
 def client_sent_named_get(*, host: str, target: str = "/") -> tuple[Any, bytes]:
@@ -412,6 +449,23 @@ def send_final_200(server: Any, *, headers: Any = ()) -> bytes:
     eom = send_completed_eom(server)
     print(f"send_final_200 resp_len={len(resp)} eom_len={len(eom)}", flush=True)
     return resp + eom
+
+
+def runtime_close_substring_token() -> str:
+    """A Connection segment containing the letters close that is not the close token.
+
+    The segment is not a whole-segment ``close`` and is not ``enclosed``
+    or ``closed``. Generated in-process.
+    """
+    token = runtime_token() + "close"
+    lowered = token.lower()
+    if lowered in {"close", "enclosed", "closed"} or b"," in token.encode("ascii"):
+        token = "fore" + runtime_token() + "close"
+        lowered = token.lower()
+    if lowered in {"close", "enclosed", "closed"}:
+        token = "xclose" + runtime_token()
+    print(f"runtime_close_substring_token={token!r}", flush=True)
+    return token
 
 
 def runtime_host() -> str:
@@ -598,6 +652,7 @@ __all__ = (
     "require_paused",
     "require_start_succeeded",
     "require_their_state",
+    "runtime_close_substring_token",
     "runtime_final_not_204_or_200",
     "runtime_final_not_408",
     "runtime_host",

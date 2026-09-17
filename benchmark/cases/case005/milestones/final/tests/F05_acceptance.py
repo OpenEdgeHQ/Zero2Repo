@@ -11,7 +11,6 @@ FP-03. Keep-alive and start-next-cycle are FP-04.
 
 from __future__ import annotations
 
-from _harness import product_package_name, run_python
 from F01_helpers import (
     connection_side_states,
     construct,
@@ -52,42 +51,40 @@ from F03_helpers import (
     payload_as_bytes,
     pull_kind,
 )
-from F04_helpers import (
-    encoded_status_code,
-    pull_response_then_eom,
-    require_both_done,
-    require_close_token,
-    require_local_cycle_refusal,
-    require_neither_error,
-    require_paused,
-    require_start_succeeded,
-    runtime_host,
-    runtime_target,
-    send_completed_eom,
-    send_final_200,
-    start_next_cycle,
-)
 from F05_helpers import (
+    begin_next_cycle,
     concatenated_body_until_eom,
     connection_with_incomplete_limit,
     feed_empty,
+    generated_host,
+    generated_target,
     public_big_header_block,
     public_big_header_unfinished,
     public_gibberish_block,
+    pull_empty_response,
     pull_request_then_eom,
+    require_cycle_reset,
+    require_early_cycle_local,
+    require_encoded_close,
     require_mark_failed,
+    require_no_error_side,
     require_not_connection_closed_event,
     require_our_error_their_not,
+    require_pull_paused,
     require_remote_status,
     require_short_body_pair,
     require_side_still_error,
+    require_sides_done,
     require_their_error_our_not,
     runtime_unparseable_block,
+    send_empty_200,
+    send_eom_bytes,
+    wire_status_code,
 )
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control (protocol-error path)
+# S. Present-arm protocol-error path (L79: no package-disable negative control)
 # ---------------------------------------------------------------------------
 
 
@@ -113,30 +110,53 @@ def test_protocol_error_path_round_trips_when_package_importable():
 
 
 def test_get_encode_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        "ok = False\n"
-        "try:\n"
-        f"    import {pkg} as _pkg\n"
-        "    _conn = _pkg.Connection(_pkg.CLIENT)\n"
-        "    _ev = _pkg.Request(\n"
-        "        method='GET', target='/',\n"
-        "        headers=[('Host', 'example.com')],\n"
-        "    )\n"
-        "    _encoded = _conn.send(_ev)\n"
-        "    if _encoded:\n"
-        "        ok = True\n"
-        "        print('ENCODED_REQUEST')\n"
-        "except Exception as _exc:\n"
-        "    print('ENCODE_UNAVAILABLE')\n"
-        "    print(type(_exc).__name__)\n"
+    # L79: this product has no negative control. Present versus hollow is
+    # a real protocol-error walk on a constructed connection, not an
+    # import-stripped child. ENCODE_UNAVAILABLE / ENCODED_REQUEST are not
+    # product output.
+    client = client_connection()
+    encoded = require_send_bytes(
+        send_event(client, make_request(headers=[("Host", "example.com")]))
     )
-    result = run_python(code=code, include_product=False)
-    text = result.stdout_text
-    print(f"negative-control stdout={text!r}", flush=True)
-    print(f"negative-control stderr={result.stderr_text!r}", flush=True)
-    assert "ENCODED_REQUEST" not in text
-    assert "ENCODE_UNAVAILABLE" in text
+    print(f"present-arm GET encoded len={len(encoded)}", flush=True)
+    assert len(encoded) > 0
+    server = server_connection()
+    feed_ok(server, encoded)
+    pulled = pull_kind(server, "request")
+    assert request_method(pulled) == b"GET"
+    assert request_target(pulled) == b"/"
+
+    local_exc = require_local_refusal(request_result(headers=[]), suggested=400)
+    remote = server_connection()
+    feed_ok(remote, public_gibberish_block())
+    remote_result = pull_next(remote)
+    remote_exc = require_remote_status(remote_result, 400)
+    require_not_connection_closed_event(remote_result.value)
+    require_their_error_our_not(remote)
+    further = pull_next(remote)
+    require_remote_refusal(further)
+    require_not_connection_closed_event(further.value)
+    runtime_conn = server_connection()
+    feed_empty(runtime_conn)
+    runtime_exc = require_runtime_refusal(feed_bytes(runtime_conn, b"more"))
+
+    local_t = local_protocol_error_type()
+    remote_t = remote_protocol_error_type()
+    print(
+        f"present-arm kinds local={type(local_exc).__name__} "
+        f"remote={type(remote_exc).__name__} "
+        f"runtime={type(runtime_exc).__name__}",
+        flush=True,
+    )
+    assert isinstance(local_exc, local_t)
+    assert not isinstance(local_exc, remote_t)
+    assert isinstance(remote_exc, remote_t)
+    assert not isinstance(remote_exc, local_t)
+    assert type(local_exc) is not type(remote_exc)
+    assert type(local_exc) is not type(runtime_exc)
+    assert type(remote_exc) is not type(runtime_exc)
+    assert suggested_status(local_exc) == 400
+    assert suggested_status(remote_exc) == 400
 
 
 # ---------------------------------------------------------------------------
@@ -264,28 +284,28 @@ def test_non_host_invalid_construction_is_recoverable():
 
 
 def test_start_next_cycle_before_done_is_recoverable_local_error():
-    host = runtime_host()
+    host = generated_host()
     client = client_connection()
     raw = require_send_bytes(
         send_event(client, make_request(headers=[("Host", host)]))
     )
-    eom = send_completed_eom(client)
-    early = start_next_cycle(client)
-    exc = require_local_cycle_refusal(early, client)
+    eom = send_eom_bytes(client)
+    early = begin_next_cycle(client)
+    exc = require_early_cycle_local(early, client)
     assert suggested_status(exc) == 400
     our, their = connection_side_states(client)
     idle = named_state("IDLE")
     assert our != idle or their != idle
-    require_neither_error(client)
+    require_no_error_side(client)
 
     server = server_connection()
     feed_ok(server, raw + eom)
     pull_request_then_eom(server)
-    resp = send_final_200(server)
+    resp = send_empty_200(server)
     feed_ok(client, resp)
-    pull_response_then_eom(client)
-    require_both_done(client)
-    require_start_succeeded(start_next_cycle(client), client)
+    pull_empty_response(client)
+    require_sides_done(client)
+    require_cycle_reset(begin_next_cycle(client), client)
     print("start after both DONE succeeded on the same connection", flush=True)
 
 
@@ -317,8 +337,8 @@ def test_server_can_still_send_400_after_remote_receive_error():
         send_event(server, make_response(400, headers=[]))
     )
     print(f"post-remote 400 encoded len={len(encoded)}", flush=True)
-    assert encoded_status_code(encoded) == 400
-    require_close_token(encoded)
+    assert wire_status_code(encoded) == 400
+    require_encoded_close(encoded)
     require_their_error_our_not(server)
     require_side_still_error(server, "their")
     our, their = connection_side_states(server)
@@ -351,7 +371,7 @@ def test_send_after_remote_receive_error_still_answers_400():
         f"send after remote receive error answered 400 len={len(encoded)}",
         flush=True,
     )
-    assert encoded_status_code(encoded) == 400
+    assert wire_status_code(encoded) == 400
     require_their_error_our_not(server)
     require_side_still_error(server, "their")
     our, their = connection_side_states(server)
@@ -403,7 +423,7 @@ def test_their_error_cannot_be_left_after_remote_pull():
     feed_ok(server, public_gibberish_block())
     require_remote_status(pull_next(server), 400)
     require_their_error_our_not(server)
-    start_next_cycle(server)
+    begin_next_cycle(server)
     require_side_still_error(server, "their")
     _, their = connection_side_states(server)
     assert their != named_state("IDLE")
@@ -424,8 +444,8 @@ def test_runtime_unparseable_line_is_remote_error():
     encoded = require_send_bytes(
         send_event(server, make_response(400, headers=[]))
     )
-    assert encoded_status_code(encoded) == 400
-    require_close_token(encoded)
+    assert wire_status_code(encoded) == 400
+    require_encoded_close(encoded)
     require_their_error_our_not(server)
     print("runtime unparseable line still allows send 400", flush=True)
 
@@ -495,7 +515,7 @@ def test_sending_http10_response_is_unrecoverable_local_error():
     neighbor_bytes = require_send_bytes(
         send_event(neighbor, make_response(408, headers=[]))
     )
-    assert encoded_status_code(neighbor_bytes) == 408
+    assert wire_status_code(neighbor_bytes) == 408
 
     event = require_event(
         construct(
@@ -523,7 +543,7 @@ def test_sending_http10_response_from_other_legal_position():
     neighbor_bytes = require_send_bytes(
         send_event(neighbor, make_response(200, headers=[]))
     )
-    assert encoded_status_code(neighbor_bytes) == 200
+    assert wire_status_code(neighbor_bytes) == 200
 
     server = server_connection()
     feed_ok(server, ready_raw)
@@ -591,7 +611,7 @@ def test_our_error_cannot_be_left_after_local_send():
         suggested=400,
     )
     require_our_error_their_not(client)
-    start_next_cycle(client)
+    begin_next_cycle(client)
     require_side_still_error(client, "our")
     our, _their = connection_side_states(client)
     assert our != named_state("IDLE")
@@ -633,8 +653,8 @@ def test_mark_send_as_failed_twice_is_idempotent():
 
 
 def test_send_after_mark_failed_is_local_error():
-    host = runtime_host()
-    target = runtime_target()
+    host = generated_host()
+    target = generated_target()
     unmarked = client_connection()
     require_send_bytes(
         send_event(
@@ -700,7 +720,7 @@ def test_marked_failed_connection_cannot_return_to_idle():
         send_event(client, make_request(headers=[("Host", "example.com")]))
     )
     require_mark_failed(client)
-    start_next_cycle(client)
+    begin_next_cycle(client)
     require_side_still_error(client, "our")
     our, _their = connection_side_states(client)
     assert our != named_state("IDLE")
@@ -792,14 +812,14 @@ def test_pipelined_leftovers_fail_only_when_next_message_is_parsed():
     )
     first = pull_request_then_eom(server)
     assert request_target(first) == b"/1"
-    require_paused(pull_next(server))
-    send_final_200(server)
-    require_start_succeeded(start_next_cycle(server), server)
+    require_pull_paused(pull_next(server))
+    send_empty_200(server)
+    require_cycle_reset(begin_next_cycle(server), server)
     second = pull_request_then_eom(server)
     assert request_target(second) == b"/2"
-    require_paused(pull_next(server))
-    send_final_200(server)
-    require_start_succeeded(start_next_cycle(server), server)
+    require_pull_paused(pull_next(server))
+    send_empty_200(server)
+    require_cycle_reset(begin_next_cycle(server), server)
     leftover = pull_next(server)
     require_remote_status(leftover, 431)
     require_their_error_our_not(server)
@@ -807,10 +827,10 @@ def test_pipelined_leftovers_fail_only_when_next_message_is_parsed():
 
 
 def test_runtime_pipelined_leftovers_fail_only_when_parsed():
-    host_a = runtime_host()
-    host_b = runtime_host()
-    target_a = runtime_target()
-    target_b = runtime_target()
+    host_a = generated_host()
+    host_b = generated_host()
+    target_a = generated_target()
+    target_b = generated_target()
     req1 = (
         f"GET {target_a} HTTP/1.1\r\nHost: {host_a}\r\n\r\n".encode("ascii")
     )
@@ -832,14 +852,14 @@ def test_runtime_pipelined_leftovers_fail_only_when_parsed():
     feed_ok(server, req1 + req2 + extra)
     first = pull_request_then_eom(server)
     assert request_target(first) == target_a.encode("ascii")
-    require_paused(pull_next(server))
-    send_final_200(server)
-    require_start_succeeded(start_next_cycle(server), server)
+    require_pull_paused(pull_next(server))
+    send_empty_200(server)
+    require_cycle_reset(begin_next_cycle(server), server)
     second = pull_request_then_eom(server)
     assert request_target(second) == target_b.encode("ascii")
-    require_paused(pull_next(server))
-    send_final_200(server)
-    require_start_succeeded(start_next_cycle(server), server)
+    require_pull_paused(pull_next(server))
+    send_empty_200(server)
+    require_cycle_reset(begin_next_cycle(server), server)
     leftover = pull_next(server)
     require_remote_status(leftover, 431)
     require_their_error_our_not(server)
@@ -898,7 +918,7 @@ def test_oversize_unfinished_response_headers_are_remote_431():
     require_send_bytes(
         send_event(client, make_request(headers=[("Host", "a")]))
     )
-    send_completed_eom(client)
+    send_eom_bytes(client)
     feed_ok(client, b"HTTP/1.1 200 \r\nBig: " + (b"a" * 4000))
     result = pull_next(client)
     exc = require_remote_status(result, 431)
@@ -918,12 +938,12 @@ def test_runtime_oversize_unfinished_response_headers():
         send_event(
             client,
             make_request(
-                target=runtime_target(),
-                headers=[("Host", runtime_host())],
+                target=generated_target(),
+                headers=[("Host", generated_host())],
             ),
         )
     )
-    send_completed_eom(client)
+    send_eom_bytes(client)
     unfinished = b"HTTP/1.1 204 " + (b"Z" * limit)
     assert len(unfinished) > limit
     feed_ok(client, unfinished)
@@ -1114,7 +1134,7 @@ def test_http10_close_delimited_empty_feed_is_eom_then_closed():
     require_send_bytes(
         send_event(client, make_request(headers=[("Host", "a")]))
     )
-    send_completed_eom(client)
+    send_eom_bytes(client)
     feed_ok(client, b"HTTP/1.0 200 \r\n\r\n")
     pull_kind(client, "response")
     feed_ok(client, b"12345")
@@ -1136,7 +1156,7 @@ def test_http10_unfinished_cl_empty_feed_is_remote():
     require_send_bytes(
         send_event(framed, make_request(headers=[("Host", "a")]))
     )
-    send_completed_eom(framed)
+    send_eom_bytes(framed)
     feed_ok(framed, b"HTTP/1.0 200 \r\nContent-Length: 100\r\n\r\n")
     pull_kind(framed, "response")
     feed_ok(framed, b"12345")
@@ -1150,7 +1170,7 @@ def test_http10_unfinished_cl_empty_feed_is_remote():
     require_send_bytes(
         send_event(close_del, make_request(headers=[("Host", "a")]))
     )
-    send_completed_eom(close_del)
+    send_eom_bytes(close_del)
     feed_ok(close_del, b"HTTP/1.0 200 \r\n\r\n")
     pull_kind(close_del, "response")
     feed_ok(close_del, b"12345")
@@ -1168,7 +1188,7 @@ def test_client_http11_unfinished_cl_empty_feed_is_remote():
     require_send_bytes(
         send_event(client, make_request(headers=[("Host", "a")]))
     )
-    send_completed_eom(client)
+    send_eom_bytes(client)
     feed_ok(client, b"HTTP/1.1 200 \r\nContent-Length: 100\r\n\r\n")
     pull_kind(client, "response")
     feed_ok(client, b"12345")

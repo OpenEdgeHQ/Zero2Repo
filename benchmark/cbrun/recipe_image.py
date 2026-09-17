@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -41,7 +42,9 @@ from .recipe import (
     validate_lock_env_install,
 )
 
-__all__ = ["ensure_deliverable_image"]
+__all__ = ["ensure_deliverable_image", "resource_fetch_command"]
+
+GENERIC_FETCH_SCRIPT = Path(__file__).resolve().parent / "fetch_resources.py"
 
 BASE_IMAGE_DOCKERFILE_DIR = Path(__file__).resolve().parent / "base_image"
 
@@ -107,12 +110,50 @@ def _runner_docker_gpus(runner: dict[str, Any]) -> str | None:
     return None
 
 
+def resource_fetch_command(case_dir: Path | str) -> str:
+    """Return a shell preamble that verifies ``source/env/resources.json``.
+
+    Empty when the case does not declare public resources. Destination,
+    HTTPS URL, size, SHA-256, and license are required on every item.
+    """
+    case_dir = Path(case_dir)
+    path = case_dir / "source" / "env" / "resources.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RecipeLockError(f"invalid {path}: {exc}") from exc
+    dest = str(data.get("destination") or "").strip()
+    if not dest.startswith("/"):
+        raise RecipeLockError(f"{path}: destination must be an absolute container path")
+    items = data.get("resources")
+    if not isinstance(items, list) or not items:
+        raise RecipeLockError(f"{path}: resources must be a non-empty list")
+    for item in items:
+        if not isinstance(item, dict):
+            raise RecipeLockError(f"{path}: each resource must be an object")
+        for key in ("id", "url", "sha256", "size", "license"):
+            if not item.get(key) and item.get(key) != 0:
+                raise RecipeLockError(f"{path}: resource missing {key}")
+        if not str(item["url"]).startswith("https://"):
+            raise RecipeLockError(f"{path}: resource URLs must use HTTPS")
+    return (
+        "python3 /opt/cbrun/fetch_resources.py "
+        f"/env-assets/resources.json {shlex.quote(dest)}"
+    )
+
+
 def _volume_mounts(case_dir: Path) -> list[str]:
     """Optional operator-supplied caches. Never invented per case."""
     mounts: list[str] = []
     env_dir = case_dir / "source" / "env"
     if env_dir.is_dir() and any(env_dir.iterdir()):
         mounts.extend(["-v", f"{env_dir.resolve()}:/env-assets:ro"])
+    if (env_dir / "resources.json").is_file() and GENERIC_FETCH_SCRIPT.is_file():
+        mounts.extend(
+            ["-v", f"{GENERIC_FETCH_SCRIPT}:/opt/cbrun/fetch_resources.py:ro"]
+        )
     cache_raw = os.environ.get("CODINGBENCH_BUILD_CACHE_DIR", "").strip()
     if cache_raw and cache_raw.lower() not in {"off", "0", "false", "no"}:
         cache_dir = Path(cache_raw).expanduser()
@@ -221,7 +262,9 @@ def _build_env_image(
     if gpus:
         argv.extend(["--gpus", gpus])
     argv.extend(_volume_mounts(case_dir))
-    argv.extend([base_image, "bash", "-lc", install])
+    fetch = resource_fetch_command(case_dir)
+    command = f"{fetch} && {install}" if fetch else install
+    argv.extend([base_image, "bash", "-lc", command])
 
     retries = _env_build_retries()
     delay = _env_build_retry_delay_sec()

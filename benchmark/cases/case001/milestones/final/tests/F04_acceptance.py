@@ -8,20 +8,16 @@ are FP-01 / FP-02; text-mode on the binary-file entry is FP-03.
 
 from __future__ import annotations
 
-import sys
-
 from tomlparse import TOMLDecodeError, load, loads  # noqa: F401 — public surface
 
 from _harness import binary_buffer, text_buffer
 from F01_helpers import (
     decode_error_type,
     is_mapping,
-    nested_array_source,
     parse_text,
     require_decode_failure,
     require_mapping,
     require_path,
-    require_recursion_failure,
     runtime_int,
     runtime_token,
 )
@@ -514,21 +510,26 @@ def test_missing_comma_in_array_is_decode_error():
     seq = require_path(neighbor, "arr")
     require_int(seq[0], 1)
     require_int(seq[1], 2)
-    _refuse_invalid(_NAMED_MISSING_COMMA_ARRAY)
+    named_exc = _refuse_invalid(_NAMED_MISSING_COMMA_ARRAY)
+    require_interior_place(named_exc, _NAMED_MISSING_COMMA_ARRAY)
     key = runtime_token()
     left = runtime_token()
     right = runtime_token()
     closed = _neighbor(f'{key} = ["{left}", "{right}"]')
     require_str(require_path(closed, key)[0], left)
     require_str(require_path(closed, key)[1], right)
-    _refuse_invalid(f'{key} = ["{left}" "{right}"]')
+    runtime_source = f'{key} = ["{left}" "{right}"]'
+    runtime_exc = _refuse_invalid(runtime_source)
+    require_interior_place(runtime_exc, runtime_source)
 
 
 def test_missing_comma_in_inline_table_is_decode_error():
     neighbor = _neighbor("t = { a = 1, b = 2 }")
     require_int(require_path(neighbor, "t", "a"), 1)
     require_int(require_path(neighbor, "t", "b"), 2)
-    _refuse_invalid("t = " + _NAMED_MISSING_COMMA_INLINE)
+    named_source = "t = " + _NAMED_MISSING_COMMA_INLINE
+    named_exc = _refuse_invalid(named_source)
+    require_interior_place(named_exc, named_source)
     key = runtime_token()
     left_k = runtime_token()
     right_k = runtime_token()
@@ -539,7 +540,11 @@ def test_missing_comma_in_inline_table_is_decode_error():
     )
     require_str(require_path(closed, key, left_k), left_v)
     require_str(require_path(closed, key, right_k), right_v)
-    _refuse_invalid(f'{key} = {{ {left_k} = "{left_v}" {right_k} = "{right_v}" }}')
+    runtime_source = (
+        f'{key} = {{ {left_k} = "{left_v}" {right_k} = "{right_v}" }}'
+    )
+    runtime_exc = _refuse_invalid(runtime_source)
+    require_interior_place(runtime_exc, runtime_source)
 
 
 def test_unclosed_table_header_is_decode_error():
@@ -773,25 +778,24 @@ def test_binary_text_mode_file_is_type_error_not_decode_error(isolated_ws):
 
 
 # ---------------------------------------------------------------------------
-# H. Recursion error distinct from decode error (L216)
+# H. Scored invalid TOML is the decode error (L193, L220); extra depth unpinned
 # ---------------------------------------------------------------------------
 
 
 def test_recursion_error_distinct_from_decode_error():
-    over = sys.getrecursionlimit() + 2
-    print(f"over-limit depth={over}", flush=True)
-    rec_exc = require_recursion_failure(parse_text(nested_array_source(over)))
+    """``val=.`` fails as the decode error, a kind of value error.
+
+    Extra nesting past the interpreter recursion limit is not scored
+    (FP-01 L116): how much farther a document may nest, and whether a
+    still-deeper document fails because the interpreter refuses a deeper
+    call, is the implementer's. This test does not require RecursionError
+    at extra depth.
+    """
     decode_exc = _refuse_invalid(_NAMED_VAL_DOT)
-    assert isinstance(rec_exc, RecursionError)
-    assert not isinstance(rec_exc, decode_error_type())
     assert isinstance(decode_exc, decode_error_type())
     assert isinstance(decode_exc, ValueError)
     assert not isinstance(decode_exc, RecursionError)
-    assert type(rec_exc) is not type(decode_exc)
-    caught_as_decode = isinstance(rec_exc, decode_error_type())
-    assert not caught_as_decode, (
-        "a caller who handles only the decode error would catch recursion"
-    )
+    assert not isinstance(decode_exc, TypeError)
 
 
 # ---------------------------------------------------------------------------

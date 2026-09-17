@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from _harness import as_optional_bytes, product_package_name, run_python
+from _harness import as_optional_bytes
 from F01_helpers import (
     data_payload,
     event_version,
@@ -70,12 +70,13 @@ from F03_helpers import (
     server_after_empty_get,
     server_after_empty_head,
     substitute_placeholder,
+    unframed_get_round_trip,
     wire_has_header,
 )
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control
+# S. Present-arm empty-body GET encode and pull (L79: no package-disable)
 # ---------------------------------------------------------------------------
 
 
@@ -100,31 +101,26 @@ def test_empty_body_get_round_trips_when_package_importable():
 
 
 def test_empty_body_get_encode_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        "ok = False\n"
-        "try:\n"
-        f"    import {pkg} as _pkg\n"
-        "    _conn = _pkg.Connection(_pkg.CLIENT)\n"
-        "    _ev = _pkg.Request(\n"
-        "        method='GET', target='/',\n"
-        "        headers=[('Host', 'example.com')],\n"
-        "    )\n"
-        "    _encoded = _conn.send(_ev)\n"
-        "    _eom = _conn.send(_pkg.EndOfMessage())\n"
-        "    if _encoded:\n"
-        "        ok = True\n"
-        "        print('ENCODED_REQUEST')\n"
-        "except Exception as _exc:\n"
-        "    print('ENCODE_UNAVAILABLE')\n"
-        "    print(type(_exc).__name__)\n"
+    # L79: this product has no negative control. Present versus hollow is
+    # send then end-of-message with no extra body bytes, then a peer pull of
+    # request then end-of-message — not an import-stripped child.
+    client = client_connection()
+    encoded = require_send_bytes(
+        send_event(client, make_request(headers=[("Host", "example.com")]))
     )
-    result = run_python(code=code, include_product=False)
-    text = result.stdout_text
-    print(f"negative-control stdout={text!r}", flush=True)
-    print(f"negative-control stderr={result.stderr_text!r}", flush=True)
-    assert "ENCODED_REQUEST" not in text
-    assert "ENCODE_UNAVAILABLE" in text
+    eom = require_no_extra_bytes(send_event(client, make_eom()))
+    print(f"present-arm empty GET encoded_len={len(encoded)} eom={eom!r}", flush=True)
+    server = server_connection()
+    feed_ok(server, encoded + eom)
+    pulled = pull_kind(server, "request")
+    assert request_method(pulled) == b"GET"
+    assert request_target(pulled) == b"/"
+    hosts = named_pairs(ordinary_pairs(pulled), b"host")
+    assert (b"host", b"example.com") in hosts
+    immediate = require_pulled_event(pull_next(server))
+    print(f"immediate after request={type(immediate).__name__}", flush=True)
+    assert event_is_kind(immediate, "end-of-message")
+    assert not event_is_kind(immediate, "data")
 
 
 # ---------------------------------------------------------------------------
@@ -145,32 +141,27 @@ def test_request_without_framing_headers_is_empty_body():
 
 
 def test_runtime_request_without_framing_headers_is_empty_body():
+    # Live baseline: the public GET / Host example.com sample is empty-body.
+    # The runtime arm differs only in target and Host.
+    public = unframed_get_round_trip("/", "example.com")
+    assert request_method(public) == b"GET"
+    assert request_target(public) == b"/"
+    public_hosts = named_pairs(ordinary_pairs(public), b"host")
+    assert (b"host", b"example.com") in public_hosts
+
     token = runtime_token()
     target = "/" + token[:8]
     host = token + ".test"
     assert target != "/"
     assert host.lower() != "example.com"
-    client = client_connection()
-    encoded = require_send_bytes(
-        send_event(
-            client,
-            make_request(target=target, headers=[("Host", host)]),
-        )
-    )
-    eom = require_no_extra_bytes(send_event(client, make_eom()))
-    server = server_connection()
-    feed_ok(server, encoded + eom)
-    pulled = pull_kind(server, "request")
+    pulled = unframed_get_round_trip(target, host)
     assert request_method(pulled) == b"GET"
     assert request_target(pulled) == target.encode("ascii")
     assert request_target(pulled) != b"/"
     hosts = named_pairs(ordinary_pairs(pulled), b"host")
     assert (b"host", host.encode("ascii")) in hosts
     assert (b"host", b"example.com") not in hosts
-    immediate = require_pulled_event(pull_next(server))
-    print(f"runtime empty-body immediate={type(immediate).__name__}", flush=True)
-    assert event_is_kind(immediate, "end-of-message")
-    assert not event_is_kind(immediate, "data")
+    print(f"runtime empty-body target={target!r} host={host!r}", flush=True)
 
 
 def test_post_without_framing_headers_is_empty_body():

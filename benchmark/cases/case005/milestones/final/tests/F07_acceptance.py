@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from _harness import product_package_name, run_python
 from F01_helpers import (
     named_pairs,
     ordinary_pairs,
@@ -73,6 +72,7 @@ from F06_helpers import (
 from F07_helpers import (
     accept_connect,
     accept_upgrade,
+    bind_waiting_reports,
     client_waiting_flag,
     connect_request,
     deny_and_complete,
@@ -191,7 +191,7 @@ def _illegal_http_send(conn: Any, event: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control (Expect / switch path)
+# S. Present-arm encode and pull (L79: no package-disable negative control)
 # ---------------------------------------------------------------------------
 
 
@@ -220,36 +220,47 @@ def test_expect_path_round_trips_when_package_importable():
     feed_ok(fresh_server, expect_encoded)
     expect_pulled = pull_kind(fresh_server, "request")
     assert request_method(expect_pulled) == b"GET"
+    bind_waiting_reports(fresh_client, fresh_server)
     require_waiting_flags(fresh_client, client_waiting=True, they_waiting=False)
     require_waiting_flags(fresh_server, client_waiting=True, they_waiting=True)
     print("Expect path flags: they-waiting only on server", flush=True)
 
 
 def test_get_encode_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        "ok = False\n"
-        "try:\n"
-        f"    import {pkg} as _pkg\n"
-        "    _conn = _pkg.Connection(_pkg.CLIENT)\n"
-        "    _ev = _pkg.Request(\n"
-        "        method='GET', target='/',\n"
-        "        headers=[('Host', 'example.com')],\n"
-        "    )\n"
-        "    _encoded = _conn.send(_ev)\n"
-        "    if _encoded:\n"
-        "        ok = True\n"
-        "        print('ENCODED_REQUEST')\n"
-        "except Exception as _exc:\n"
-        "    print('ENCODE_UNAVAILABLE')\n"
-        "    print(type(_exc).__name__)\n"
+    # L79: this product has no negative control. Present versus hollow is
+    # real send/pull of the named F07 behavior on a constructed connection,
+    # not an import-stripped child. ENCODE_UNAVAILABLE / ENCODED_REQUEST
+    # are not product output. The only accepted present-arm outcome is
+    # this companion's GET encode-and-pull plus Expect waiting flags on
+    # a fresh pair.
+    client = client_connection()
+    encoded = require_send_bytes(
+        send_event(client, make_request(headers=[("Host", "example.com")]))
     )
-    result = run_python(code=code, include_product=False)
-    text = result.stdout_text
-    print(f"negative-control stdout={text!r}", flush=True)
-    print(f"negative-control stderr={result.stderr_text!r}", flush=True)
-    assert "ENCODED_REQUEST" not in text
-    assert "ENCODE_UNAVAILABLE" in text
+    print(f"present-arm GET encoded len={len(encoded)}", flush=True)
+    assert len(encoded) > 0
+    server = server_connection()
+    feed_ok(server, encoded)
+    pulled = pull_kind(server, "request")
+    assert request_method(pulled) == b"GET"
+    assert request_target(pulled) == b"/"
+    hosts = named_pairs(ordinary_pairs(pulled), b"host")
+    assert (b"host", b"example.com") in hosts
+
+    fresh_client = client_connection()
+    fresh_server = server_connection()
+    expect_encoded = require_send_bytes(
+        send_event(fresh_client, make_request(headers=public_expect_headers()))
+    )
+    print(f"present-arm Expect GET encoded len={len(expect_encoded)}", flush=True)
+    assert len(expect_encoded) > 0
+    feed_ok(fresh_server, expect_encoded)
+    expect_pulled = pull_kind(fresh_server, "request")
+    assert request_method(expect_pulled) == b"GET"
+    bind_waiting_reports(fresh_client, fresh_server)
+    require_waiting_flags(fresh_client, client_waiting=True, they_waiting=False)
+    require_waiting_flags(fresh_server, client_waiting=True, they_waiting=True)
+    print("present-arm Expect path flags: they-waiting only on server", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +458,7 @@ def test_http11_expect_content_length_100_sets_waiting_flags():
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
     print("public Expect CL 100 flags on", flush=True)
@@ -480,6 +492,7 @@ def test_they_are_waiting_only_on_server():
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     assert client_waiting_flag(client) is True
     assert client_waiting_flag(server) is True
     assert they_are_waiting_flag(server) is True
@@ -504,6 +517,7 @@ def test_expect_matching_is_case_insensitive():
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
     assert client_waiting_flag(client) is True
@@ -537,6 +551,7 @@ def test_non_get_expect_sets_waiting_flags():
     feed_ok(server, encoded)
     pulled = pull_kind(server, "request")
     assert request_method(pulled) == method.encode("ascii")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
 
@@ -557,6 +572,7 @@ def _expect_pair_flags_on() -> tuple[Any, Any]:
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
     return client, server
@@ -585,6 +601,7 @@ def _chunked_expect_pair_flags_on() -> tuple[Any, Any]:
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
     print("chunked Expect flags on before any body event", flush=True)
@@ -706,6 +723,7 @@ def test_runtime_expect_sets_waiting_flags():
     )
     feed_ok(server, encoded)
     pull_kind(server, "request")
+    bind_waiting_reports(client, server)
     require_waiting_flags(client, client_waiting=True, they_waiting=False)
     require_waiting_flags(server, client_waiting=True, they_waiting=True)
 
@@ -743,7 +761,24 @@ def test_runtime_expect_sets_waiting_flags():
 # ---------------------------------------------------------------------------
 
 
+def _bind_waiting_reports_from_public_expect() -> None:
+    """Discover the two waiting reports from the HTTP/1.1 Expect CL 100 pair.
+
+    Server-only HTTP/1.0 feeds cannot show the role split. Bind first from
+    the pair line 301 / line 322 name, then read those same reports.
+    """
+    client = client_connection()
+    server = server_connection()
+    encoded = require_send_bytes(
+        send_event(client, make_request(headers=public_expect_headers()))
+    )
+    feed_ok(server, encoded)
+    pull_kind(server, "request")
+    bind_waiting_reports(client, server)
+
+
 def test_http10_expect_does_not_set_waiting_flags():
+    _bind_waiting_reports_from_public_expect()
     raw = http10_expect_request_bytes(
         host="example.com",
         target="/",
@@ -781,6 +816,7 @@ def test_http11_versus_http10_expect_differs_only_in_waiting_flags():
     )
     assert stripped_11 == stripped_10
 
+    _bind_waiting_reports_from_public_expect()
     server_11 = server_connection()
     feed_ok(server_11, b11)
     pulled_11 = pull_kind(server_11, "request")

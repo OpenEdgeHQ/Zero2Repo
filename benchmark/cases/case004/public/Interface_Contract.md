@@ -108,10 +108,16 @@ These names are importable as ``signtoken`.<name>` and as `from `signtoken` impo
 
 Each of those names is a callable class.
 
-Typical import used to construct the serialize-and-sign helper, to name the signer type it wraps, and to select HMAC or the no-op algorithm:
+Typical import used to construct the signing helper and to select HMAC or the no-op algorithm:
 
 ```
-from `signtoken` import `HMACAlgorithm`, `NoneAlgorithm`, `Serializer`, `Signer`
+from `signtoken` import `HMACAlgorithm`, `NoneAlgorithm`, `Signer`
+```
+
+Typical import used to construct the serialize-and-sign helper and to name the signer type it wraps:
+
+```
+from `signtoken` import `Serializer`, `Signer`
 ```
 
 Typical import used to construct the timestamped signer and the timestamped serialize-and-sign helper:
@@ -130,7 +136,13 @@ timed = `URLSafeTimedSerializer`('secret key', salt='auth')
 
 A caller that only needs the serialize-and-sign helper may import `from `signtoken` import `Serializer``. A caller that only needs the signing helper, or that passes that type as a fallback signing configuration, may import `from `signtoken` import `Signer``. A caller that supplies an HMAC or no-op algorithm instance may import `from `signtoken` import `HMACAlgorithm`` or `from `signtoken` import `NoneAlgorithm``. A caller that only needs the timestamped signer may import `from `signtoken` import `TimestampSigner``. A caller that only needs the timestamped serialize-and-sign helper may import `from `signtoken` import `TimedSerializer``. A caller that only needs the URL-safe serialize-and-sign helper may import `from `signtoken` import `URLSafeSerializer``. A caller that only needs the URL-safe timestamped serialize-and-sign helper may import `from `signtoken` import `URLSafeTimedSerializer``.
 
-When the `signtoken` package is importable, constructing `Serializer` with secret `secret-key`, calling `dumps` on the mapping whose `id` is 42, and calling `loads` on that token recovers that mapping. When the package is not importable, a program that performs that same import, construction, dump, and load does not run to completion and does not yield that mapping.
+Constructing `Signer` with secret `secret-key`, calling `sign` on the text `my string`, and calling `unsign` on that token yields `my string` as bytes. A `validate` call on that token reports success without returning the payload.
+
+Constructing `Serializer` with secret `secret-key`, calling `dumps` on the mapping whose `id` is 42, and calling `loads` on that token recovers that mapping.
+
+Constructing `TimestampSigner` with secret `secret-key`, calling `sign` on the text `value`, and calling `unsign` on that token with no maximum age yields `value` as bytes.
+
+Constructing `TimedSerializer` with secret `secret-key`, calling `dumps` on the mapping whose `id` is 42, and calling `loads` on that token with no maximum age recovers that mapping.
 
 ## `signtoken.HMACAlgorithm`
 
@@ -139,12 +151,10 @@ Import `HMACAlgorithm` from the package root `signtoken` (`from `signtoken` impo
 ### Signature
 
 ```
-`HMACAlgorithm`(`digest_method`=None)
+`HMACAlgorithm`()
 ```
 
-- `digest_method` — optional hash constructor compatible with HMAC, such as `hashlib.sha1`, `hashlib.md5`, or `hashlib.sha512`. When omitted or `None`, SHA-1 is used.
-
-Calling the class returns an algorithm instance. The instance is what is passed to `Signer`, not the class object itself.
+No required parameters. Calling the class returns an algorithm instance. The instance is what is passed to `Signer`, not the class object itself.
 
 ### Observable effect when used as a signer algorithm
 
@@ -190,15 +200,15 @@ This helper wraps a `Signer`: secret lists, salts, separators, digests, and key-
 
 - `secret_key` — required first positional argument. One secret (text or bytes) or a sequence of secrets **oldest to newest**. Dumping signs with the **last** (newest) key. Load tries remaining keys from newest to oldest and succeeds if any remaining key verifies.
 - `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. When omitted, a product-defined default salt is used.
-- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. When omitted or `None`, the language JSON library is used.
+- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. The object must at least be able to `dumps` an empty mapping; the helper may use it at construction to detect whether dump output is text or bytes. When omitted or `None`, the language JSON library is used.
 - `serializer_kwargs` — a mapping of extra dump options forwarded into the internal dump object’s `dumps`. When omitted or `None`, no extra dump options are forwarded.
 - `signer` — a signer **class** (the `Signer` type, or a subclass) instantiated when signing. When omitted or `None`, `Signer` is used.
 - `signer_kwargs` — a mapping of keyword arguments forwarded when instantiating that signer class, such as `key_derivation` and `digest_method`. When omitted or `None`, the signer’s own defaults apply.
 - `fallback_signers` — a list of fallback signing configurations tried when the current signer cannot verify a token. When omitted or `None`, there are no fallbacks.
 
-The class is callable. Construction returns a helper instance. Construction does not dump an object, does not write files, and does not exit the host process.
+The class is callable. Construction returns a helper instance. Construction may probe the dump/load object with an empty mapping to detect whether dump output is text or bytes. Construction does not write files and does not exit the host process.
 
-An illegal separator forwarded through `signer_kwargs` (``sep`` set to a hyphen, an underscore, an equals sign, an ASCII letter, or an ASCII digit) is refused on the `Signer` this helper constructs: either constructing this helper raises, or the first `dumps` raises, and the caller does not receive a signed token. A period (``.``) as `sep` is accepted and round-trips.
+An illegal separator forwarded through `signer_kwargs` (``sep`` set to a hyphen (``-``), an underscore (``_``), an equals sign (``=``), an ASCII letter, or an ASCII digit) is refused on the `Signer` this helper constructs: either constructing this helper raises, or the first `dumps` raises, and the caller does not receive a signed token. A period (``.``) as `sep` is accepted and round-trips.
 
 ### `dumps`
 
@@ -292,7 +302,7 @@ The caller may replace the signer type (`signer`) or the signing options (`signe
 
 A token from the default helper is not equal to a token for the same object from a helper whose `key_derivation` is `hmac`, and the two helpers do not load each other’s tokens.
 
-A helper whose `signer` is a `Signer` subclass that defaults to SHA-512 produces a different token than both the default helper and an `hmac`-options helper; those tokens do not interchange.
+A helper whose `signer` is a `Signer` subclass that defaults to SHA-512 still dump-then-load round-trips, including the JSON list containing only 42.
 
 The default digest on this helper is SHA-1. Dumping the JSON list containing only 42 with no digest override produces the same token as dumping it with `digest_method` set to SHA-1 explicitly. Dumping it with SHA-512 produces a different token with a longer signature. A SHA-1 helper without a SHA-512 fallback cannot load the SHA-512 token: that refusal is a signature mismatch. A SHA-1 helper without a SHA-256 fallback cannot load a SHA-256 token: that refusal is a signature mismatch.
 
@@ -301,10 +311,10 @@ The default digest on this helper is SHA-1. Dumping the JSON list containing onl
 `fallback_signers` is a list. Fallbacks are tried when the current signer cannot verify a token, in the order the caller listed them, until one verifies or all fail. Each item is one of:
 
 - A **mapping** of signing options (for example `{`digest_method`: …}`) applied to the helper’s signer type.
-- An **alternative signer type**, constructed with the helper’s secret, salt, and **current** signing options (`signer_kwargs`). A type whose class-level digest default differs from the helper’s current `digest_method` does **not** override that current option: if the helper pins SHA-1 in `signer_kwargs` and the fallback is only a type whose class default is SHA-256, a SHA-256 token is not loaded. If the helper does not pin a digest in current options, that type’s class default is used.
+- An **alternative signer type**, constructed with the helper’s secret, salt, and **current** signing options (`signer_kwargs`). A type whose class-level digest default differs from the helper’s current `digest_method` does **not** override that current option: if the helper pins SHA-1 in `signer_kwargs` and the fallback is only a type whose class default is SHA-256, a SHA-256 token is not loaded. Listing only that type as a fallback still dump-then-load round-trips under the helper’s current signing options.
 - A **pair** of a signer type and a mapping of signing options, for example `(`Signer`, {`digest_method`: …})`.
 
-Concrete case: a helper that signs with SHA-256 dumps a mapping; a second helper whose current digest is SHA-1 but that lists SHA-256 as a fallback (any of the three shapes) loads that token and recovers the mapping; a third helper whose current digest is SHA-1 and that has no fallback refuses the token as a signature mismatch. The same rescue holds for SHA-512 with a SHA-512 mapping, type, or pair. Listing SHA-512 then SHA-256, or SHA-256 then SHA-512, still loads a SHA-256 token once the matching fallback is reached.
+Concrete case: a helper that signs with SHA-256 dumps a mapping; a second helper whose current digest is SHA-1 but that lists SHA-256 as a fallback mapping of signing options, or as a pair of `Signer` plus that mapping, loads that token and recovers the mapping; a third helper whose current digest is SHA-1 and that has no fallback refuses the token as a signature mismatch. The same rescue holds for SHA-512 with a SHA-512 mapping or pair. Listing SHA-512 then SHA-256, or SHA-256 then SHA-512, still loads a SHA-256 token once the matching fallback is reached.
 
 If every signer including fallbacks fails to verify, `loads` refuses with a signature mismatch. It does not return a decoded object as a successful load.
 
@@ -335,9 +345,9 @@ Import `Signer` from the package root `signtoken` (`from `signtoken` import `Sig
 ```
 
 - `secret_key` — required first positional argument. One secret (text or bytes) or a sequence of secrets **oldest to newest**. Signing uses the **last** (newest) key. Recovery tries remaining keys from newest to oldest and succeeds if any remaining key verifies.
-- `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. When omitted, a product-defined default salt is used.
+- `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. When omitted, a product-defined default salt is used. Two signers constructed the same way with the same secret and no caller salt interchange tokens.
 - `sep` — separator between the payload and the signature. Text or bytes. The default is a period (``.``). A period passed explicitly interchanges with the default.
-- `key_derivation` — how the signing key is derived from the secret and the salt. Built-in names include `concat`, `django-concat`, `hmac`, and `none`. When omitted or `None`, the scheme is `django-concat`.
+- `key_derivation` — how the signing key is derived from the secret and the salt. Built-in names include `concat`, `django-concat`, `hmac`, and `none`. When omitted or `None`, the scheme is `django-concat`. For each of those four names, a signer constructed with that scheme and secret `secret-key` signs the text `value` and recovers `value` as bytes.
 - `digest_method` — hash constructor used as the HMAC intermediate and in key derivation, such as `hashlib.sha1`, `hashlib.sha256`, or `hashlib.sha512`. When omitted or `None`, this type’s `default_digest_method` is used (SHA-1 on the base `Signer` type). A signer given `hashlib.sha1` explicitly produces the same token as one that leaves the digest at the default.
 - `algorithm` — a signing-algorithm **instance**. When omitted or `None`, HMAC using the configured digest is used. Pass an `HMACAlgorithm` instance for HMAC, or a `NoneAlgorithm` instance for the no-op algorithm that emits an empty signature.
 
@@ -371,9 +381,13 @@ If `digest_method` is passed and is not `None`, that constructor argument is the
 
 Encodes text as `UTF-8`. Returns a **bytes** token: the payload bytes, then the separator, then a signature. The token is not text.
 
+A signer constructed with secret `secret-key` that signs the text `my string` yields a bytes token that begins with the payload then a period (`b"my string."`), then a signature. Under HMAC that signature section is non-empty.
+
 A signer constructed with the same secret and `salt` as a `Serializer` produces tokens that helper will treat as a valid signature over that payload. Signing a shortened or otherwise non-deserializable payload this way yields a token whose signature verifies and whose payload will not deserialize.
 
 Under HMAC (the default, or an `HMACAlgorithm` instance) the signature section is non-empty. Under `NoneAlgorithm` the signature section is empty bytes.
+
+**Signature wire form.** The signature section is the URL-safe base64 encoding of the raw MAC bytes, with equals-sign (`=`) padding stripped. Under the default HMAC algorithm the raw MAC is `HMAC(key, payload)` using the configured digest, where `key` is the derived signing key; under `key_derivation` `none` the derived key is the secret itself, so an independent HMAC computation over the same secret and payload reproduces the signature byte for byte. A construction that only hashes or concatenates hashes of the secret and payload is not this MAC.
 
 The call does not mutate the process environment and does not exit the host process.
 
@@ -416,9 +430,15 @@ A value that does not contain the separator at all is refused as a signature fai
 
 ### Salt isolation and key derivation
 
-Two signers that share a secret but use different `salt` values produce tokens the other will not verify, under the default derivation and under `hmac`. Under `key_derivation` `none` the salt is not mixed in.
+Two signers that share a secret but use different `salt` values produce tokens the other will not verify, under the default derivation (`django-concat`), under `concat`, and under `hmac`. Under `key_derivation` `none` the salt is not mixed in, so two such signers that differ only in salt still recover each other’s tokens.
 
 A token produced under `hmac` is not equal to a token for the same value from a default-derivation signer, and the two do not verify each other’s tokens.
+
+An unrecognized `key_derivation` name (any name other than `concat`, `django-concat`, `hmac`, and `none`) is not treated as `django-concat`. Construction may refuse, or `sign` may refuse, or a token may be emitted that `unsign` refuses and `validate` reports as failure. No verified token is produced.
+
+### Secret lists
+
+A token produced with secret `a` is accepted by a signer whose secrets are `a` then `b`. After the list becomes only `b`, that same token is refused. A new token produced with secrets `a` then `b` is refused by a signer that only has `a`, and accepted by a signer that has `b`.
 
 ### Digest
 
@@ -471,13 +491,13 @@ This helper still round-trips objects, refuses tampered tokens as a signature mi
 
 - `secret_key` — required first positional argument. One secret (text or bytes) or a sequence of secrets **oldest to newest**. Dumping signs with the **last** (newest) key. Load tries remaining keys from newest to oldest and succeeds if any remaining key verifies.
 - `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. When omitted, a product-defined default salt is used.
-- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. When omitted or `None`, the language JSON library is used.
+- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. The object must at least be able to `dumps` an empty mapping; the helper may use it at construction to detect whether dump output is text or bytes. When omitted or `None`, the language JSON library is used.
 - `serializer_kwargs` — a mapping of extra dump options forwarded into the internal dump object’s `dumps`. When omitted or `None`, no extra dump options are forwarded.
 - `signer` — a signer **class** instantiated when signing. When omitted or `None`, `TimestampSigner` is used.
 - `signer_kwargs` — a mapping of keyword arguments forwarded when instantiating that signer class, such as `digest_method` and `key_derivation`. When omitted or `None`, the signer’s own defaults apply.
 - `fallback_signers` — a list of fallback signing configurations tried when the current signer cannot verify a token. When omitted or `None`, there are no fallbacks.
 
-The class is callable. Construction returns a helper instance. Construction does not dump an object, does not write files, and does not exit the host process.
+The class is callable. Construction returns a helper instance. Construction may probe the dump/load object with an empty mapping to detect whether dump output is text or bytes. Construction does not write files and does not exit the host process.
 
 ### `dumps`
 
@@ -663,7 +683,7 @@ A true report and a successful `unsign` of the same token are distinct observati
 
 The token is `payload + separator + time field + separator + signature`. The payload prefix is the entire original payload (including any separator bytes it contains), then one separator. The time field between payload and signature is non-empty. Under HMAC the signature section after the time field is non-empty.
 
-The time field is the integer Unix-epoch seconds of the signing instant. On the wire it is the URL-safe base64 encoding of those seconds as big-endian bytes, with equals-sign (``=``) padding stripped. Leading zero bytes of that integer are omitted; a zero epoch is a single zero byte. Recovery reads that spelling: replacing only the middle field with another encoding of the same family that still converts to a calendar date still exposes a signing-time datetime; replacing it with an encoding of the same family that is out of range and cannot become a calendar date is refused with the signing-time field absent, and that refusal is not expiry. Decimal text, a datetime string, or any other encoding of the same epoch is not this field.
+The time field records the integer Unix-epoch seconds of the signing instant. Recovery converts that field to a calendar datetime when the encoding is in range, and cannot convert it when the encoding is out of range. Replacing only the middle field with another time field this helper itself emitted at an in-range instant still exposes a signing-time datetime. Replacing it with a time field this helper itself emitted at an instant that cannot become a calendar date is refused with the signing-time field absent, and that refusal is not expiry.
 
 A value that does not contain the separator at all is refused as a signature failure: `unsign` raises and `validate` reports failure.
 
@@ -679,6 +699,8 @@ Expiry is distinguishable from a missing timestamp and from a malformed timestam
 
 A token produced by the **non-timestamped** `Signer` (payload and signature only, no time field) is refused as a **missing timestamp**. `unsign` raises. The signing-time datetime on that failure is absent: no datetime appears in the failure’s constructor arguments or public non-callable attributes. That outcome is distinguishable from expiry and from a time-signature failure that still exposes a signing time.
 
+A non-timestamped token that does **not** share the secret is a signature mismatch, not a missing timestamp. After stripping the tokens and payloads, a stable kind difference remains: treating every two-part token as a missing timestamp does not implement this helper.
+
 ### Malformed timestamp
 
 A token whose time field is not a well-formed timestamp is refused as a **malformed timestamp**. `unsign` raises. The signing-time datetime on that failure is absent.
@@ -691,8 +713,8 @@ A malformed-timestamp refusal is distinguishable from expiry (expiry still expos
 
 When a timestamped token’s time field is replaced without re-signing:
 
-- An encoding of the time-field spelling above that cannot be converted to a calendar date is refused. The signing-time field is absent. That refusal is not expiry: an expired unreplaced token still exposes a signing-time datetime.
-- The same replace-without-re-sign of an in-range encoding of that spelling still exposes a signing-time datetime (the signature is broken, but the field still converts to a calendar date).
+- A time field this helper itself emitted at an instant that cannot be converted to a calendar date is refused. The signing-time field is absent. That refusal is not expiry: an expired unreplaced token still exposes a signing-time datetime.
+- The same replace-without-re-sign of a time field this helper itself emitted at an in-range instant still exposes a signing-time datetime (the signature is broken, but the field still converts to a calendar date).
 
 ### Changed payload (time-signature failure)
 
@@ -722,13 +744,13 @@ This helper still satisfies the serialize-and-sign obligations of `Serializer`: 
 
 - `secret_key` — required first positional argument. One secret (text or bytes) or a sequence of secrets **oldest to newest**. Dumping signs with the **last** (newest) key. Load tries remaining keys from newest to oldest and succeeds if any remaining key verifies. The README construction uses the secret `secret key`.
 - `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. Accepted as the second positional argument or as a keyword. When omitted, a product-defined default salt is used. The README construction uses salt `auth`.
-- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. When omitted or `None`, compact JSON is used (language JSON with no extra whitespace between tokens).
+- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. The object must at least be able to `dumps` an empty mapping; the helper may use it at construction to detect whether dump output is text or bytes. When omitted or `None`, compact JSON is used (language JSON with no extra whitespace between tokens).
 - `serializer_kwargs` — a mapping of extra dump options forwarded into the internal dump object’s `dumps`. When omitted or `None`, no extra dump options are forwarded.
 - `signer` — a signer **class** (the `Signer` type, or a subclass) instantiated when signing. When omitted or `None`, `Signer` is used.
 - `signer_kwargs` — a mapping of keyword arguments forwarded when instantiating that signer class, such as `key_derivation` and `digest_method`. When omitted or `None`, the signer’s own defaults apply.
 - `fallback_signers` — a list of fallback signing configurations tried when the current signer cannot verify a token. When omitted or `None`, there are no fallbacks.
 
-The class is callable. Construction returns a helper instance. Construction does not dump an object, does not write files, and does not exit the host process.
+The class is callable. Construction returns a helper instance. Construction may probe the dump/load object with an empty mapping to detect whether dump output is text or bytes. Construction does not write files and does not exit the host process.
 
 Constructing with secret `secret key` and salt `auth`, then dumping the mapping whose `id` is 5 and whose `name` is `signtoken`, then loading that token recovers that mapping, including the name `signtoken`.
 
@@ -743,7 +765,7 @@ Constructing with secret `secret key` and salt `auth`, then dumping the mapping 
 
 Serializes `obj` with the internal dump/load object, encodes that payload into the URL-safe alphabet (compressing when that shortens it; see below), then signs. Returns a **text** token (`str`), not bytes.
 
-The token is the encoded payload, then the separator, then a signature. The default separator is a period (`.`).
+The token is the encoded payload, then the separator, then a signature. The default separator is a period (``.``).
 
 The call does not mutate the process environment and does not exit the host process.
 
@@ -793,7 +815,7 @@ When the signature **is** valid but the payload cannot be deserialized, this cal
 
 ### Token alphabet and compact JSON
 
-Every character of a token this helper emits is one of: uppercase letters, lowercase letters, digits, underscore (`_`), hyphen (`-`), or period (`.`). Product-emitted tokens never contain a plus sign (`+`), a slash (`/`), an equals sign (`=`), a space, a square bracket, or a quote.
+Every character of a token this helper emits is one of: uppercase letters, lowercase letters, digits, underscore (``_``), hyphen (``-``), or period (``.``). Tokens this helper emits never contain a plus sign (``+``), a slash (``/``), an equals sign (``=``), a space, a square bracket, or a quote.
 
 The default internal dump/load object serializes JSON **without extra whitespace** between tokens so tokens stay short. Dump then load still recovers the object.
 
@@ -805,7 +827,7 @@ Anyone who can see a default JSON token can recover the JSON text after decoding
 
 When compression shortens the payload, the helper emits a compressed token; when it would not shorten, the helper leaves the payload uncompressed. Both forms load.
 
-A compressed token is distinguishable from an uncompressed one: the payload section of a compressed token begins with a period (`.`); the payload section of an uncompressed token does not.
+A compressed token is distinguishable from an uncompressed one: the payload section of a compressed token begins with a period (``.``); the payload section of an uncompressed token does not.
 
 Concrete cases:
 
@@ -836,7 +858,7 @@ Concrete case: a helper that signs with SHA-256 dumps a mapping; a second helper
 
 **Signature mismatch.** `loads` raises. `loads_unsafe` returns a pair whose first item is false. This is the outcome for a wrong salt (except under `none`), a digest that does not verify (including when every fallback fails), and for a token transformed in any of these ways after dump: all letters uppercased; letters in the signature section uppercased while the payload section is held fixed; an extra character appended; the first character replaced; the separator removed; the last character chopped off. None of those paths is a successful `loads` of the original object. The same refusals apply to a compressed token (the thousand-letter-`a` string) for uppercasing, appending a character, replacing the first character, and chopping the last character.
 
-**Payload-decode failure.** The signature verifies, but the payload cannot be deserialized. `loads` raises. `loads_unsafe` also raises; it does not return a pair. This is the outcome when the payload is not valid URL-safe encoding, and when the payload claims compression (payload section begins with a period) but is not valid compressed data.
+**Payload-decode failure.** The signature verifies, but the payload cannot be deserialized. `loads` raises. `loads_unsafe` also raises; it does not return a pair. This is the outcome when the payload is not valid URL-safe encoding (for example the single letter `A` signed so the signature matches), and when the payload claims compression (payload section begins with a period) but is not valid compressed data (for example a period followed by eight letters `A`, signed so the signature matches).
 
 A signature mismatch and a payload-decode failure are distinguishable from each other and from success.
 
@@ -854,13 +876,13 @@ This helper still dumps and loads the same objects as `URLSafeSerializer`, still
 
 - `secret_key` — required first positional argument. One secret (text or bytes) or a sequence of secrets **oldest to newest**. Dumping signs with the **last** (newest) key. Load tries remaining keys from newest to oldest and succeeds if any remaining key verifies. The README-style construction uses the secret `secret key`.
 - `salt` — extra material mixed with the secret to isolate signing contexts. Text or bytes. Accepted as the second positional argument or as a keyword. When omitted, a product-defined default salt is used. The README-style construction uses salt `auth`.
-- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. When omitted or `None`, compact JSON is used (language JSON with no extra whitespace between tokens).
+- `serializer` — the internal dump/load object. An object that provides `dumps` and `loads`. The object must at least be able to `dumps` an empty mapping; the helper may use it at construction to detect whether dump output is text or bytes. When omitted or `None`, compact JSON is used (language JSON with no extra whitespace between tokens).
 - `serializer_kwargs` — a mapping of extra dump options forwarded into the internal dump object’s `dumps`. When omitted or `None`, no extra dump options are forwarded.
 - `signer` — a signer **class** instantiated when signing. When omitted or `None`, `TimestampSigner` is used.
 - `signer_kwargs` — a mapping of keyword arguments forwarded when instantiating that signer class, such as `digest_method`. When omitted or `None`, the signer’s own defaults apply.
 - `fallback_signers` — a list of fallback signing configurations tried when the current signer cannot verify a token. When omitted or `None`, there are no fallbacks.
 
-The class is callable. Construction returns a helper instance. Construction does not dump an object, does not write files, and does not exit the host process.
+The class is callable. Construction returns a helper instance. Construction may probe the dump/load object with an empty mapping to detect whether dump output is text or bytes. Construction does not write files and does not exit the host process.
 
 Constructing with secret `secret key` and salt `auth`, then dumping the mapping whose `id` is 42, then loading that token recovers that mapping.
 
@@ -875,7 +897,7 @@ Constructing with secret `secret key` and salt `auth`, then dumping the mapping 
 
 Serializes `obj` with the internal dump/load object, encodes that payload into the URL-safe alphabet (compressing when that shortens it), then signs that payload with a timestamp. Returns a **text** token (`str`), not bytes.
 
-The token is the encoded payload, then the separator, then a non-empty time field, then the separator, then a signature. The default separator is a period (`.`).
+The token is the encoded payload, then the separator, then a non-empty time field, then the separator, then a signature. The default separator is a period (``.``).
 
 The time field is recorded at the moment of dumping from the process clock’s Unix epoch. A second helper constructed with the same secret and salt loads the first helper’s token and recovers the same object and the same signing time.
 
@@ -902,18 +924,39 @@ Reverse of `dumps`.
 
 On failure, raises. Failure does not return the original object as a successful load, and it does not return a success pair when `return_timestamp` is true.
 
+### `loads_unsafe`
+
+```
+`loads_unsafe`(s, `max_age`=None, `salt`=None)
+```
+
+- `s` — a token, as text or bytes.
+- `max_age` — optional maximum age in seconds, as on `loads`. When omitted or `None`, age is not checked.
+- `salt` — optional per-call salt, as on `loads`.
+
+Inspection entry for signature problems. Returns a **pair** of two items. It does not make a bad signature look valid.
+
+- Valid token: first item is true (signature valid); second item is the original object.
+- Token whose signature does not verify, but whose payload can still be deserialized (for example an extra character appended after dump): first item is false; second item is the original object. The caller is not aborted: the pair is returned.
+
+The first item is false whenever verification failed, even if a payload is still yielded for inspection.
+
 ### Token alphabet and compression
 
-Every character of a token this helper emits is one of: uppercase letters, lowercase letters, digits, underscore (`_`), hyphen (`-`), or period (`.`). Product-emitted tokens never contain a plus sign (`+`), a slash (`/`), an equals sign (`=`), a space, a square bracket, or a quote.
+Every character of a token this helper emits is one of: uppercase letters, lowercase letters, digits, underscore (``_``), hyphen (``-``), or period (``.``). Tokens this helper emits never contain a plus sign (``+``), a slash (``/``), an equals sign (``=``), a space, a square bracket, or a quote.
 
 When compression shortens the payload, the helper emits a compressed token; when it would not shorten, the helper leaves the payload uncompressed. Both forms load.
 
-A compressed token is distinguishable from an uncompressed one: the payload section of a compressed token begins with a period (`.`); the payload section of an uncompressed token does not.
+A compressed token is distinguishable from an uncompressed one: the payload section of a compressed token begins with a period (``.``); the payload section of an uncompressed token does not.
 
 Concrete cases:
 
 - Dumping the string of the letter `a` repeated one thousand times produces a token that loads back to that same string, that uses only the URL-safe alphabet above, that is **shorter than one thousand characters**, and whose payload section begins with a period.
 - A small mapping whose `id` is 42 also round-trips, and its payload section does **not** begin with a period (uncompressed path).
+
+### Tamper transforms
+
+A token that was dumped and then had an extra character appended is refused as a signature mismatch on `loads`. That path is not a successful load of the original object. `loads_unsafe` of that same token returns a pair whose first item is false.
 
 ### Expiry
 
@@ -921,7 +964,7 @@ An expired load raises. That failure exposes the signing time: a timezone-aware 
 
 Expiry is distinguishable from a signature mismatch and from a missing or malformed timestamp. A helper that returns the object after the maximum age has elapsed does not implement this helper.
 
-A second helper constructed with the same secret and salt expires the first helper’s token under the same `max_age` 10 after eleven seconds, and still loads that token when `max_age` is omitted.
+A second helper constructed with the same secret and salt expires the first helper’s token under the same `max_age` 10 after eleven seconds, and still loads that token when `max_age` is omitted. The same expiry holds for a compressed token.
 
 ### Missing or malformed timestamp
 
@@ -931,6 +974,8 @@ A token produced by the **non-timestamped** `URLSafeSerializer` (no time field) 
 - A compressed token from that same non-timestamped helper (the thousand-letter-`a` string; payload section begins with a period) is refused as a **malformed timestamp**, not as a missing timestamp.
 
 Both refusals have the signing-time datetime absent. The two failure kinds remain distinguishable from each other. Neither refusal is expiry: an expired load of a legal timestamped token still exposes a signing-time datetime.
+
+Concrete case: both helpers constructed with secret `secret-key` and no extra salt. The same uncompressed mapping dumped under a **different** secret is a signature mismatch, not a missing timestamp.
 
 A token that is expired under `max_age` 10 is not treated as missing or malformed: that same token still loads when `max_age` is omitted.
 

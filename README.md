@@ -105,6 +105,8 @@ git submodule update --init --recursive 2>/dev/null || true
 
 cd benchmark
 pip install -e .
+# Optional: pip install -e ".[harbor]"
+# Optional cost reporting: pip install -e ".[cost]"
 ```
 
 ### Configure an agent

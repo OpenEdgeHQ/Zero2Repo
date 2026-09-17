@@ -1,9 +1,9 @@
 # feature: F01
 """FP-01: cryptographic signing of byte values.
 
-Assertions follow Full_PRD.original.md FP-01 (L88–L119) plus the library
-substrate negative control (L72). Exception class names, failure message
-text, and failure-object attribute spellings are not pinned.
+Assertions follow Full_PRD.original.md FP-01 (L88–L119). Exception class
+names, failure message text, and failure-object attribute spellings are
+not pinned.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import hashlib
 
 from signtoken import HMACAlgorithm, NoneAlgorithm, Signer  # noqa: F401
 
-from _harness import product_package_name, replace_bytes, run_python
+from _harness import replace_bytes
 from F01_helpers import (
     BUILT_IN_DERIVATIONS,
     DEFAULT_SEPARATOR,
@@ -40,12 +40,16 @@ from F01_helpers import (
     recover_value,
     runtime_ascii_digit,
     runtime_ascii_letter,
+    latin1_bytes,
+    require_utf8_not_latin1,
+    runtime_invalid_utf8_bytes,
     runtime_non_ascii_text,
     runtime_payload_with_sep,
     runtime_payload_without_sep,
     runtime_secret,
     runtime_text,
     runtime_unknown_derivation,
+    runtime_utf8_distinct_text,
     sign_value,
     split_token,
     validity_of,
@@ -53,7 +57,7 @@ from F01_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control (L72)
+# S. Constructed-signer round-trip of secret-key / my string (L92)
 # ---------------------------------------------------------------------------
 
 
@@ -66,30 +70,25 @@ def test_sign_recover_when_package_importable():
 
 
 def test_signer_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        f"from {pkg} import Signer\n"
-        "s = Signer('secret-key')\n"
-        "token = s.sign('my string')\n"
-        "got = s.unsign(token)\n"
-        "shown = got.decode('utf-8') if isinstance(got, (bytes, bytearray)) "
-        "else got\n"
-        "print('RECOVERED=' + shown)\n"
-    )
-    outcome = run_python(argv=["-S", "-c", code], include_product=False)
+    """Grade L92's constructed-signer round-trip, not an absent-package error.
+
+    The PRD does not promise a hard error when the package is off the import
+    path. A missing or do-nothing signer must not pass: constructing with
+    secret ``secret-key``, signing ``my string``, recovering those bytes, and
+    a successful validity check are required unconditionally.
+    """
+    signer = make_signer("secret-key")
+    token = sign_value(signer, "my string")
+    recovered = require_recovered_bytes(signer, token, "my string")
     print(
-        f"absent-package rc={outcome.returncode} "
-        f"stdout={outcome.stdout_text!r} stderr={outcome.stderr_text[:500]!r}",
+        f"recovered type={type(recovered).__name__} value={recovered!r}",
         flush=True,
     )
-    assert "RECOVERED=my string" not in outcome.stdout_text, (
-        "sign/recover of my string still yielded the original value after "
-        "the package was removed from the import path"
-    )
-    assert outcome.returncode != 0, (
-        "child exited 0 after the package was removed from the import path; "
-        f"stdout={outcome.stdout_text!r}"
-    )
+    require_bytes(recovered)
+    assert recovered == b"my string"
+    assert not isinstance(recovered, str)
+    report = require_validity_success(validity_of(signer, token), payload=recovered)
+    assert report != recovered
 
 
 # ---------------------------------------------------------------------------
@@ -107,54 +106,71 @@ def test_public_my_string_round_trip_and_validity():
     assert report != recovered
 
 
-class TestRecoveredValueIsBytes:
-    """Recovery yields UTF-8 bytes, never text (L90, L94)."""
+def test_runtime_text_round_trip_utf8_bytes():
+    """Runtime text recovers as UTF-8 bytes, not latin-1 and not text (L88, L92)."""
+    secret = runtime_secret()
+    text = runtime_utf8_distinct_text()
+    signer = make_signer(secret)
+    token = sign_value(signer, text)
+    recovered = require_recovered_bytes(signer, token, text)
+    print(
+        f"recovered type={type(recovered).__name__} value={recovered!r}",
+        flush=True,
+    )
+    require_bytes(recovered)
+    assert not isinstance(recovered, str)
+    require_utf8_not_latin1(recovered, text)
 
-    def test_runtime_text_round_trip_utf8_bytes(self):
-        secret = runtime_secret()
-        text = runtime_text()
-        signer = make_signer(secret)
-        token = sign_value(signer, text)
-        recovered = require_recovered_bytes(signer, token, text)
-        print(
-            f"recovered type={type(recovered).__name__} value={recovered!r}",
-            flush=True,
-        )
-        require_bytes(recovered)
-        assert not isinstance(recovered, str)
-        assert recovered == expected_bytes(text)
 
-    def test_text_and_bytes_inputs_recover_identically(self):
-        secret = runtime_secret()
-        text = runtime_text()
-        payload = expected_bytes(text)
-        signer = make_signer(secret)
-        from_text = require_recovered_bytes(
-            signer, sign_value(signer, text), text
-        )
-        from_bytes = require_recovered_bytes(
-            signer, sign_value(signer, payload), payload
-        )
-        print(
-            f"from_text type={type(from_text).__name__} "
-            f"from_bytes type={type(from_bytes).__name__}",
-            flush=True,
-        )
-        require_bytes(from_text)
-        require_bytes(from_bytes)
-        assert not isinstance(from_text, str)
-        assert not isinstance(from_bytes, str)
-        assert from_text == from_bytes == payload
+def test_text_and_bytes_inputs_recover_identically():
+    """Signing text and signing its UTF-8 bytes recover the same UTF-8 bytes (L92)."""
+    secret = runtime_secret()
+    text = runtime_utf8_distinct_text()
+    payload = expected_bytes(text)
+    signer = make_signer(secret)
+    from_text = require_recovered_bytes(signer, sign_value(signer, text), text)
+    from_bytes = require_recovered_bytes(
+        signer, sign_value(signer, payload), payload
+    )
+    print(
+        f"from_text type={type(from_text).__name__} "
+        f"from_bytes type={type(from_bytes).__name__}",
+        flush=True,
+    )
+    require_bytes(from_text)
+    require_bytes(from_bytes)
+    assert not isinstance(from_text, str)
+    assert not isinstance(from_bytes, str)
+    assert from_text == from_bytes == payload
+    require_utf8_not_latin1(from_text, text)
+    require_utf8_not_latin1(from_bytes, text)
 
 
 def test_bytes_input_recovers_bytes():
     secret = runtime_secret()
-    text = runtime_text()
-    payload = expected_bytes(text)
     signer = make_signer(secret)
-    token = sign_value(signer, payload)
-    recovered = require_recovered_bytes(signer, token, payload)
-    assert recovered == payload
+    text = runtime_utf8_distinct_text()
+    utf8_payload = expected_bytes(text)
+    recovered_utf8 = require_recovered_bytes(
+        signer, sign_value(signer, utf8_payload), utf8_payload
+    )
+    require_bytes(recovered_utf8)
+    assert not isinstance(recovered_utf8, str)
+    assert recovered_utf8 == utf8_payload
+    require_utf8_not_latin1(recovered_utf8, text)
+
+    raw = runtime_invalid_utf8_bytes()
+    recovered_raw = require_recovered_bytes(
+        signer, sign_value(signer, raw), raw
+    )
+    print(
+        f"raw={raw!r} recovered_raw type={type(recovered_raw).__name__}",
+        flush=True,
+    )
+    require_bytes(recovered_raw)
+    assert not isinstance(recovered_raw, str)
+    assert recovered_raw == raw
+    assert recovered_raw != utf8_payload
 
 
 def test_non_ascii_text_recovers_utf8_bytes():
@@ -164,7 +180,15 @@ def test_non_ascii_text_recovers_utf8_bytes():
     recovered = require_recovered_bytes(
         signer, require_round_trip(signer, text), text
     )
+    print(
+        f"recovered type={type(recovered).__name__} value={recovered!r}",
+        flush=True,
+    )
+    require_bytes(recovered)
+    assert not isinstance(recovered, str)
     assert recovered == expected_bytes(text)
+    assert recovered.startswith(expected_bytes("\u00f1"))
+    assert not recovered.startswith(latin1_bytes("\u00f1"))
 
 
 class TestValidityReportIsNotPayload:
@@ -672,6 +696,32 @@ def test_sha512_signer_refuses_changed_payload():
 # ---------------------------------------------------------------------------
 # H. Default HMAC vs no-op algorithm (L103–L104, L110)
 # ---------------------------------------------------------------------------
+
+
+def test_hmac_signature_matches_independent_frozen_vector():
+    import base64
+    import hmac
+
+    secret = b"frozen-secret-key"
+    payload = b"frozen-payload"
+    signer = make_signer(
+        secret,
+        salt=b"frozen-salt",
+        key_derivation="none",
+        digest_method=hashlib.sha1,
+    )
+    token = sign_value(signer, payload)
+    body, signature = split_token(token)
+    assert body == payload
+    expected = hmac.new(secret, payload, hashlib.sha1).digest()
+    pad = b"=" * ((4 - len(signature) % 4) % 4)
+    got = base64.urlsafe_b64decode(signature + pad)
+    assert hmac.compare_digest(got, expected), (
+        "signature is not HMAC-SHA1(secret, payload); "
+        "a concat-of-hashes construction must not pass"
+    )
+    weak = hashlib.sha1(secret).digest() + hashlib.sha1(payload).digest()
+    assert not hmac.compare_digest(got, weak[: len(got)])
 
 
 def test_hmac_rejects_changed_payload():

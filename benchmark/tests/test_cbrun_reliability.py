@@ -1,0 +1,427 @@
+"""Fast tests for leakage boundaries, import probes, side-effect bans, docker argv."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from coding_bench_harbor._leakage import scan_leakage  # noqa: E402
+from coding_bench_harbor import pytest_launcher as launcher  # noqa: E402
+from cbrun.denylist import (  # noqa: E402
+    import_root_from_ban_token,
+    probe_banned_imports,
+)
+from cbrun.docker_env import Container  # noqa: E402
+from cbrun.case_checks import check_case_assets  # noqa: E402
+from cbrun.judge import export_app, validate_judge_report  # noqa: E402
+from cbrun.recipe import RecipeLockError  # noqa: E402
+from cbrun.recipe_image import resource_fetch_command  # noqa: E402
+from cbrun.rejudge import iter_controls, parse_expect_reward, reward_matches  # noqa: E402
+from cbrun.state import atomic_json, digest, file_manifest, platform_name  # noqa: E402
+
+
+def test_scan_leakage_uses_identifier_boundaries() -> None:
+    hits = scan_leakage("the adapter loads data", ["ada"])
+    assert hits == []
+    hits = scan_leakage("use ada as a token", ["ada"])
+    assert len(hits) == 1 and hits[0].occurrences == 1
+
+
+def test_import_root_from_ban_token() -> None:
+    assert import_root_from_ban_token("tomllib") == "tomllib"
+    assert import_root_from_ban_token("tomli/") == "tomli"
+    assert import_root_from_ban_token("@scope/pkg/extra") == "@scope/pkg"
+
+
+def test_probe_skips_stdlib_and_fails_on_importable(tmp_path: Path) -> None:
+    denylist = tmp_path / "denylist.json"
+    denylist.write_text(
+        '{"ecosystem":"pip","import_ban":["tomllib","definitely_missing_pkg_xyz"]}',
+        encoding="utf-8",
+    )
+
+    class Fake:
+        tail = "definitely_missing_pkg_xyz\t__ABSENT__"
+
+    result = probe_banned_imports("img", denylist, runner=lambda _cmd: Fake())
+    assert result.errors == []
+
+    denylist.write_text(
+        '{"ecosystem":"pip","import_ban":["click"]}',
+        encoding="utf-8",
+    )
+
+    class Present:
+        tail = "click\t/opt/conda/lib/python3.13/site-packages/click/__init__.py"
+
+    result = probe_banned_imports("img", denylist, runner=lambda _cmd: Present())
+    assert result.errors and "click" in result.errors[0] and "origin=" in result.errors[0]
+
+
+def test_side_effect_ban_blocks_workspace_socket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    monkeypatch.setattr(launcher, "_importer_under_workspace", lambda _ws: True)
+    with pytest.raises(RuntimeError, match="JUDGE_BANS"):
+        launcher._side_effect_hook("socket.connect", ("x",), workspace, {"socket"})
+
+
+def test_exec_argv_uses_pipefail_and_env_keys_only() -> None:
+    c = Container("cid")
+    argv = c._exec_argv("false | true", env={"OPENAI_API_KEY": "secret"})
+    assert "bash" in argv and "-o" in argv and "pipefail" in argv
+    assert "-e" in argv
+    assert "OPENAI_API_KEY" in argv
+    assert "OPENAI_API_KEY=secret" not in argv
+
+
+def test_run_argv_does_not_inline_env_values() -> None:
+    argv = Container.build_run_argv("img", env={"OPENAI_API_KEY": "secret"})
+    assert "--platform" in argv
+    assert "OPENAI_API_KEY" in argv
+    assert "OPENAI_API_KEY=secret" not in " ".join(argv)
+
+
+def test_export_app_refuses_empty_replacement(tmp_path: Path) -> None:
+    class Fake:
+        def cp_from(self, src, dst):
+            return False
+
+    with pytest.raises(RuntimeError, match="refusing to judge"):
+        export_app(Fake(), tmp_path / "dest")  # type: ignore[arg-type]
+
+
+def test_side_effect_ban_allows_hidden_tests(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    launcher._side_effect_hook("socket.connect", ("x",), workspace, {"socket"})
+
+
+def test_side_effect_ban_off_when_undeclared(tmp_path: Path) -> None:
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    launcher._side_effect_hook("socket.connect", ("x",), workspace, set())
+
+
+def test_side_effect_ban_lets_workspace_do_allowed_things(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace caller doing something *not* banned must fall through silently."""
+    workspace = tmp_path / "app"
+    workspace.mkdir()
+    monkeypatch.setattr(launcher, "_importer_under_workspace", lambda _ws: True)
+    bans = {"socket", "subprocess", "filesystem_outside_workspace"}
+    launcher._side_effect_hook("open", (str(workspace / "x.txt"), "r", 0), workspace, bans)
+    launcher._side_effect_hook("open", (str(workspace / "x.txt"), "w", 0), workspace, bans)
+    launcher._side_effect_hook("import", ("json", None, None, None, None), workspace, bans)
+    launcher._side_effect_hook("os.listdir", (str(workspace),), workspace, bans)
+    with pytest.raises(RuntimeError, match="outside /app"):
+        launcher._side_effect_hook("open", (str(tmp_path / "leak.txt"), "w", 0), workspace, bans)
+    with pytest.raises(RuntimeError, match="subprocess"):
+        launcher._side_effect_hook("subprocess.Popen", (), workspace, bans)
+
+
+def test_validate_judge_report_binary_and_counts() -> None:
+    ok = {
+        "reward": 1.0,
+        "final": {"counts_parsed": True, "total_count": 3, "passed_count": 3, "failed_count": 0, "error_count": 0},
+    }
+    assert validate_judge_report(ok) == (1.0, None)
+    reward, err = validate_judge_report({"reward": 0.5, "final": {"counts_parsed": True, "total_count": 1}})
+    assert reward == 0.0 and err and "non-binary" in err
+    reward, err = validate_judge_report({"reward": 1.0})
+    assert reward == 0.0 and err and "counts" in err
+    reward, err = validate_judge_report(
+        {
+            "reward": 1.0,
+            "final": {
+                "counts_parsed": True,
+                "total_count": 2,
+                "passed_count": 1,
+                "failed_count": 1,
+                "error_count": 0,
+            },
+        }
+    )
+    assert reward == 0.0 and err and "contradicts" in err
+    assert validate_judge_report(None)[0] == 0.0
+
+
+def test_atomic_json_and_file_manifest(tmp_path: Path) -> None:
+    path = tmp_path / "summary.json"
+    atomic_json(path, {"schema_version": 1, "n": 2})
+    assert path.read_text(encoding="utf-8").startswith("{")
+    (tmp_path / "a.txt").write_text("hi", encoding="utf-8")
+    manifest = file_manifest(tmp_path)
+    assert "a.txt" in manifest and len(manifest["a.txt"]) == 64
+    assert digest({"x": 1}) == digest({"x": 1})
+    assert digest({"x": 1}) != digest({"x": 2})
+
+
+def test_platform_name_default_and_reject(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CBRUN_PLATFORM", raising=False)
+    monkeypatch.delenv("DOCKER_DEFAULT_PLATFORM", raising=False)
+    assert platform_name() == "linux/amd64"
+    monkeypatch.setenv("CBRUN_PLATFORM", "windows/amd64")
+    with pytest.raises(ValueError, match="unsupported"):
+        platform_name()
+
+
+def test_resource_fetch_command_validates_manifest(tmp_path: Path) -> None:
+    env = tmp_path / "source" / "env"
+    env.mkdir(parents=True)
+    assert resource_fetch_command(tmp_path) == ""
+    (env / "resources.json").write_text(
+        json.dumps(
+            {
+                "destination": "/opt/models",
+                "resources": [
+                    {
+                        "id": "demo",
+                        "url": "https://example.test/a.zip",
+                        "sha256": "a" * 64,
+                        "size": 4,
+                        "license": "MIT",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cmd = resource_fetch_command(tmp_path)
+    assert "/opt/cbrun/fetch_resources.py" in cmd
+    assert "/opt/models" in cmd
+    (env / "resources.json").write_text(
+        json.dumps({"destination": "relative", "resources": [{"id": "x", "url": "https://x", "sha256": "a", "size": 1, "license": "MIT"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(RecipeLockError, match="absolute"):
+        resource_fetch_command(tmp_path)
+
+
+def test_expect_reward_and_control_discovery(tmp_path: Path) -> None:
+    assert parse_expect_reward("0") == 0.0
+    assert parse_expect_reward("1") == 1.0
+    assert parse_expect_reward(None) is None
+    with pytest.raises(ValueError):
+        parse_expect_reward("2")
+    assert reward_matches(0.0, 0.0)
+    assert not reward_matches(1.0, 0.0)
+    assert reward_matches(1.0, None)
+    control = tmp_path / "case004" / "controls" / "weak_concat"
+    (control / "app").mkdir(parents=True)
+    (control / "expect.json").write_text('{"reward": 0}\n', encoding="utf-8")
+    rows = list(iter_controls(tmp_path))
+    assert rows == [("case004", "weak_concat", control, 0.0)]
+
+
+def _case003_line_break_helper():
+    """Load the rewritten FP-01 line-break oracle without importing _harness."""
+    import importlib.util
+    import sys
+    import types
+
+    harness = types.ModuleType("_harness")
+
+    class ErrorInfo:
+        def __init__(self, message=None, text=None, reason=None, mark=None):
+            self.message = message
+            self.text = text
+            self.reason = reason
+            self.mark = mark
+
+    harness.ErrorInfo = ErrorInfo
+    harness.HarnessError = RuntimeError
+    sys.modules["_harness"] = harness
+    path = (
+        BENCHMARK_ROOT
+        / "cases"
+        / "case003"
+        / "milestones"
+        / "final"
+        / "tests"
+        / "F01_helpers.py"
+    )
+    spec = importlib.util.spec_from_file_location("case003_f01_helpers", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_case003_line_break_count_oracle() -> None:
+    """Later-line `@` must present count 1 (or 2 if one-based); first-line count 0."""
+    helper = _case003_line_break_helper()
+    ErrorInfo = helper.require_line_break_counts.__globals__["ErrorInfo"]
+
+    later = ErrorInfo(message="parse failed at line-break 1")
+    earlier = ErrorInfo(message="parse failed at line-break 0")
+    helper.require_line_break_counts(
+        later,
+        earlier,
+        later_source="a: 1\r\n@",
+        covariates=("a: 1", "@", "\r\n"),
+    )
+    # A shared clock-style pair is not a line-break count.
+    clock_later = ErrorInfo(message="failed at 10:30")
+    clock_earlier = ErrorInfo(message="failed at 10:30")
+    try:
+        helper.require_line_break_counts(
+            clock_later,
+            clock_earlier,
+            later_source="a: 1\r\n@",
+            covariates=(),
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("clock-style shared integers must not pass")
+
+
+def test_independent_hmac_vector() -> None:
+    import base64
+    import hashlib
+    import hmac
+
+    secret = b"frozen-secret-key"
+    payload = b"frozen-payload"
+    expected = hmac.new(secret, payload, hashlib.sha1).digest()
+    encoded = base64.urlsafe_b64encode(expected).rstrip(b"=")
+    pad = b"=" * ((4 - len(encoded) % 4) % 4)
+    assert base64.urlsafe_b64decode(encoded + pad) == expected
+    weak = hashlib.sha1(secret).digest() + hashlib.sha1(payload).digest()
+    assert weak != expected
+
+
+def test_check_case_assets_imported() -> None:
+    assert callable(check_case_assets)
+
+
+class _ArchiveContainer:
+    """Behaves like Docker: exec is refused once paused, cp still works."""
+
+    def __init__(self) -> None:
+        self.paused = False
+        self.removed = False
+        self.probed_while_paused: bool | None = None
+
+    def path_exists(self, path: str) -> bool:
+        self.probed_while_paused = self.paused
+        return not self.paused and path == "/logs/agent"
+
+    def pause(self) -> None:
+        self.paused = True
+
+    def cp_from(self, src: str, dst: Path) -> bool:
+        dst.mkdir(parents=True, exist_ok=True)
+        return True
+
+    def remove(self) -> None:
+        self.removed = True
+
+
+def test_archive_probes_agent_logs_before_pause(tmp_path: Path) -> None:
+    from cbrun.results import TrialResult
+    from cbrun.run_case import _archive_trial
+
+    container = _ArchiveContainer()
+    result = TrialResult(case_id="c", backend="b", model="m", reward=0.0, terminal_status="error")
+    _archive_trial(container, out_dir=tmp_path, result=result)  # type: ignore[arg-type]
+    assert container.probed_while_paused is False
+    assert container.paused and container.removed
+    assert result.artifact_errors == []
+    assert result.logs["workspace"] == str(tmp_path / "workspace")
+    assert result.logs["container_logs"] == str(tmp_path / "container_logs")
+
+
+def test_cli_build_images_does_not_require_cli_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cbrun import cli, recipe_image
+
+    for key in list(__import__("os").environ):
+        if key.startswith("CBRUN_"):
+            monkeypatch.delenv(key, raising=False)
+    (tmp_path / "caseX" / "source").mkdir(parents=True)
+    (tmp_path / "caseX" / "source" / "manifest.json").write_text("{}", encoding="utf-8")
+    built: list[str] = []
+    monkeypatch.setattr(
+        recipe_image, "ensure_deliverable_image", lambda case_dir, force=False: built.append(case_dir.name) or "tag"
+    )
+    code = cli.main(["--build-images", "--cases-root", str(tmp_path), "--case", "caseX"])
+    assert code == 0 and built == ["caseX"]
+    # Trial runs still refuse an unpinned CLI.
+    code = cli.main(["--cases-root", str(tmp_path), "--case", "caseX", "--model", "x"])
+    assert code == 2
+
+
+def test_rejudge_passes_denylist_to_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from cbrun import rejudge
+
+    seen: dict[str, object] = {}
+    case = SimpleNamespace(case_id="caseX", judge_bans=("socket",))
+    spec = object()
+
+    class _Ctr:
+        def remove(self) -> None:
+            seen["removed"] = True
+
+    monkeypatch.setattr(rejudge, "load_case", lambda d: case)
+    monkeypatch.setattr(rejudge, "require_denylist", lambda d: spec)
+    monkeypatch.setattr(
+        rejudge,
+        "ensure_agent_image",
+        lambda *a, **k: SimpleNamespace(agent_image="img", tests_cache_dir=tmp_path),
+    )
+    monkeypatch.setattr(rejudge, "discover_steps", lambda c: [object()])
+    monkeypatch.setattr(rejudge, "synthesize_task_toml", lambda c, s: b"")
+    monkeypatch.setattr(rejudge.Container, "start", staticmethod(lambda *a, **k: _Ctr()))
+    monkeypatch.setattr(rejudge, "import_app", lambda c, w: None)
+
+    def fake_run_judge(container, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(reward=0.0, judge_error=None)
+
+    monkeypatch.setattr(rejudge, "run_judge", fake_run_judge)
+    reward = rejudge.rejudge_workspace(
+        case_dir=tmp_path, workspace=tmp_path, out_dir=tmp_path / "out", cache_root=tmp_path
+    )
+    assert reward == 0.0
+    assert seen["denylist"] is spec
+    assert seen["judge_bans"] == ("socket",)
+    assert seen["removed"] is True
+
+
+def test_rejudge_image_and_tests_dir_must_be_paired(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from cbrun import rejudge
+
+    (tmp_path / "source").mkdir()
+    (tmp_path / "source" / "manifest.json").write_text("{}", encoding="utf-8")
+    cases_root = tmp_path
+    case_id = "caseX"
+    (cases_root / case_id / "source").mkdir(parents=True)
+    (cases_root / case_id / "source" / "manifest.json").write_text("{}", encoding="utf-8")
+    code = rejudge.main(
+        [
+            "--case",
+            case_id,
+            "--workspace",
+            str(tmp_path),
+            "--cases-root",
+            str(cases_root),
+            "--out",
+            str(tmp_path / "out"),
+            "--image",
+            "img:tag",
+        ]
+    )
+    assert code == 2
+    assert "--image and --tests-dir must be given together" in capsys.readouterr().out

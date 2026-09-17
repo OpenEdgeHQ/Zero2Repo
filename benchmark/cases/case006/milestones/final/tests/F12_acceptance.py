@@ -1047,6 +1047,84 @@ def test_directories_only_path_asks_shell_for_directories_only():
     )
 
 
+def test_bash_file_completion_registers_and_lists_directory_candidates():
+    greeting = _greeting()
+    exe = _exe()
+    flag = f"--f{_word()}"
+    dest = _word()
+    prefix = f"px{_word()[:6]}"
+    file_a = f"{prefix}a{_word()[:4]}"
+    file_b = f"{prefix}b{_word()[:4]}"
+    cli = _leaf(greeting, option(flag, dest, type=File()))
+    sourced = _source(cli, exe, "bash")
+    script = sourced.stdout_text
+    assert script.strip(), (
+        f"bash_source produced empty stdout; stderr={sourced.stderr_text!r}"
+    )
+    with workspace() as ws:
+        ws.write(file_a, "a")
+        ws.write(file_b, "b")
+        wrapper = ws.write(
+            exe,
+            "#!/usr/bin/env python3\n"
+            "from optlyn import File, command, option\n"
+            f"def _cb(**kwargs):\n"
+            f"    print({greeting!r}, flush=True)\n"
+            f"cli = command()(option({flag!r}, {dest!r}, type=File())(_cb))\n"
+            "if __name__ == '__main__':\n"
+            "    cli.main()\n",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | 0o111)
+        src = ws.write("complete.bash", script)
+        probe = ws.write(
+            "probe.sh",
+            "#!/bin/bash\n"
+            "set +e\n"
+            f"export PATH={str(ws.path)!r}:$PATH\n"
+            f"source {str(src)!r}\n"
+            f"if ! complete -p {exe} >/dev/null 2>&1; then\n"
+            "  echo NO_COMPLETE_REGISTRATION\n"
+            "  exit 1\n"
+            "fi\n"
+            f"fn=$(complete -p {exe} | awk '{{for(i=1;i<=NF;i++) if($i==\"-F\") print $(i+1)}}')\n"
+            'if [ -z "$fn" ]; then echo NO_COMPLETE_FUNCTION; exit 1; fi\n'
+            f'printf "REGISTRATION:%s\\n" "$(complete -p {exe})"\n'
+            # Outside a live readline completion the ``compopt`` builtin
+            # refuses to run, so record what the function asks for instead.
+            # Print args one by one: the caller may have set IFS to newline.
+            'compopt() { printf "COMPOPT:"; printf " %s" "$@"; printf "\\n"; }\n'
+            f"COMP_WORDS=({exe} {flag} {prefix})\n"
+            "COMP_CWORD=2\n"
+            f"COMP_LINE='{exe} {flag} {prefix}'\n"
+            "COMP_POINT=${#COMP_LINE}\n"
+            "COMPREPLY=()\n"
+            f'"$fn" {exe} {prefix} {flag}\n'
+            'printf "REPLY:%s\\n" "${COMPREPLY[@]}"\n',
+        )
+        probe.chmod(probe.stat().st_mode | 0o111)
+        result = ws.run_command(["bash", str(probe)])
+    text = result.stdout_text
+    print(f"bash_file_complete out={text!r} code={result.returncode}", flush=True)
+    assert (
+        "NO_COMPLETE_REGISTRATION" not in text
+        and "NO_COMPLETE_FUNCTION" not in text
+        and result.returncode == 0
+    ), f"bash did not register a completion function for {exe!r}; out={text!r}"
+    listed = file_a in text or file_b in text
+    # Either the function asks readline for filename completion at call time
+    # (``compopt -o default``) or registration itself carries that option.
+    _fs_opts = ("default", "filenames", "dirnames", "plusdirs")
+    defaulted = any(
+        line.startswith(("COMPOPT:", "REGISTRATION:"))
+        and any(f"-o {opt}" in line or f"-o{opt}" in line for opt in _fs_opts)
+        for line in text.splitlines()
+    )
+    assert listed or defaulted, (
+        "real bash file completion neither listed directory candidates "
+        f"nor enabled default filename completion; out={text!r}"
+    )
+
+
 def test_file_argument_carries_incomplete_token_not_directory_entries():
     greeting = _greeting()
     exe = _exe()

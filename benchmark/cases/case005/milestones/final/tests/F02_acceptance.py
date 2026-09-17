@@ -9,7 +9,7 @@ and protocol-error integers are later feature points.
 
 from __future__ import annotations
 
-from _harness import call, product_package_name, run_python
+from _harness import call
 from F01_helpers import (
     data_payload,
     event_version,
@@ -70,7 +70,7 @@ from F02_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control
+# S. Present-arm encode and pull (L79: no package-disable negative control)
 # ---------------------------------------------------------------------------
 
 
@@ -93,30 +93,23 @@ def test_client_get_encodes_and_server_pulls_when_package_importable():
 
 
 def test_client_get_encode_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        "ok = False\n"
-        "try:\n"
-        f"    import {pkg} as _pkg\n"
-        "    _conn = _pkg.Connection(_pkg.CLIENT)\n"
-        "    _ev = _pkg.Request(\n"
-        "        method='GET', target='/',\n"
-        "        headers=[('Host', 'example.com')],\n"
-        "    )\n"
-        "    _encoded = _conn.send(_ev)\n"
-        "    if _encoded:\n"
-        "        ok = True\n"
-        "        print('ENCODED_REQUEST')\n"
-        "except Exception as _exc:\n"
-        "    print('ENCODE_UNAVAILABLE')\n"
-        "    print(type(_exc).__name__)\n"
-    )
-    result = run_python(code=code, include_product=False)
-    text = result.stdout_text
-    print(f"negative-control stdout={text!r}", flush=True)
-    print(f"negative-control stderr={result.stderr_text!r}", flush=True)
-    assert "ENCODED_REQUEST" not in text
-    assert "ENCODE_UNAVAILABLE" in text
+    # L79: this product has no negative control. Present versus hollow is
+    # real send/pull on a constructed connection, not an import-stripped child.
+    client = client_connection()
+    event = make_request(headers=[("Host", "example.com")])
+    encoded = require_send_bytes(send_event(client, event))
+    print(f"present-arm encoded first={encoded_first_line(encoded)!r}", flush=True)
+    assert b"GET" in encoded_first_line(encoded)
+    assert b"/" in encoded_first_line(encoded)
+    server = server_connection()
+    fed = feed_bytes(server, encoded)
+    assert fed.exception is None, f"server feed failed: {fed.exception!r}"
+    pulled = require_pulled_event(pull_next(server))
+    assert event_is_kind(pulled, "request")
+    assert request_method(pulled) == b"GET"
+    assert request_target(pulled) == b"/"
+    hosts = named_pairs(ordinary_pairs(pulled), b"host")
+    assert (b"host", b"example.com") in hosts
 
 
 # ---------------------------------------------------------------------------

@@ -226,6 +226,7 @@ def _make_case(
         workdir=workdir,
         docker_image="",
         docker_gpus="",
+        judge_bans=(),
         hardware_text=None,
         assets=assets,  # type: ignore[arg-type]
     )

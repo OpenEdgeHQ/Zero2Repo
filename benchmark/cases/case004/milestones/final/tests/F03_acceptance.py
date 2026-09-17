@@ -1,9 +1,9 @@
 # feature: F03
 """FP-03: timestamped signatures and expiry.
 
-Assertions follow Full_PRD.original.md FP-03 (L154–L181) plus the library
-substrate negative control (L72). Exception class names, failure message
-text, and failure-object attribute spellings are not pinned.
+Assertions follow Full_PRD.original.md FP-03 (L154–L181). Exception class
+names, failure message text, and failure-object attribute spellings are
+not pinned.
 """
 
 from __future__ import annotations
@@ -15,9 +15,7 @@ from signtoken import TimedSerializer, TimestampSigner  # noqa: F401
 
 from _harness import (
     frozen_clock,
-    product_package_name,
     replace_bytes,
-    run_python,
     workspace,
 )
 from F01_helpers import (
@@ -26,6 +24,7 @@ from F01_helpers import (
     assert_construction_refused,
     assert_token_accepted,
     assert_token_refused,
+    distinct_pair,
     expected_bytes,
     hmac_algorithm,
     noop_algorithm,
@@ -73,17 +72,20 @@ from F03_helpers import (
     PUBLIC_VALUE,
     arrange_dummy_suffix_token,
     arrange_missing_timestamp_token,
-    arrange_replaced_in_range_token,
     arrange_replaced_out_of_range_token,
+    assert_signature_mismatch_not_missing_timestamp,
     construct_timestamped_signer,
     datetimes_on_failure,
     default_json_text,
     dummy_undecodable_time_suffix,
+    in_range_time_field,
     make_none_derivation_timestamped_serializer,
     make_timestamped_serializer,
     make_timestamped_signer,
+    out_of_range_time_field,
     recover_timestamped,
     replace_in_timestamped_payload,
+    replace_time_field,
     require_distinct_failure_kinds,
     require_exact_bytes,
     require_expired_load,
@@ -97,12 +99,13 @@ from F03_helpers import (
     require_signing_time_on_failure,
     require_three_part_layout,
     require_timestamped_bytes,
+    runtime_integer_list,
     validity_of_timestamped,
 )
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control (L72)
+# S. Constructed timestamped helper round-trip when no maximum age (L160)
 # ---------------------------------------------------------------------------
 
 
@@ -118,30 +121,21 @@ def test_timestamped_sign_recover_when_package_importable():
 
 
 def test_timestamped_signer_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        f"from {pkg} import TimestampSigner\n"
-        "s = TimestampSigner('secret-key')\n"
-        "token = s.sign('value')\n"
-        "got = s.unsign(token)\n"
-        "shown = got.decode('utf-8') if isinstance(got, (bytes, bytearray)) "
-        "else got\n"
-        "print('RECOVERED=' + shown)\n"
+    """Grade L160's constructed-helper round-trip, not an absent-package error.
+
+    The PRD does not promise a hard error when the package is off the import
+    path. A constructed timestamped signer with secret ``secret-key`` must
+    still sign ``value`` and recover those bytes when no maximum age is
+    supplied.
+    """
+    signer = make_timestamped_signer("secret-key")
+    token = sign_value(signer, PUBLIC_VALUE)
+    recovered = require_timestamped_bytes(
+        recover_timestamped(signer, token), PUBLIC_VALUE
     )
-    outcome = run_python(argv=["-S", "-c", code], include_product=False)
-    print(
-        f"absent-package rc={outcome.returncode} "
-        f"stdout={outcome.stdout_text!r} stderr={outcome.stderr_text[:500]!r}",
-        flush=True,
-    )
-    assert "RECOVERED=value" not in outcome.stdout_text, (
-        "timestamped sign/recover of value still yielded the original bytes "
-        "after the package was removed from the import path"
-    )
-    assert outcome.returncode != 0, (
-        "child exited 0 after the package was removed from the import path; "
-        f"stdout={outcome.stdout_text!r}"
-    )
+    require_exact_bytes(recovered)
+    assert recovered == b"value"
+    print(f"constructed-helper recovered={recovered!r}", flush=True)
 
 
 def test_timestamped_dump_load_when_package_importable():
@@ -154,31 +148,18 @@ def test_timestamped_dump_load_when_package_importable():
 
 
 def test_timestamped_serializer_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        f"from {pkg} import TimedSerializer\n"
-        "h = TimedSerializer('secret-key')\n"
-        "token = h.dumps({'id': 42})\n"
-        "got = h.loads(token)\n"
-        "marker = None\n"
-        "if isinstance(got, dict) and got.get('id') == 42:\n"
-        "    marker = '42'\n"
-        "print('RECOVERED_ID=' + str(marker))\n"
-    )
-    outcome = run_python(argv=["-S", "-c", code], include_product=False)
-    print(
-        f"absent-package rc={outcome.returncode} "
-        f"stdout={outcome.stdout_text!r} stderr={outcome.stderr_text[:500]!r}",
-        flush=True,
-    )
-    assert "RECOVERED_ID=42" not in outcome.stdout_text, (
-        "timestamped dump/load of {id: 42} still yielded that mapping after "
-        "the package was removed from the import path"
-    )
-    assert outcome.returncode != 0, (
-        "child exited 0 after the package was removed from the import path; "
-        f"stdout={outcome.stdout_text!r}"
-    )
+    """Grade L160's constructed-helper round-trip, not an absent-package error.
+
+    The PRD does not promise a hard error when the package is off the import
+    path. Dumping a mapping whose id is 42 and loading with no maximum age
+    must recover that mapping.
+    """
+    helper = make_timestamped_serializer("secret-key")
+    token = dump_object(helper, PUBLIC_ID_MAPPING)
+    loaded = load_object(helper, token)
+    assert loaded == PUBLIC_ID_MAPPING
+    require_integer_id(loaded)
+    print(f"constructed-helper loaded={loaded!r}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -227,34 +208,87 @@ def test_runtime_timestamped_dump_load_without_max_age():
 
 def test_timestamped_serializer_round_trips_a_list():
     helper = make_timestamped_serializer(runtime_secret())
-    obj = [7, 8, 9]
-    token = dump_object(helper, obj)
-    loaded = load_object(helper, token)
-    assert loaded == obj
-    assert loaded != PUBLIC_ID_MAPPING
-    require_integer_list(loaded, obj)
-    print(f"list loaded={loaded!r}", flush=True)
+    canned = [7, 8, 9]
+    sampled = runtime_integer_list()
+    assert sampled != canned
+    loaded_canned = None
+    loaded_sampled = None
+    for obj in (canned, sampled):
+        token = dump_object(helper, obj)
+        json_text = default_json_text(obj)
+        require_three_part_layout(token, json_text)
+        loaded = load_object(helper, token)
+        assert loaded == obj
+        assert loaded != PUBLIC_ID_MAPPING
+        assert type(loaded) is not dict
+        require_integer_list(loaded, obj)
+        if obj is canned:
+            loaded_canned = loaded
+        else:
+            loaded_sampled = loaded
+    assert loaded_canned != loaded_sampled
+    print(
+        f"list loaded canned={loaded_canned!r} sampled={loaded_sampled!r}",
+        flush=True,
+    )
 
 
 def test_timestamped_sign_payload_containing_separator_recovers():
     secret = runtime_secret()
     payload = runtime_payload_with_sep()
+    assert DEFAULT_SEPARATOR in payload
     signer = make_timestamped_signer(secret)
     token = sign_value(signer, payload)
-    recovered = require_recovered_bytes(signer, token, payload)
-    assert recovered == payload
     require_three_part_layout(token, payload)
-    print(f"separator payload recovered_len={len(recovered)}", flush=True)
+    recovered = require_timestamped_bytes(
+        recover_timestamped(signer, token), payload
+    )
+    require_exact_bytes(recovered)
+    assert recovered == payload
+    assert DEFAULT_SEPARATOR in recovered
+
+    plain = runtime_payload_without_sep()
+    assert DEFAULT_SEPARATOR not in plain
+    plain_signer = make_timestamped_signer(secret)
+    plain_token = sign_value(plain_signer, plain)
+    plain_recovered = require_timestamped_bytes(
+        recover_timestamped(plain_signer, plain_token), plain
+    )
+    require_exact_bytes(plain_recovered)
+    assert plain_recovered == plain
+    assert DEFAULT_SEPARATOR not in plain_recovered
+    assert recovered != plain_recovered
+    print(
+        f"separator payload recovered_len={len(recovered)} "
+        f"plain_len={len(plain_recovered)}",
+        flush=True,
+    )
 
 
 def test_timestamped_dump_object_whose_json_contains_period_loads():
     helper = make_timestamped_serializer(runtime_secret())
     obj = runtime_text_with_period()
+    json_text = default_json_text(obj)
+    assert "." in json_text
     token = dump_object(helper, obj)
+    require_three_part_layout(token, json_text)
     loaded = load_object(helper, token)
     assert loaded == obj
-    require_three_part_layout(token, default_json_text(obj))
-    print(f"period-json loaded={loaded!r}", flush=True)
+    assert type(loaded) is str
+    assert "." in loaded
+
+    plain = runtime_text()
+    plain_json = default_json_text(plain)
+    assert "." not in plain_json
+    plain_token = dump_object(helper, plain)
+    require_three_part_layout(plain_token, plain_json)
+    plain_loaded = load_object(helper, plain_token)
+    assert plain_loaded == plain
+    assert loaded != plain_loaded
+    print(
+        f"period-json loaded={loaded!r} plain_loaded={plain_loaded!r}",
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1120,6 +1154,79 @@ def test_runtime_non_timestamped_token_refused():
     assert not datetimes_on_failure(exc)
 
 
+def test_non_timestamped_token_with_different_secret_is_signature_mismatch():
+    """L170: a non-timestamped token that does not share the secret is a
+    signature mismatch, not a missing timestamp.
+    """
+    signer = make_timestamped_signer("secret-key")
+    legal = sign_value(signer, PUBLIC_VALUE)
+    recovered = require_recovered_bytes(signer, legal, PUBLIC_VALUE)
+    assert recovered == b"value"
+
+    missing_token = arrange_missing_timestamp_token(
+        PUBLIC_VALUE, secret="secret-key"
+    )
+    missing_exc = require_recovery_failure(
+        recover_timestamped(signer, missing_token)
+    )
+    require_signing_time_absent(missing_exc)
+
+    other = runtime_secret()
+    while other == "secret-key":
+        other = runtime_secret()
+    mismatch_token = arrange_missing_timestamp_token(PUBLIC_VALUE, secret=other)
+    mismatch_exc = require_recovery_failure(
+        recover_timestamped(signer, mismatch_token)
+    )
+    assert_signature_mismatch_not_missing_timestamp(
+        mismatch_exc,
+        missing_exc,
+        covariates=(
+            missing_token,
+            mismatch_token,
+            expected_bytes(PUBLIC_VALUE),
+            PUBLIC_VALUE,
+        ),
+    )
+    print(
+        "different-secret non-timestamped token is signature mismatch, "
+        "not missing timestamp",
+        flush=True,
+    )
+
+
+def test_runtime_non_timestamped_token_with_different_secret_is_signature_mismatch():
+    """L170: a non-timestamped token that does not share the secret is a
+    signature mismatch, not a missing timestamp.
+    """
+    shared, other = distinct_pair()
+    payload = runtime_payload_without_sep()
+    signer = make_timestamped_signer(shared)
+    legal = sign_value(signer, payload)
+    recovered = require_recovered_bytes(signer, legal, payload)
+    assert recovered == expected_bytes(payload)
+
+    missing_token = arrange_missing_timestamp_token(payload, secret=shared)
+    missing_exc = require_recovery_failure(
+        recover_timestamped(signer, missing_token)
+    )
+    require_signing_time_absent(missing_exc)
+    mismatch_token = arrange_missing_timestamp_token(payload, secret=other)
+    mismatch_exc = require_recovery_failure(
+        recover_timestamped(signer, mismatch_token)
+    )
+    assert_signature_mismatch_not_missing_timestamp(
+        mismatch_exc,
+        missing_exc,
+        covariates=(missing_token, mismatch_token, payload),
+    )
+    print(
+        "runtime different-secret non-timestamped token is signature mismatch, "
+        "not missing timestamp",
+        flush=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # G. Malformed timestamp (L173–L174, L180–L181)
 # ---------------------------------------------------------------------------
@@ -1207,11 +1314,14 @@ def test_replaced_out_of_range_time_field_is_malformed_not_expiry():
         legal = sign_value(signer, PUBLIC_VALUE)
         instant = clock.instant
         require_recovered_bytes(signer, legal, PUBLIC_VALUE)
-        replaced = arrange_replaced_out_of_range_token(signer, PUBLIC_VALUE)
+        require_three_part_layout(legal, expected_bytes(PUBLIC_VALUE))
+        # Replace-without-re-sign: splice fields this helper itself emitted,
+        # not this checkout's URL-safe-base64 spelling of an epoch.
+        replaced = replace_time_field(legal, out_of_range_time_field(signer))
         exc = require_recovery_failure(recover_timestamped(signer, replaced))
         require_signing_time_absent(exc)
 
-        in_range = arrange_replaced_in_range_token(signer, PUBLIC_VALUE)
+        in_range = replace_time_field(legal, in_range_time_field(signer))
         mismatch_with_time = require_recovery_failure(
             recover_timestamped(signer, in_range)
         )
@@ -1252,11 +1362,12 @@ def test_runtime_replaced_out_of_range_time_field_is_malformed():
     with frozen_clock(OTHER_SIGNING_INSTANT) as clock:
         legal = sign_value(signer, text)
         instant = clock.instant
-        replaced = arrange_replaced_out_of_range_token(signer, text)
+        require_three_part_layout(legal, expected_bytes(text))
+        replaced = replace_time_field(legal, out_of_range_time_field(signer))
         exc = require_recovery_failure(recover_timestamped(signer, replaced))
         require_signing_time_absent(exc)
 
-        in_range = arrange_replaced_in_range_token(signer, text)
+        in_range = replace_time_field(legal, in_range_time_field(signer))
         mismatch_with_time = require_recovery_failure(
             recover_timestamped(signer, in_range)
         )

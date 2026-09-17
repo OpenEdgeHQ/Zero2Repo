@@ -180,9 +180,28 @@ def test_provider_env_codex_sets_home_and_forwards_openai_keys_only() -> None:
     assert "UNRELATED" not in env
 
 
-def test_cli_version_spec_defaults_latest_and_honors_pin() -> None:
-    assert agents.cli_version_spec("codex", environ={}) == "@latest"
+def test_cli_version_spec_requires_pin() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="CBRUN_CODEX_VERSION"):
+        agents.cli_version_spec("codex", environ={})
     assert agents.cli_version_spec("codex", environ={"CBRUN_CODEX_VERSION": "1.2.3"}) == "@1.2.3"
+    assert (
+        agents.cli_version_spec("codex", environ={"CBRUN_ALLOW_UNPINNED_CLI": "1"})
+        == "@latest"
+    )
+
+
+def test_cli_version_spec_requires_cursor_pin() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="CBRUN_CURSOR_VERSION"):
+        agents.cli_version_spec("cursor", environ={})
+    assert agents.cli_version_spec("cursor", environ={"CBRUN_CURSOR_VERSION": "1.2.3"}) == "1.2.3"
+    assert (
+        agents.cli_version_spec("cursor", environ={"CBRUN_ALLOW_UNPINNED_CLI": "1"})
+        == "latest"
+    )
 
 
 def test_claude_runs_nonroot() -> None:
@@ -254,7 +273,7 @@ def test_cli_install_command_is_idempotent_and_uses_pin() -> None:
 
 
 def test_cli_install_command_exposes_npm_prefix_binary_on_path() -> None:
-    cmd = agents.cli_install_command("codex", environ={})
+    cmd = agents.cli_install_command("codex", environ={"CBRUN_CODEX_VERSION": "0.1.0"})
     assert 'CBRUN_CLI_PATH="$prefix/bin/codex"' in cmd
     assert 'ln -sfn "$CBRUN_CLI_PATH" /usr/local/bin/codex' in cmd
     assert 'ln -sfn "$NODE_SRC" /usr/local/bin/node' in cmd

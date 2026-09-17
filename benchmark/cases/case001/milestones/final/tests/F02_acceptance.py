@@ -58,7 +58,7 @@ _RESERVED_YMD = frozenset(
     }
 )
 _RESERVED_HM = frozenset(
-    {(7, 32), (10, 32), (13, 37), (17, 45), (20, 5)}
+    {(1, 1), (7, 32), (10, 32), (13, 37), (17, 45), (20, 5)}
 )
 _LEAP_YEARS = (2004, 2008, 2012, 2016, 2028, 2032, 2036, 2040)
 _NON_LEAP_YEARS = (2017, 2018, 2021, 2022, 2025, 2026, 2027, 2029)
@@ -378,15 +378,26 @@ def test_multiline_literal_discards_opening_lf_no_escapes():
 
 def test_multiline_literal_interior_apostrophe_kept():
     left, right = runtime_token(), runtime_token()
-    body = f"{left}'{right}"
+    assert not left.startswith("\n")
+    body = left + "'" + right
     doc = _scalar_mapping(f"k = '''{body}'''")
     value = require_path(doc, "k")
     require_str(value, body)
+    assert value == left + "'" + right
     assert "'" in value
     assert value[len(left)] == "'"
     assert value[: len(left)] == left
     assert value[len(left) + 1 :] == right
     assert value != left + "'"
+    # First content character is runtime text, not a discarded line feed (L138).
+    assert value[:1] == left[:1]
+    assert value != body[1:]
+    assert len(value) == len(body)
+    first = _scalar_mapping(f"k = '''{left}'''")
+    first_val = require_path(first, "k")
+    require_str(first_val, left)
+    assert first_val[:1] == left[:1]
+    assert first_val != left[1:]
     # Opening line feed is discarded; the interior apostrophe is not a closer (L138).
     dropped = _scalar_mapping(f"k = '''\n{body}'''")
     dropped_val = require_path(dropped, "k")
@@ -411,6 +422,27 @@ def test_multiline_basic_four_and_five_quote_close():
     require_str(require_path(four, "k"), token + '"')
     require_str(require_path(five, "k"), token + '""')
     assert require_path(four, "k") != require_path(five, "k")
+
+
+def test_multiline_literal_backslash_lf_is_not_a_join():
+    left, right = runtime_token(), runtime_token()
+    interior = f"{left}\\\n{right}"
+    literal = _scalar_mapping(f"k = '''{interior}'''")
+    basic = _scalar_mapping(multiline_basic_document("k", interior))
+    lit_val = require_path(literal, "k")
+    bas_val = require_path(basic, "k")
+    require_str(lit_val, left + "\\" + "\n" + right)
+    require_str(bas_val, left + right)
+    print(
+        f"literal keep={lit_val!r} basic join={bas_val!r}",
+        flush=True,
+    )
+    assert "\\" in lit_val
+    assert "\n" in lit_val
+    assert "\n" not in bas_val
+    assert "\\" not in bas_val
+    assert lit_val != bas_val
+    assert lit_val != left + right
 
 
 # ---------------------------------------------------------------------------
@@ -714,10 +746,18 @@ def test_runtime_underscored_decimal():
     plain = _scalar_mapping(f"k = {expected}")
     require_int(require_path(plain, "k"), expected)
     assert require_path(plain, "k") == value
-    # Underscores may separate digits in hexadecimal as well (L140).
-    hx = format(expected, "x")
-    hex_token = f"{hx[0]}_{hx[1:]}" if len(hx) > 1 else f"{hx}_0"
+    # Process-local underscored hex is the every-base rule, not the public rows (L140).
+    digits, _plain_hex = base_digit_string(16)
+    assert digits.lower() not in {"deadbeef", "765", "101"}
+    if len(digits) == 1:
+        hex_token = f"{digits}_0"
+    else:
+        cut = max(1, len(digits) // 2)
+        hex_token = digits[:cut] + "_" + digits[cut:]
     hex_expected = int(hex_token.replace("_", ""), 16)
+    assert "_" in hex_token
+    assert hex_token not in {"dead_beef", "7_6_5", "1_0_1"}
+    print(f"runtime underscored hex token=0x{hex_token}", flush=True)
     hex_doc = _scalar_mapping(f"h = 0x{hex_token}")
     hex_val = require_path(hex_doc, "h")
     require_int(hex_val, hex_expected)
@@ -782,16 +822,27 @@ def test_runtime_finite_float():
     require_finite_float(value, float(token))
     assert is_float(value)
     assert value == float(token)
+    signed_token = f"-{n}.{m}"
+    signed_doc = _scalar_mapping(f"k = {signed_token}")
+    signed_val = require_path(signed_doc, "k")
+    require_finite_float(signed_val, float(signed_token))
+    print(f"signed float token={signed_token!r} value={signed_val!r}", flush=True)
+    assert signed_token.startswith("-")
+    assert signed_val < 0
+    assert signed_val == float(signed_token)
+    assert signed_val != value
 
 
 def test_runtime_exponent_and_underscored_float():
     mant = 10 + (runtime_int() % 90)
     exp = 1 + (runtime_int() % 5)
-    letter = "e" if runtime_int() % 2 == 0 else "E"
-    exp_token = f"{mant}{letter}{exp}"
+    exp_token = f"{mant}E{exp}"
     exp_doc = _scalar_mapping(f"k = {exp_token}")
     exp_val = require_path(exp_doc, "k")
     require_finite_float(exp_val, float(exp_token))
+    print(f"capital-E token={exp_token!r} value={exp_val!r}", flush=True)
+    assert "E" in exp_token
+    assert "e" not in exp_token
     assert is_float(exp_val)
     assert exp_val == float(exp_token)
     n = runtime_int()
@@ -802,6 +853,44 @@ def test_runtime_exponent_and_underscored_float():
     require_finite_float(us_val, float(us_token.replace("_", "")))
     assert is_float(us_val)
     assert us_val == float(us_token.replace("_", ""))
+    exp_lo = runtime_int() % 10
+    us_exp_token = f"{mant}e1_{exp_lo}"
+    us_exp_doc = _scalar_mapping(f"k = {us_exp_token}")
+    us_exp_val = require_path(us_exp_doc, "k")
+    us_exp_expected = float(us_exp_token.replace("_", ""))
+    require_finite_float(us_exp_val, us_exp_expected)
+    print(f"exponent-underscore token={us_exp_token!r} value={us_exp_val!r}", flush=True)
+    mantissa, exponent = us_exp_token.split("e", 1)
+    assert "_" not in mantissa
+    assert "_" in exponent
+    assert us_exp_val == us_exp_expected
+    # L141: a number with a fractional part *and* an exponent, not the public 3.1e2.
+    both_mant = 10 + (runtime_int() % 90)
+    both_frac = 1 + (runtime_int() % 9)
+    both_exp = 1 + (runtime_int() % 4)
+    both_token = f"{both_mant}.{both_frac}e{both_exp}"
+    assert both_token != "3.1e2"
+    assert "." in both_token
+    assert "e" in both_token
+    both_doc = _scalar_mapping(f"k = {both_token}")
+    both_val = require_path(both_doc, "k")
+    require_finite_float(both_val, float(both_token))
+    print(f"runtime fraction-and-exponent token={both_token!r} value={both_val!r}", flush=True)
+    assert is_float(both_val)
+    assert both_val == float(both_token)
+    # L141: a minus in the exponent, not the public 3E-2. Capital-E positive is a different arm.
+    neg_mant = 11 + (runtime_int() % 89)
+    neg_exp = 1 + (runtime_int() % 4)
+    neg_token = f"{neg_mant}e-{neg_exp}"
+    assert neg_token != "3E-2"
+    assert "-" in neg_token.split("e", 1)[1]
+    neg_doc = _scalar_mapping(f"k = {neg_token}")
+    neg_val = require_path(neg_doc, "k")
+    require_finite_float(neg_val, float(neg_token))
+    print(f"runtime negative-exponent token={neg_token!r} value={neg_val!r}", flush=True)
+    assert is_float(neg_val)
+    assert neg_val == float(neg_token)
+    assert neg_val != float(str(neg_mant))
 
 
 def test_inf_plus_minus():
@@ -882,6 +971,62 @@ def test_fractional_seconds_six_digits_and_truncated():
     truncated = require_aware_datetime(require_path(extra, "k"))
     assert truncated.microsecond == 123456
     assert truncated.microsecond != 123457
+    year, month, day = _runtime_ymd()
+    hour, minute = _runtime_clock()
+    second = runtime_int() % 60
+    assert (year, month, day) != (1987, 7, 5)
+    assert (hour, minute, second) != (17, 45, 56)
+    six_digits = f"{runtime_int() % 1000000:06d}"
+    seventh = 5 + (runtime_int() % 5)
+    frac = f"{six_digits}{seventh}"
+    token = (
+        f"{_ymd(year, month, day)}T{hour:02d}:{minute:02d}:{second:02d}.{frac}Z"
+    )
+    runtime = _scalar_mapping(f"k = {token}")
+    runtime_dt = require_aware_datetime(require_path(runtime, "k"))
+    print(f"runtime truncated token={token} us={runtime_dt.microsecond}", flush=True)
+    assert runtime_dt.microsecond == int(six_digits)
+    assert runtime_dt.microsecond != int(six_digits) + 1
+    assert (runtime_dt.year, runtime_dt.month, runtime_dt.day) == (year, month, day)
+    assert (runtime_dt.hour, runtime_dt.minute, runtime_dt.second) == (
+        hour,
+        minute,
+        second,
+    )
+    # L142: up to six fractional digits are microseconds. Width in {1,2,4,5}
+    # (not the named three-digit .123, not six-or-more) pads those digits on
+    # the right to six. int(frac) without padding is a different number.
+    pad_widths = (1, 2, 4, 5)
+    pad_width = pad_widths[runtime_int() % len(pad_widths)]
+    frac_n = 1 + (runtime_int() % (10 ** pad_width - 1))
+    frac_digits = f"{frac_n:0{pad_width}d}"
+    padded_us = int(frac_digits + "0" * (6 - pad_width))
+    assert pad_width not in (3, 6)
+    assert len(frac_digits) == pad_width
+    assert padded_us != int(frac_digits)
+    pad_year, pad_month, pad_day = _runtime_ymd()
+    pad_hour, pad_minute = _runtime_clock()
+    pad_second = runtime_int() % 60
+    assert (pad_year, pad_month, pad_day) != (1987, 7, 5)
+    assert (pad_hour, pad_minute, pad_second) != (17, 45, 56)
+    pad_token = (
+        f"{_ymd(pad_year, pad_month, pad_day)}T"
+        f"{pad_hour:02d}:{pad_minute:02d}:{pad_second:02d}.{frac_digits}Z"
+    )
+    pad_doc = _scalar_mapping(f"k = {pad_token}")
+    pad_dt = require_aware_datetime(require_path(pad_doc, "k"))
+    print(
+        f"runtime padded frac token={pad_token} width={pad_width} "
+        f"us={pad_dt.microsecond} expected={padded_us}",
+        flush=True,
+    )
+    assert pad_dt.microsecond == padded_us
+    assert (pad_dt.year, pad_dt.month, pad_dt.day) == (pad_year, pad_month, pad_day)
+    assert (pad_dt.hour, pad_dt.minute, pad_dt.second) == (
+        pad_hour,
+        pad_minute,
+        pad_second,
+    )
 
 
 def test_numeric_offset_contrast():
@@ -935,8 +1080,21 @@ def test_runtime_omitted_seconds_offset_and_local():
     local_written = _scalar_mapping(f"k = {local_stamp}:00")
     na = require_naive_datetime(require_path(local_omitted, "k"))
     nb = require_naive_datetime(require_path(local_written, "k"))
+    print(
+        f"runtime local omitted={na!r} written={nb!r} source={local_stamp}",
+        flush=True,
+    )
+    assert (hour, minute) != (1, 1)
+    assert (hour, minute) != (20, 5)
+    assert (na.year, na.month, na.day) == (year, month, day)
+    assert (na.hour, na.minute) == (hour, minute)
+    assert (nb.year, nb.month, nb.day) == (year, month, day)
+    assert (nb.hour, nb.minute) == (hour, minute)
     assert na.second == 0
+    assert nb.second == 0
     assert na == nb
+    assert na.tzinfo is None
+    assert nb.tzinfo is None
 
 
 def test_local_datetime_naive():
@@ -1110,6 +1268,7 @@ def test_leading_zero_decimals_refused():
         ("k = +01", "k = +1"),
         ("k = -01", "k = -1"),
         ("k = 02", "k = 2"),
+        ("k = 00", "k = 0"),
     )
     for bad, good in cases:
         neighbor = _refuse_near(bad, good)
@@ -1193,6 +1352,8 @@ def test_leading_zero_floats_refused():
         ("k = +03.14", "k = +3.14"),
         ("k = -03.14", "k = -3.14"),
         ("k = 04.5", "k = 4.5"),
+        ("k = 00.123", "k = 0.123"),
+        ("k = -00.123", "k = -0.123"),
     )
     for bad, good in cases:
         neighbor = _refuse_near(bad, good)
@@ -1272,6 +1433,33 @@ def test_incomplete_hex_escapes_refused():
     for bad, good in cases:
         neighbor = _refuse_near(bad, good)
         assert is_str(require_path(neighbor, "k"))
+
+
+def test_non_hex_digits_in_advertised_hex_escape_refused():
+    # L139: \x plus two hex digits. L153: a backslash that is not a listed
+    # escape fails. Advertised width filled with non-hex is not a short run.
+    hex_alphabet = "0123456789abcdef"
+    non_hex_alphabet = "ghijklmnopqrstuvwxyz"
+    h0 = hex_alphabet[runtime_int() % 16]
+    h1 = hex_alphabet[runtime_int() % 16]
+    n0 = non_hex_alphabet[runtime_int() % len(non_hex_alphabet)]
+    n1 = non_hex_alphabet[runtime_int() % len(non_hex_alphabet)]
+    good_digits = h0 + h1
+    bad_digits = n0 + n1
+    assert len(good_digits) == 2
+    assert len(bad_digits) == 2
+    assert all(c in hex_alphabet for c in good_digits)
+    assert all(c not in hex_alphabet and c not in hex_alphabet.upper() for c in bad_digits)
+    neighbor = _refuse_near(f'k = "\\x{bad_digits}"', f'k = "\\x{good_digits}"')
+    expected = chr(int(good_digits, 16))
+    value = require_path(neighbor, "k")
+    require_str(value, expected)
+    print(
+        f"full-width non-hex \\x{bad_digits} refused; neighbor \\x{good_digits}={expected!r}",
+        flush=True,
+    )
+    assert value == expected
+    assert is_str(value)
 
 
 def test_unknown_basic_escape_refused():

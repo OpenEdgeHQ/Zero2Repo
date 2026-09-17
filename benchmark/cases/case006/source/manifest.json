@@ -100,7 +100,6 @@
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends less python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest==9.0.2' 'flit_core>=3.11,<4' && rm -rf /var/lib/apt/lists/*",
     "repo_warm_command": "python3 -m pip install --no-cache-dir -e .",
     "build_command": "",
-    "env_probe_command": "PYTHONPATH=src python3 -c \"import optlyn, os; assert os.path.realpath(optlyn.__file__).startswith(os.path.realpath('src')); c=optlyn.Command('probe', callback=lambda: optlyn.echo('ok')); c.main([], standalone_mode=False)\"",
     "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
     "workdir": "."
   },

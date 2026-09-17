@@ -21,7 +21,9 @@ __all__ = [
     "build_fix_instruction",
     "install_ban_hashes",
     "FORBIDDEN_IMPORT_BAN",
+    "MissingDenylist",
     "load_denylist",
+    "require_denylist",
     "normalize_pkg_name",
     "render_pip_shim",
     "render_conda_shim",
@@ -29,7 +31,15 @@ __all__ = [
     "scan_workspace_imports",
     "validate_denylist_artifact",
     "validate_denylist_payload",
+    "import_root_from_ban_token",
+    "import_roots_from_ban_tokens",
+    "probe_banned_imports",
+    "ALLOWED_JUDGE_BANS",
 ]
+
+ALLOWED_JUDGE_BANS = frozenset(
+    {"socket", "subprocess", "network", "filesystem_outside_workspace"}
+)
 
 CONTAINER_DENYLIST_HASHES_PATH = "/opt/cbrun/denylist.hashes"
 SHIM_BIN_DIR = "/opt/cbrun/bin"
@@ -472,6 +482,30 @@ def load_denylist(case_dir: Path | str) -> DenylistSpec | None:
     )
 
 
+class MissingDenylist(RuntimeError):
+    """source/denylist.json is absent or has no ban entries."""
+
+
+def require_denylist(case_dir: Path | str) -> DenylistSpec:
+    """Load the denylist or raise. Missing / empty is not a clean scan."""
+    path = Path(case_dir) / "source" / "denylist.json"
+    spec = load_denylist(case_dir)
+    if spec is not None:
+        return spec
+    if not path.is_file():
+        raise MissingDenylist(
+            f"source/denylist.json is missing at {path}. "
+            "Obtain the private denylist from the internal distribution "
+            "channel, or pass --no-enforce-denylist for a published bundle "
+            "without one."
+        )
+    raise MissingDenylist(
+        f"source/denylist.json at {path} has no install_ban or import_ban. "
+        "An empty denylist is not a pass. Fix the file or pass "
+        "--no-enforce-denylist."
+    )
+
+
 def _normalized_ban_set(spec: DenylistSpec) -> set[str]:
     return {normalize_pkg_name(x) for x in spec.install_ban}
 
@@ -662,9 +696,21 @@ def render_conda_shim() -> str:
     return _CONDA_SHIM
 
 
-def write_shim_assets(build_ctx: Path, denylist_path: Path) -> str:
+def write_shim_assets(
+    build_ctx: Path,
+    denylist_path: Path,
+    *,
+    required: bool = False,
+) -> str:
     """Copy hash denylist + shim scripts into Docker build context; return Dockerfile snippet."""
     if not denylist_path.is_file():
+        if required:
+            raise MissingDenylist(
+                f"source/denylist.json is missing at {denylist_path}. "
+                "Obtain the private denylist from the internal distribution "
+                "channel, or pass --no-enforce-denylist for a published bundle "
+                "without one."
+            )
         return ""
     hashes = install_ban_hashes_from_file(denylist_path)
     if not hashes:
@@ -692,3 +738,147 @@ def write_shim_assets(build_ctx: Path, denylist_path: Path) -> str:
         f'printf "export PATH={SHIM_BIN_DIR}:\\$PATH\\n" > /etc/profile.d/00-cbrun-denylist.sh\n'
         f"ENV PATH={SHIM_BIN_DIR}:$PATH\n"
     )
+
+
+def import_root_from_ban_token(token: str) -> str | None:
+    """Normalize one ``import_ban`` token to the top-level import root."""
+    text = str(token).strip().rstrip("/")
+    if not text:
+        return None
+    if text.startswith("@") and "/" in text:
+        parts = [p for p in text.split("/") if p]
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+        return None
+    if "/" in text:
+        last = text.rsplit("/", 1)[-1].strip()
+        return last or None
+    if "." in text:
+        first = text.split(".", 1)[0].strip()
+        return first or None
+    return text
+
+
+def import_roots_from_ban_tokens(tokens: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    roots: list[str] = []
+    for token in tokens:
+        root = import_root_from_ban_token(token)
+        if root is None or root in seen:
+            continue
+        seen.add(root)
+        roots.append(root)
+    return roots
+
+
+def _stdlib_roots() -> set[str]:
+    import sys
+
+    names = getattr(sys, "stdlib_module_names", None)
+    return set(names) if names else set()
+
+
+def _parse_probe_rows(output: str, roots: list[str]) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line or "\t" not in line:
+            continue
+        name, origin = line.split("\t", 1)
+        if name in roots:
+            found[name] = origin.strip()
+    return found
+
+
+def _python_probe_command(roots: list[str]) -> str:
+    payload = json.dumps(roots)
+    return (
+        "python3 - <<'PY'\n"
+        "import importlib.util, json\n"
+        f"roots = json.loads({json.dumps(payload)})\n"
+        "for root in roots:\n"
+        "    try:\n"
+        "        spec = importlib.util.find_spec(root)\n"
+        "    except (ModuleNotFoundError, ValueError):\n"
+        "        print(root + '\\t__ABSENT__')\n"
+        "        continue\n"
+        "    if spec is None:\n"
+        "        print(root + '\\t__ABSENT__')\n"
+        "        continue\n"
+        "    origin = spec.origin or ''\n"
+        "    if origin:\n"
+        "        print(root + '\\t' + origin)\n"
+        "        continue\n"
+        "    locs = list(spec.submodule_search_locations or [])\n"
+        "    print(root + '\\t' + (locs[0] if locs else '__PRESENT__'))\n"
+        "PY"
+    )
+
+
+def _node_probe_command(roots: list[str]) -> str:
+    payload = json.dumps(roots)
+    return (
+        "cd / && node -e "
+        + json.dumps(
+            "const roots = JSON.parse("
+            + json.dumps(payload)
+            + ");"
+            "for (const r of roots) {"
+            "  try { console.log(r + '\\t' + require.resolve(r)); }"
+            "  catch (e) { console.log(r + '\\t__ABSENT__'); }"
+            "}"
+        )
+    )
+
+
+@dataclass
+class ImportProbeResult:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def probe_banned_imports(
+    tag: str,
+    denylist_path: Path | str,
+    *,
+    runner=None,
+) -> ImportProbeResult:
+    """Probe whether non-stdlib ``import_ban`` roots resolve in *tag*."""
+    result = ImportProbeResult()
+    path = Path(denylist_path)
+    if not path.is_file():
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        result.errors.append(f"denylist unreadable: {path}: {exc}")
+        return result
+    if not isinstance(payload, dict):
+        result.errors.append(f"denylist is not an object: {path}")
+        return result
+    tokens = [str(x) for x in (payload.get("import_ban") or []) if str(x).strip()]
+    roots = [r for r in import_roots_from_ban_tokens(tokens) if r not in _stdlib_roots()]
+    if not roots:
+        return result
+    eco = str(payload.get("ecosystem") or "").strip().lower()
+    if eco in {"npm"}:
+        command = _node_probe_command(roots)
+    else:
+        command = _python_probe_command(roots)
+    if runner is None:
+        from .docker_env import Container
+
+        container = Container.start(tag, network="none")
+        try:
+            outcome = container.exec(command, timeout_sec=60.0)
+        finally:
+            container.remove()
+    else:
+        outcome = runner(command)
+    found = _parse_probe_rows(getattr(outcome, "tail", "") or "", roots)
+    for root, origin in found.items():
+        if origin and origin != "__ABSENT__":
+            result.errors.append(
+                f"banned import root {root!r} is importable in {tag} (origin={origin})"
+            )
+    return result

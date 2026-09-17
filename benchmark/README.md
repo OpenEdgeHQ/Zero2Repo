@@ -25,6 +25,7 @@ cd benchmark
 pip install -e .
 # Optional:
 pip install -e ".[harbor]"
+pip install -e ".[cost]"
 ```
 
 ## cbrun (recommended)

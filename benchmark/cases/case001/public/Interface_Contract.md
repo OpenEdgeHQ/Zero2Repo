@@ -26,7 +26,7 @@ The independently verifiable library entries, grouped by role, are:
 
 Both parse entries accept an optional float converter (keyword `parse_float`) so TOML floats, including `inf` and `nan` spellings, can be built as something other than a Python float. When that converter is omitted, floats are Python floats. The converter does not change table or array structure, and it is not applied to integers, strings, booleans, or date-times.
 
-**Not in this surface.** Encoding or writing TOML. Comment-preserving or style-preserving round-trip parsing. A command-line program, a web server, or a configuration framework. A fallback import of the standard-library TOML module. Parse throughput is not a published interface.
+**Not in this surface.** Encoding or writing TOML. Comment-preserving or style-preserving round-trip parsing. A command-line program, a web server, or a configuration framework. Delegating `loads` or `load` to the standard-library TOML module (`tomllib`) or any other pre-existing parser; graded entries must be Tomlparse's own parse implementation. Parse throughput is not a published interface.
 
 ### Naming conventions
 
@@ -46,7 +46,7 @@ Both parse entries accept an optional float converter (keyword `parse_float`) so
 
 **No command-line product.** There is no console-script entry and no `python -m` program that is part of this surface. Outcomes are returned or raised from library calls. Parse entries do not exit the host process.
 
-**Library substrate.** When the `tomlparse` package is not importable, a program that does `from `tomlparse` import `loads`` and then calls `loads` on the one-line document `name = "probe"` does not run to completion and does not yield a successful document mapping. When the package is importable, that same document yields a mapping whose `name` value is the string `probe`.
+**Library substrate.** When the package is importable, a program that does `from `tomlparse` import `loads`` and then calls `loads` on the one-line document `name = "probe"` yields a mapping whose `name` value is the string `probe`.
 
 **Document mapping.** A successful parse returns a Python mapping whose keys are strings and whose values are ordinary Python mappings, sequences, and scalars (strings, integers, floats, booleans, and standard-library date, time, and datetime values). The product does not return custom node types in order to keep comments or layout. Integers are integers and not booleans; booleans are booleans and not the integers 1 and 0 and not strings.
 
@@ -62,7 +62,7 @@ Both parse entries accept an optional float converter (keyword `parse_float`) so
 
 **Decode error.** When the document is not valid TOML, the parse does not succeed and does not deliver a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError`: a caller who handles `ValueError` also handles parse failures, and a caller who handles only `TOMLDecodeError` does not catch unrelated type errors. Wording of the decode-error report is not a compatibility contract. When the problem is at a character inside the document, an observer can recover a 1-based line number and a 1-based column number for that character. When the document ended too early, an observer can tell the failure is at the end of the document. From the same failure, the unformatted reason, the original document text, and a 0-based character offset are each recoverable, separately from the formatted report.
 
-**Recursion versus decode.** An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That failure is not `TOMLDecodeError`. The observer can tell those two failure kinds apart.
+**Recursion versus decode.** An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. Those depths are lower bounds: a caller who builds those documents must receive a mapping. How much farther an implementation can nest, and whether a still-deeper document fails because the interpreter refuses a deeper call, is the implementer’s and is not a requirement of this surface.
 
 **Float converter.** Any callable that accepts the token text and returns a value that is not a dictionary or a list (and not a subtype of either) is allowed as `parse_float`. If the converter returns a dictionary or a list, the parse fails with `ValueError`. That failure is not `TOMLDecodeError`.
 
@@ -86,7 +86,7 @@ from `tomlparse` import `TOMLDecodeError`, `loads`
 
 A script that only needs a subset may import that subset, for example `from `tomlparse` import `loads`` or `from `tomlparse` import `TOMLDecodeError``. Binary-file parse is `from `tomlparse` import `load``.
 
-When `tomlparse` is not importable, a program that does `from `tomlparse` import `loads`` does not run to completion and does not yield a document mapping. When the package is importable, `loads` of the one-line document `name = "probe"` yields a mapping whose `name` value is the string `probe`.
+When the package is importable, `loads` of the one-line document `name = "probe"` yields a mapping whose `name` value is the string `probe`.
 
 ## `tomlparse.TOMLDecodeError`
 
@@ -106,7 +106,7 @@ A caller can produce the exception by supplying those three values. The resultin
 
 ### Inheritance and discrimination
 
-`TOMLDecodeError` is a subclass of `ValueError`. An instance raised for invalid TOML is both a `TOMLDecodeError` and a `ValueError`. It is not a `RecursionError`. A `RecursionError` raised when nesting exceeds the interpreter’s recursion limit is not a `TOMLDecodeError`. A `TypeError` raised for the wrong Python input type (for example a bytes object or a boolean passed to `loads`, or a text-mode file passed to `load`) is not a `TOMLDecodeError`.
+`TOMLDecodeError` is a subclass of `ValueError`. An instance raised for invalid TOML is both a `TOMLDecodeError` and a `ValueError`. It is not a `RecursionError`. A `RecursionError` is not a `TOMLDecodeError`. A `TypeError` raised for the wrong Python input type (for example a bytes object or a boolean passed to `loads`, or a text-mode file passed to `load`) is not a `TOMLDecodeError`.
 
 ### Recoverable location
 
@@ -122,7 +122,7 @@ These values are recoverable separately from the formatted report that includes 
 
 ### Raised by parse
 
-`loads` and `load` raise `TOMLDecodeError` when the input is not valid TOML v1.1.0. The call does not return a document mapping. Duplicate keys, frozen inline-table mutation, overwrite of a value by a table or array-of-tables header, a missing value, a multiline string used as a key or table name, a header that spans lines or shares its line with a following pair, and other invalid documents fail this way. Nesting past the interpreter’s recursion limit does **not** raise `TOMLDecodeError`; that failure is `RecursionError`.
+`loads` and `load` raise `TOMLDecodeError` when the input is not valid TOML v1.1.0. The call does not return a document mapping. Duplicate keys, frozen inline-table mutation, overwrite of a value by a table or array-of-tables header, a missing value, a multiline string used as a key or table name, a header that spans lines or shares its line with a following pair, and other invalid documents fail this way. Extra nesting past an inline array 470 levels deep, an inline table 310 levels deep, or a dotted key with 310 parts is not a decode-error obligation.
 
 ## `tomlparse.load`
 
@@ -178,7 +178,7 @@ A neighboring binary file of valid `UTF-8` TOML still succeeds.
 
 ### Invalid TOML after a successful UTF-8 decode
 
-When the bytes are valid `UTF-8` but the decoded text is not valid TOML v1.1.0, the call does not return a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `TypeError`. Nesting past the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping; that exception is not `TOMLDecodeError`.
+When the bytes are valid `UTF-8` but the decoded text is not valid TOML v1.1.0, the call does not return a document mapping. The failure is `TOMLDecodeError`, which is a `ValueError` and is not a `TypeError`.
 
 The recoverable document on that failure is the decoded text, not the raw bytes. The identified place matches `loads` on that same text. That holds for an on-disk binary file and for an in-memory binary buffer. A neighboring binary file of valid `UTF-8` TOML still succeeds.
 
@@ -241,6 +241,7 @@ The call does not read or write files, does not mutate the process environment, 
 
 - An array of tables is opened with a double-square-bracket header. Each repetition appends one new mapping to that sequence. A document `[[players]]` then `name = "Lehtinen"` then `number = 26` then `[[players]]` then `name = "Numminen"` then `number = 27` yields `players` as a two-element sequence of mappings.
 - Nested arrays of tables attach to the **most recently appended** parent item: two `[[albums]]` items, each followed by two `[[albums.songs]]` items, yield two albums whose `songs` sequences each have two mappings.
+- A later single-bracket header whose first part is that array name attaches to the same current item: `[[arr]]` then `[arr.subtab]` then `val = 1` then `[[arr]]` then `[arr.subtab]` then `val = 2` yields `arr` as a two-element sequence whose mappings each contain `subtab`.
 - An array-of-tables header may imply parent tables. `[[albums.songs]]` then `name = "Glory Days"` yields `albums` as a mapping (not a sequence) that contains a `songs` sequence of one mapping. After `[[albums]]` then `[[albums.songs]]`, `albums` is a sequence (not a mapping). Those two parent kinds are not the same.
 - After `[[a.b]]` then `x = 1`, a later `[a]` then `y = 2` is allowed and yields `a` as a mapping that has both `b` (the sequence) and `y`. After one or more `[[parent-table.arr]]` headers, a later `[parent-table]` may still add a sibling key that is not `arr`.
 - After `[[tab.arr]]` then `[tab]`, a later `arr.val1 = 1` is refused: `arr` is a sequence of tables, not a table that can take a dotted key. A sibling key that is not `arr` on that same `[tab]` is allowed.
@@ -281,5 +282,5 @@ These documents do not return a mapping. The failure is `TOMLDecodeError`, which
 - An inline table nested 310 levels deep (`key = {` repeated 310 times then 310 closing braces) succeeds as nested mappings under `key` whose innermost mapping is empty.
 - A dotted key with 310 parts (`a.a.…a = 1`) succeeds as nested mappings whose leaf integer is 1.
 - Intermediate nesting well below those depths also succeeds.
-- An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with `RecursionError` and does not yield a mapping. That exception is not `TOMLDecodeError`. The same entry still raises `TOMLDecodeError` (not `RecursionError`) for an ordinary invalid document such as a duplicate key.
+- Those depths are lower bounds: a caller who builds those documents must receive a mapping. How much farther an implementation can nest, and whether a still-deeper document fails because the interpreter refuses a deeper call, is the implementer’s and is not a requirement of this entry.
 

@@ -7,6 +7,7 @@ internal authoring tools. The optional blacklist lives in each case's
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -17,14 +18,15 @@ class LeakageHit:
 
 
 def scan_leakage(text: str, blacklist: list[str]) -> list[LeakageHit]:
-    """Return blacklisted terms found in *text* (case-insensitive substring)."""
-    text_lower = text.lower()
+    """Match identities at identifier boundaries, not inside unrelated words.
+
+    Qualified names and URLs still match verbatim; punctuation is preserved.
+    """
     hits: list[LeakageHit] = []
     for term in blacklist:
         if not term:
             continue
-        needle = term.lower()
-        count = text_lower.count(needle)
+        count = len(re.findall(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, re.IGNORECASE))
         if count:
             hits.append(LeakageHit(term=term, occurrences=count))
     return hits

@@ -22,15 +22,38 @@ from _harness import (
     rsplit_once,
 )
 
-BUILT_IN_DERIVATIONS = ("concat", "django-concat", "hmac", "none")
-DEFAULT_SEPARATOR = b"."
+
+class BUILT_IN_DERIVATIONS(tuple):
+    """The four built-in key-derivation names the signer accepts.
+
+    Downstream suites import this name and iterate it. The binding is the
+    four-name sequence, not a callable.
+    """
+
+
+BUILT_IN_DERIVATIONS = BUILT_IN_DERIVATIONS(
+    ("concat", "django-concat", "hmac", "none")
+)
+
+
+class DEFAULT_SEPARATOR(bytes):
+    """The product default payload/signature separator: a period.
+
+    Downstream suites import this name and use it as bytes (containment,
+    concatenation, replacement). The binding is the period byte, not a
+    callable.
+    """
+
+
+DEFAULT_SEPARATOR = DEFAULT_SEPARATOR(b".")
 
 
 def load_signer_surface() -> tuple[Any, Any, Any]:
     """Import the public signer and algorithms from the package root.
 
-    Import happens here, not at module import time, so this helper still
-    loads when the product is absent from ``sys.path``.
+    Import happens at call time so construction is observed through
+    ``construct_signer``, not at helper-module import. Absence of the
+    package from the import path is not a graded product outcome.
     """
     from signtoken import HMACAlgorithm, NoneAlgorithm, Signer
 
@@ -353,6 +376,76 @@ def runtime_text() -> str:
 
 def runtime_non_ascii_text() -> str:
     return "\u00f1-\u4e16\u754c-" + secrets.token_hex(4)
+
+
+def latin1_bytes(text: str) -> bytes:
+    """Encode *text* as latin-1. Raises if the text is not encodable.
+
+    Used only as a contrast against the UTF-8 encoding the PRD names.
+    Never treats an encode failure as a sampled payload.
+    """
+    if not isinstance(text, str):
+        raise HarnessError(f"latin-1 contrast requires text, got {type(text)!r}")
+    try:
+        encoded = text.encode("latin-1")
+    except UnicodeEncodeError as exc:
+        raise HarnessError(
+            f"text is not latin-1 encodable, cannot contrast with UTF-8: {exc}"
+        ) from exc
+    return encoded
+
+
+def runtime_utf8_distinct_text() -> str:
+    """Runtime text whose UTF-8 bytes differ from latin-1.
+
+    U+00F1 is one byte in latin-1 and two bytes in UTF-8. ASCII-only
+    runtime text cannot measure the UTF-8 encoding the PRD names.
+    """
+    text = "\u00f1-" + secrets.token_hex(8)
+    utf8 = expected_bytes(text)
+    other = latin1_bytes(text)
+    if utf8 == other:
+        raise HarnessError("sampled text does not distinguish UTF-8 from latin-1")
+    return text
+
+
+def require_utf8_not_latin1(recovered: bytes, text: str) -> bytes:
+    """Require *recovered* to be UTF-8 of *text*, not the latin-1 encoding."""
+    recovered_b = require_bytes(recovered)
+    utf8 = expected_bytes(text)
+    other = latin1_bytes(text)
+    if utf8 == other:
+        raise HarnessError("text does not distinguish UTF-8 from latin-1")
+    if recovered_b != utf8:
+        raise AssertionError(
+            f"recovery yielded {recovered_b!r}, expected UTF-8 {utf8!r}"
+        )
+    if recovered_b == other:
+        raise AssertionError(
+            "recovery yielded the latin-1 encoding of the text, not UTF-8"
+        )
+    print(
+        f"utf8={utf8!r} latin1={other!r} recovered={recovered_b!r}",
+        flush=True,
+    )
+    return recovered_b
+
+
+def runtime_invalid_utf8_bytes(n: int = 8) -> bytes:
+    """Runtime bytes that are not valid UTF-8 and do not contain the separator.
+
+    An implementation that transcodes signed bytes through a text codec
+    cannot round-trip a leading 0xFF payload.
+    """
+    for _ in range(32):
+        data = b"\xff" + secrets.token_bytes(n)
+        if DEFAULT_SEPARATOR in data:
+            continue
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+    raise HarnessError("could not sample a payload that is not valid UTF-8")
 
 
 def runtime_payload(n: int = 12) -> bytes:

@@ -1,10 +1,19 @@
-"""Regression checks for released case assets."""
+"""Regression checks for released case files, plus synthetic asset-rule tests.
+
+The new checker is exercised on temporary fixtures only. Released cases are
+not used as oracles for leakage / denylist / install-path rules.
+"""
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BENCHMARK_ROOT))
+
+from cbrun.case_checks import check_case_assets  # noqa: E402
 
 
 def test_released_suite_has_required_public_assets() -> None:
@@ -24,3 +33,108 @@ def test_released_suite_has_required_public_assets() -> None:
         tests_dir = case_dir / "milestones" / "final" / "tests"
         assert tests_dir.is_dir()
         assert any(tests_dir.iterdir())
+
+
+def _write_case(root: Path, **overrides: object) -> Path:
+    case = root / "case999"
+    (case / "public").mkdir(parents=True)
+    (case / "source" / "env").mkdir(parents=True)
+    final = case / "milestones" / "final" / "tests"
+    final.mkdir(parents=True)
+    (final / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    runner = {
+        "install_command": "true",
+        "build_command": "",
+        "judge_bans": ["socket"],
+    }
+    runner.update(overrides.get("runner") or {})  # type: ignore[arg-type]
+    manifest = {
+        "case_id": "case999",
+        "sensitive_terms": overrides.get("sensitive_terms", ["upstreamsecret"]),
+        "runner": runner,
+    }
+    lock = {"runner": {k: runner.get(k, "") for k in ("install_command", "build_command")}}
+    tests_manifest = {
+        "test_files": ["tests/test_ok.py"],
+        "support_files": [],
+    }
+    if "manifest" in overrides:
+        manifest.update(overrides["manifest"])  # type: ignore[arg-type]
+    if "lock" in overrides:
+        lock.update(overrides["lock"])  # type: ignore[arg-type]
+    if "tests_manifest" in overrides:
+        tests_manifest.update(overrides["tests_manifest"])  # type: ignore[arg-type]
+    (case / "source" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (case / "source" / "recipe.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    (case / "public" / "Full_PRD.md").write_text(
+        str(overrides.get("prd", "A public product spec.")), encoding="utf-8"
+    )
+    (case / "public" / "Interface_Contract.md").write_text(
+        str(overrides.get("contract", "Public API names only.")), encoding="utf-8"
+    )
+    (case / "milestones" / "final" / "test_manifest.json").write_text(
+        json.dumps(tests_manifest), encoding="utf-8"
+    )
+    if overrides.get("denylist"):
+        (case / "source" / "denylist.json").write_text(
+            json.dumps(overrides["denylist"]), encoding="utf-8"
+        )
+    if overrides.get("resources"):
+        (case / "source" / "env" / "resources.json").write_text(
+            json.dumps(overrides["resources"]), encoding="utf-8"
+        )
+    return case
+
+
+def test_check_case_assets_accepts_clean_fixture(tmp_path: Path) -> None:
+    case = _write_case(tmp_path)
+    assert check_case_assets(case) == []
+
+
+def test_check_case_assets_flags_boundary_leakage(tmp_path: Path) -> None:
+    case = _write_case(tmp_path, prd="Mentions upstreamsecret in the PRD.")
+    errors = check_case_assets(case)
+    assert any("leakage" in item for item in errors)
+
+
+def test_check_case_assets_ignores_substring_of_sensitive_term(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        sensitive_terms=["ada"],
+        prd="the adapter loads data",
+    )
+    assert check_case_assets(case) == []
+
+
+def test_check_case_assets_flags_lock_drift_and_private_cache(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        runner={"install_command": "cp -a /opt/cb-cache/models .", "build_command": ""},
+        lock={"runner": {"install_command": "true", "build_command": ""}},
+    )
+    errors = "\n".join(check_case_assets(case))
+    assert "disagree" in errors
+    assert "/opt/cb-cache" in errors
+
+
+def test_check_case_assets_allows_cache_when_resources_declared(tmp_path: Path) -> None:
+    install = "cp -a /opt/cb-cache/models ."
+    case = _write_case(
+        tmp_path,
+        runner={"install_command": install, "build_command": ""},
+        lock={"runner": {"install_command": install, "build_command": ""}},
+        resources={"destination": "/opt/models", "resources": []},
+    )
+    errors = check_case_assets(case)
+    assert not any("/opt/cb-cache" in item for item in errors)
+
+
+def test_check_case_assets_flags_unknown_judge_ban_and_missing_test(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        runner={"install_command": "true", "build_command": "", "judge_bans": ["laser"]},
+        tests_manifest={"test_files": ["tests/missing.py"], "support_files": []},
+    )
+    errors = "\n".join(check_case_assets(case))
+    assert "unknown judge_bans" in errors
+    assert "missing tests/missing.py" in errors

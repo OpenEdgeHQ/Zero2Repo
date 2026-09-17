@@ -120,7 +120,6 @@
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest==8.4.1' 'pytest-cov==3.0.0' 'hypothesis==5.35.4' 'setuptools==71.1.0' 'wheel==0.45.1' 'packaging==24.1' && rm -rf /var/lib/apt/lists/*",
     "repo_warm_command": "python3 -m pip install --no-cache-dir --break-system-packages -e .",
     "build_command": "true",
-    "env_probe_command": "PYTHONPATH=. python3 -c \"import os; import pathsel; assert os.path.realpath(pathsel.__file__).startswith(os.path.realpath('pathsel')); expr=pathsel.compile('foo.bar'); assert expr.search({'foo': {'bar': 'baz'}}) == 'baz'\"",
     "test_command_template": "PYTHONPATH=. python3 -m pytest {test_files}",
     "workdir": "."
   },

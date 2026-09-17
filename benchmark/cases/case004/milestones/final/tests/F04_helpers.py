@@ -8,10 +8,7 @@ observation could not be classified".
 
 from __future__ import annotations
 
-import base64
-import json
 import string
-import zlib
 from typing import Any
 
 from _harness import (
@@ -20,15 +17,16 @@ from _harness import (
     call,
     require_value,
 )
-from F01_helpers import runtime_ascii_letter
+from F01_helpers import _bytes_on_failure, runtime_ascii_letter
 from F02_helpers import (
-    PUBLIC_ID_MAPPING,
-    _inspectable_text_and_bytes,
-    join_payload_and_signature,
+    matching_signer,
     payload_section,
+    sign_with_matching_signer,
     signature_section,
     signed_garbage_token,
+    join_payload_and_signature,
 )
+from F03_helpers import require_distinct_failure_kinds
 
 PUBLIC_README_SECRET = "secret key"
 PUBLIC_README_SALT = "auth"
@@ -37,6 +35,9 @@ PUBLIC_README_MAPPING = {"id": 5, "name": PUBLIC_README_NAME}
 PUBLIC_INTEGER_LIST = [1, 2, 3, 4]
 THOUSAND_A = "a" * 1000
 COMPRESSION_LENGTH_LIMIT = 1000
+CROSS_LOAD_SECRET = "secret-key"
+SIGNED_LETTER_A_PAYLOAD = b"A"
+SIGNED_PERIOD_EIGHT_A_PAYLOAD = b".AAAAAAAA"
 URLSAFE_ALPHABET = frozenset(string.ascii_letters + string.digits + "_-.")
 FORBIDDEN_URLSAFE_CHARS = ("+", "/", "=", " ", "[", "]", '"', "'")
 
@@ -44,8 +45,8 @@ FORBIDDEN_URLSAFE_CHARS = ("+", "/", "=", " ", "[", "]", '"', "'")
 def load_urlsafe_surface() -> Any:
     """Import the URL-safe serialize-and-sign helper from the package root.
 
-    Import happens here, not at module import time, so this helper still
-    loads when the product is absent from ``sys.path``.
+    Import happens here, not at module import time, so construction is
+    observed through ``construct_urlsafe_helper``.
     """
     from signtoken import URLSafeSerializer
 
@@ -95,118 +96,6 @@ def make_urlsafe_timestamped_helper(*args: Any, **kwargs: Any) -> Any:
     return helper
 
 
-def require_no_extra_whitespace(token: Any) -> str:
-    """Require a URL-safe text token contains no extra whitespace.
-
-    Spaces, tabs, and newlines are extra whitespace. Raises if *token*
-    is not text — never flattens bytes.
-    """
-    if not isinstance(token, str):
-        raise AssertionError(
-            "URL-safe token must be text, not "
-            f"{type(token).__name__}: {token!r}"
-        )
-    extras = [ch for ch in (" ", "\t", "\n", "\r") if ch in token]
-    if extras:
-        raise AssertionError(
-            "URL-safe token still contains extra whitespace "
-            f"{extras!r}; token={token!r}"
-        )
-    print("urlsafe token has no extra whitespace", flush=True)
-    return token
-
-
-def _json_has_whitespace_between_tokens(text: str) -> bool:
-    """True when *text* has whitespace outside JSON string literals."""
-    in_string = False
-    escape = False
-    for ch in text:
-        if in_string:
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-            continue
-        if ch in " \t\n\r":
-            return True
-    return False
-
-
-def require_serialized_json_without_extra_whitespace(token: Any) -> str:
-    """Require the public dump serialized JSON with no extra whitespace.
-
-    Reads the payload section of a dumped URL-safe token with the
-    language's URL-safe decoder (and, when that section begins with a
-    period, the language's decompressor). Does not call a product
-    decoder and does not recompute a compact dump to compare against.
-    Probe failures raise — they are never treated as "compact".
-    """
-    section = _payload_section_text(token)
-    raw = section.encode("ascii")
-    if raw.startswith(b"."):
-        decoded = _stdlib_urlsafe_decode(raw[1:])
-        try:
-            decoded = zlib.decompress(decoded)
-        except Exception as exc:
-            raise AssertionError(
-                "payload section begins with a period but is not "
-                f"compressed JSON: {exc}"
-            ) from exc
-    else:
-        decoded = _stdlib_urlsafe_decode(raw)
-    try:
-        text = decoded.decode("utf-8")
-    except Exception as exc:
-        raise AssertionError(
-            f"serialized payload is not UTF-8 text: {exc}; raw={decoded!r}"
-        ) from exc
-    try:
-        json.loads(text)
-    except Exception as exc:
-        raise AssertionError(
-            f"serialized payload is not JSON: {exc}; text={text!r}"
-        ) from exc
-    if _json_has_whitespace_between_tokens(text):
-        raise AssertionError(
-            "URL-safe helper serialized JSON with extra whitespace "
-            f"between tokens: {text!r}"
-        )
-    print(
-        f"serialized JSON has no extra whitespace text={text!r}",
-        flush=True,
-    )
-    return text
-
-
-def require_exact_text_token(token: Any) -> str:
-    """Require *token* is text, not bytes.
-
-    Lines 193 and 197 name the token as URL-safe text, not bytes. A
-    text subclass that still presents as text satisfies that contrast;
-    only bytes or another non-text result is refused. The built-in
-    ``str`` identity is not pinned.
-    """
-    if isinstance(token, (bytes, bytearray)):
-        raise AssertionError(
-            "URL-safe token must be text, not bytes: "
-            f"{type(token).__name__}: {token!r}"
-        )
-    if not isinstance(token, str):
-        raise AssertionError(
-            "URL-safe token must be text, not "
-            f"{type(token).__name__}: {token!r}"
-        )
-    print(f"text token (not bytes) len={len(token)}", flush=True)
-    return token
-
-
 def require_urlsafe_text_token(token: Any) -> str:
     """Require *token* is text using only the URL-safe alphabet.
 
@@ -237,17 +126,17 @@ def require_urlsafe_text_token(token: Any) -> str:
     return token
 
 
-def _payload_section_text(token: Any) -> str:
-    """Payload section of a text token. Raises if the section cannot be cut."""
-    if not isinstance(token, str):
+def _payload_section_value(token: Any) -> str | bytes:
+    """Payload section of a text or bytes token. Raises if it cannot be cut."""
+    if not isinstance(token, (str, bytes)):
         raise HarnessError(
-            "payload-section observation requires a text token; "
+            "payload-section observation requires text or bytes; "
             f"got {type(token).__name__}"
         )
     section = payload_section(token)
-    if not isinstance(section, str):
+    if not isinstance(section, (str, bytes)):
         raise HarnessError(
-            "payload_section did not return text; "
+            "payload_section did not return text or bytes; "
             f"got {type(section).__name__}: {section!r}"
         )
     if not section:
@@ -255,10 +144,14 @@ def _payload_section_text(token: Any) -> str:
     return section
 
 
-def require_compressed_payload_section(token: Any) -> str:
+def require_compressed_payload_section(token: Any) -> str | bytes:
     """Require the payload section begins with a period."""
-    section = _payload_section_text(token)
-    if not section.startswith("."):
+    section = _payload_section_value(token)
+    if isinstance(section, bytes):
+        ok = section.startswith(b".")
+    else:
+        ok = section.startswith(".")
+    if not ok:
         raise AssertionError(
             "compressed payload section must begin with a period; "
             f"section_prefix={section[:24]!r}"
@@ -270,10 +163,14 @@ def require_compressed_payload_section(token: Any) -> str:
     return section
 
 
-def require_uncompressed_payload_section(token: Any) -> str:
+def require_uncompressed_payload_section(token: Any) -> str | bytes:
     """Require the payload section does not begin with a period."""
-    section = _payload_section_text(token)
-    if section.startswith("."):
+    section = _payload_section_value(token)
+    if isinstance(section, bytes):
+        leading = section.startswith(b".")
+    else:
+        leading = section.startswith(".")
+    if leading:
         raise AssertionError(
             "uncompressed payload section must not begin with a period; "
             f"section_prefix={section[:24]!r}"
@@ -290,7 +187,7 @@ def uppercase_signature_letters(token: Any) -> str:
 
     Full-token uppercasing of a URL-safe token also rewrites the
     URL-safe encoding of the payload (the alphabet is case-sensitive).
-    Holding the payload section fixed isolates L201's signature-mismatch
+    Holding the payload section fixed isolates the signature-mismatch
     refusal from that encoding covariate. Raises if *token* is not text
     or the transform is a no-op — never returns a sentinel.
     """
@@ -373,39 +270,6 @@ def require_readme_mapping(loaded: Any) -> Any:
     return loaded
 
 
-def byte_echoes_on_failure(exc: BaseException) -> tuple[bytes, ...]:
-    """Bytes carried on a failure object (payload echoes to strip).
-
-    Probe errors raise. An empty tuple means there is nothing to strip,
-    not that classification failed.
-    """
-    found: list[bytes] = []
-    for item in _inspectable_text_and_bytes(exc):
-        if isinstance(item, (bytes, bytearray)):
-            found.append(bytes(item))
-    print(f"failure byte echoes n={len(found)}", flush=True)
-    return tuple(found)
-
-
-def require_named_payload_markers(token: Any, obj: Any) -> str:
-    """Require the PRD-named payload markers for the public objects.
-
-    Thousand-letter ``a``: token shorter than 1000 and payload section
-    begins with a period (L196 / L197). The small ``id``-42 mapping, the
-    README mapping, and the integer list 1 through 4: payload section
-    does not begin with a period (uncompressed path). Other objects are
-    not given a marker here — probe errors still raise through the
-    helpers this function calls.
-    """
-    require_exact_text_token(token)
-    if obj == THOUSAND_A:
-        require_shorter_than(token)
-        require_compressed_payload_section(token)
-    elif obj in (PUBLIC_ID_MAPPING, PUBLIC_README_MAPPING, PUBLIC_INTEGER_LIST):
-        require_uncompressed_payload_section(token)
-    return token
-
-
 def require_id_equals(loaded: Any, ident: Any) -> Any:
     """Require *loaded* exposes ``id`` equal to *ident* (no type pin)."""
     try:
@@ -441,103 +305,123 @@ def runtime_letter_other_than_a() -> str:
     raise HarnessError("could not sample an ASCII letter other than 'a'")
 
 
-def _stdlib_urlsafe_decode(data: bytes) -> bytes:
-    """Stdlib URL-safe decode used only to arrange fixtures. Raises on failure."""
-    padded = data + b"=" * (-len(data) % 4)
-    try:
-        return base64.urlsafe_b64decode(padded)
-    except Exception as exc:
+def _sign_garbage_payload(
+    payload: str | bytes, secret: str | bytes, salt: str | bytes | None = None
+) -> bytes:
+    """Sign *payload* with an F01 signer matching *secret* and optional *salt*."""
+    if salt is None:
+        signer = matching_signer(secret)
+        token = sign_with_matching_signer(signer, payload)
+    else:
+        token = signed_garbage_token(payload, secret=secret, salt=salt)
+    if not isinstance(token, (str, bytes)):
         raise HarnessError(
-            f"stdlib URL-safe decode rejected {data!r}: {exc}"
-        ) from exc
-
-
-def _stdlib_urlsafe_rejected(data: bytes) -> bool:
-    """True when stdlib URL-safe decode fails. Probe errors raise."""
-    padded = data + b"=" * (-len(data) % 4)
-    try:
-        base64.urlsafe_b64decode(padded)
-    except Exception:
-        return True
-    return False
-
-
-def arrange_invalid_urlsafe_token(secret: str | bytes, salt: str | bytes) -> bytes:
-    """Signed token whose payload is not valid URL-safe encoding.
-
-    The payload does not begin with a period. Arrangement confirms
-    stdlib URL-safe decode fails before the token is signed. Not a
-    product API.
-    """
-    # Stdlib URL-safe decode ignores non-alphabet bytes, so "!!!" decodes
-    # as empty. Incorrect padding (one alphabet character + added '=')
-    # is what the stdlib actually refuses.
-    candidates = (
-        b"A",
-        b"B",
-        b"1",
-        b"-",
-        b"_",
-        b"A===",
-        b"xy",
+            "signed garbage token is neither text nor bytes; "
+            f"got {type(token).__name__}: {token!r}"
+        )
+    print(
+        f"signed garbage payload={payload!r} token_len={len(token)} salt_set={salt is not None}",
+        flush=True,
     )
+    return token
+
+
+def arrange_signed_letter_A_token(
+    secret: str | bytes, salt: str | bytes | None = None
+) -> bytes:
+    """F01-signed token whose payload is the letter ``A``. Not a product API."""
+    token = _sign_garbage_payload(SIGNED_LETTER_A_PAYLOAD, secret, salt)
+    print(
+        f"arranged signed letter-A payload token_len={len(token)}",
+        flush=True,
+    )
+    return token
+
+
+def arrange_signed_period_eight_A_token(
+    secret: str | bytes, salt: str | bytes | None = None
+) -> bytes:
+    """F01-signed token whose payload is ``.`` plus eight letters ``A``."""
+    token = _sign_garbage_payload(SIGNED_PERIOD_EIGHT_A_PAYLOAD, secret, salt)
+    require_compressed_payload_section(token)
+    print(
+        f"arranged signed period-plus-eight-A payload token_len={len(token)}",
+        flush=True,
+    )
+    return token
+
+
+def arrange_runtime_invalid_urlsafe_token(
+    secret: str | bytes, salt: str | bytes | None = None
+) -> bytes:
+    """Signed illegal encoding whose payload is not the letter ``A``."""
     chosen: bytes | None = None
-    for raw in candidates:
-        if raw.startswith(b"."):
-            continue
-        if _stdlib_urlsafe_rejected(raw):
-            chosen = raw
+    for _ in range(32):
+        ch = runtime_ascii_letter()
+        payload = ch.encode("ascii")
+        if payload != SIGNED_LETTER_A_PAYLOAD and not payload.startswith(b"."):
+            chosen = payload
             break
     if chosen is None:
         raise HarnessError(
-            "could not arrange a payload that stdlib URL-safe decode rejects"
+            "could not sample an illegal URL-safe payload other than the letter A"
         )
-    token = signed_garbage_token(chosen, secret=secret, salt=salt)
+    token = _sign_garbage_payload(chosen, secret, salt)
     print(
-        f"arranged invalid URL-safe encoding payload={chosen!r} "
+        f"arranged runtime invalid URL-safe payload={chosen!r} "
         f"token_len={len(token)}",
         flush=True,
     )
     return token
 
 
-def arrange_invalid_compressed_token(
-    secret: str | bytes, salt: str | bytes
+def arrange_runtime_invalid_compressed_token(
+    secret: str | bytes, salt: str | bytes | None = None
 ) -> bytes:
-    """Signed token that claims compression but is not valid compressed data.
+    """Signed fake-compressed payload that is not ``.AAAAAAAA``."""
+    chosen: bytes | None = None
+    for _ in range(32):
+        ch = runtime_ascii_letter()
+        if ch == "A":
+            continue
+        payload = b"." + (ch.encode("ascii") * 8)
+        if payload != SIGNED_PERIOD_EIGHT_A_PAYLOAD:
+            chosen = payload
+            break
+    if chosen is None:
+        raise HarnessError(
+            "could not sample a fake-compressed payload other than period-plus-eight-A"
+        )
+    token = _sign_garbage_payload(chosen, secret, salt)
+    require_compressed_payload_section(token)
+    print(
+        f"arranged runtime invalid compressed payload={chosen!r} "
+        f"token_len={len(token)}",
+        flush=True,
+    )
+    return token
 
-    Payload is a period plus stdlib URL-safe encoding of bytes that are
-    not zlib data. Arrangement confirms: decode after stripping the
-    period succeeds, and stdlib decompress fails. Not a product API.
+
+def assert_urlsafe_missing_not_malformed_timestamp(
+    missing: BaseException,
+    malformed: BaseException,
+    *,
+    covariates: tuple[Any, ...] = (),
+) -> None:
+    """L201: same-secret uncompressed missing is not the compressed malformed kind.
+
+    Does not pin exception class names or message wording. After stripping
+    both tokens, both objects, payload sections, and any bytes carried on
+    the failures (payload echo of those tokens), a stable kind difference
+    must remain. A helper that uses one no-datetime rejection for both
+    fixtures fails this contrast.
     """
-    raw_candidates = (
-        b"not-zlib-data",
-        b"xxxx",
-        b"\x00\x01\x02\x03hello",
-        b"plain-text-not-deflate",
+    echoes = tuple(_bytes_on_failure(missing) + _bytes_on_failure(malformed))
+    require_distinct_failure_kinds(
+        missing, malformed, covariates=covariates + echoes
     )
-    for raw in raw_candidates:
-        encoded = base64.urlsafe_b64encode(raw).rstrip(b"=")
-        try:
-            decoded = _stdlib_urlsafe_decode(encoded)
-        except HarnessError:
-            continue
-        if decoded != raw:
-            continue
-        try:
-            zlib.decompress(decoded)
-        except Exception:
-            payload = b"." + encoded
-            token = signed_garbage_token(payload, secret=secret, salt=salt)
-            print(
-                f"arranged invalid compressed payload={payload!r} "
-                f"token_len={len(token)}",
-                flush=True,
-            )
-            return token
-        # decompress succeeded — this candidate is not "invalid compressed"
-    raise HarnessError(
-        "could not arrange period + URL-safe encoding of non-compressed bytes"
+    print(
+        "URL-safe missing-timestamp refusal is a distinct kind "
+        "from malformed timestamp",
+        flush=True,
     )
-
-

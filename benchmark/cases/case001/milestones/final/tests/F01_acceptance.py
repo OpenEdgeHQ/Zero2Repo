@@ -1,19 +1,18 @@
 # feature: F01
 """FP-01: parse TOML document structure from a Python text string.
 
-Assertions follow Full_PRD.original.md FP-01 (L85–L123) plus the library
-substrate negative control (L69) and the failure carriers in FP-04 (L193,
-L217). Scalar fine rules, the binary-file entry, and decode-error location
-text are later feature points.
+Assertions follow Full_PRD.original.md FP-01 (L85–L123) and the failure
+carriers in FP-04 (L193, L217). A negative-control that disables the package
+under test is not applicable (L60). Extra nesting past the scored 470/310
+lower bounds is the implementer's and is not scored (L116). Scalar fine
+rules, the binary-file entry, and decode-error location text are later
+feature points.
 """
 
 from __future__ import annotations
 
-import sys
-
 from tomlparse import TOMLDecodeError, loads  # noqa: F401 — public string-parse surface
 
-from _harness import product_package_name, run_python
 from F01_helpers import (
     dotted_key_source,
     is_mapping,
@@ -25,7 +24,6 @@ from F01_helpers import (
     require_mapping,
     require_nested_empty_except_chain,
     require_path,
-    require_recursion_failure,
     require_sequence_mappings_contain,
     require_sequence,
     require_str_keys,
@@ -120,7 +118,7 @@ def _walk_dotted_assignment(mapping, parts: int):
 
 
 # ---------------------------------------------------------------------------
-# S. Library substrate negative control (L69)
+# S. Parse after install (L77, L85): name = "probe"
 # ---------------------------------------------------------------------------
 
 
@@ -131,26 +129,15 @@ def test_probe_document_parses_when_package_importable():
 
 
 def test_parse_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        f"from {pkg} import loads\n"
-        "doc = loads('name = \"probe\"')\n"
-        "print('PROBE_NAME=' + doc['name'])\n"
-    )
-    outcome = run_python(argv=["-S", "-c", code], include_product=False)
-    print(
-        f"absent-package rc={outcome.returncode} "
-        f"stdout={outcome.stdout_text!r} stderr={outcome.stderr_text[:500]!r}",
-        flush=True,
-    )
-    assert "PROBE_NAME=probe" not in outcome.stdout_text, (
-        "parse of name = \"probe\" still yielded a successful mapping after "
-        "the package was removed from the import path"
-    )
-    assert outcome.returncode != 0, (
-        "child exited 0 after the package was removed from the import path; "
-        f"stdout={outcome.stdout_text!r}"
-    )
+    """Parse-after-install of name = "probe" still yields a mapping.
+
+    Absence of the package from the import path is not a specified
+    observable. This test does not require a child-process parse to fail
+    after the package is removed.
+    """
+    doc = _parse_mapping('name = "probe"')
+    assert require_path(doc, "name") == "probe"
+    assert isinstance(require_path(doc, "name"), str)
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +640,13 @@ def test_later_single_bracket_attaches_to_current_aot_item():
     items = require_sequence(require_path(doc, "arr"))
     assert len(items) == 2
     require_sequence_mappings_contain(items, "subtab")
+    first_sub = require_path(items[0], "subtab")
+    second_sub = require_path(items[1], "subtab")
+    assert is_mapping(first_sub) and is_mapping(second_sub)
+    assert require_path(first_sub, "val") == 1
+    assert _is_int(require_path(first_sub, "val"))
+    assert require_path(second_sub, "val") == 2
+    assert _is_int(require_path(second_sub, "val"))
 
 
 def test_runtime_later_single_bracket_attaches_to_current_aot_item():
@@ -670,6 +664,13 @@ def test_runtime_later_single_bracket_attaches_to_current_aot_item():
     items = require_sequence(require_path(doc, arr))
     assert len(items) == 2
     require_sequence_mappings_contain(items, sub)
+    first_sub = require_path(items[0], sub)
+    second_sub = require_path(items[1], sub)
+    assert is_mapping(first_sub) and is_mapping(second_sub)
+    assert require_path(first_sub, leaf) == n1
+    assert _is_int(require_path(first_sub, leaf))
+    assert require_path(second_sub, leaf) == n2
+    assert _is_int(require_path(second_sub, leaf))
 
 
 def test_implied_parent_of_dotted_aot_is_mapping():
@@ -1308,21 +1309,18 @@ def test_runtime_intermediate_dotted_key_succeeds():
 
 
 def test_nesting_past_recursion_limit_is_recursion_error():
-    over = sys.getrecursionlimit() + 2
-    print(f"over-limit depth={over}", flush=True)
-    array_exc = require_recursion_failure(parse_text(nested_array_source(over)))
-    table_exc = require_recursion_failure(parse_text(nested_inline_table_source(over)))
-    dotted_exc = require_recursion_failure(parse_text(dotted_key_source(over)))
-    key = runtime_token()
-    n, m = runtime_int(), runtime_int()
-    decode_exc = require_decode_failure(parse_text(f"{key} = {n}\n{key} = {m}\n"))
-    assert isinstance(array_exc, RecursionError)
-    assert isinstance(table_exc, RecursionError)
-    assert isinstance(dotted_exc, RecursionError)
-    assert isinstance(decode_exc, TOMLDecodeError)
-    assert isinstance(decode_exc, ValueError)
-    assert not isinstance(decode_exc, RecursionError)
-    assert not isinstance(array_exc, TOMLDecodeError)
-    assert type(array_exc) is not type(decode_exc)
-    assert type(table_exc) is not type(decode_exc)
-    assert type(dotted_exc) is not type(decode_exc)
+    """Scored lower-bound depths yield mappings. Extra depth is not scored.
+
+    L116 scores 470 nested inline arrays, 310 nested inline tables, and 310
+    dotted parts. How much farther an implementation can nest, and whether a
+    still-deeper document fails because the interpreter refuses a deeper
+    call, is not scored. This test does not require RecursionError, and does
+    not forbid a decode error, at extra depth.
+    """
+    print("scored lower bounds: array=470 inline-table=310 dotted=310", flush=True)
+    array_doc = require_mapping(parse_text(nested_array_source(470)))
+    _walk_nested_sequence(require_path(array_doc, "arr"), 470)
+    table_doc = require_mapping(parse_text(nested_inline_table_source(310)))
+    _walk_nested_inline_tables(table_doc, 310)
+    dotted_doc = require_mapping(parse_text(dotted_key_source(310)))
+    _walk_dotted_assignment(dotted_doc, 310)

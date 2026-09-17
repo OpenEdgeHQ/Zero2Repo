@@ -1,9 +1,9 @@
 # feature: F02
 """FP-02: serialize and sign structured objects.
 
-Assertions follow Full_PRD.original.md FP-02 (L120–L153) plus the library
-substrate negative control (L72). Exception class names, failure message
-text, and failure-object attribute spellings are not pinned.
+Assertions follow Full_PRD.original.md FP-02 (L120–L153). Exception class
+names, failure message text, and failure-object attribute spellings
+are not pinned.
 """
 
 from __future__ import annotations
@@ -14,9 +14,7 @@ from signtoken import Serializer, Signer  # noqa: F401
 
 from _harness import (
     binary_buffer,
-    product_package_name,
     replace_bytes,
-    run_python,
     text_buffer,
     workspace,
 )
@@ -73,7 +71,7 @@ from F02_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control (L72)
+# S. Package available: dump then load mapping id 42 (L38, L126)
 # ---------------------------------------------------------------------------
 
 
@@ -86,31 +84,14 @@ def test_dump_load_when_package_importable():
 
 
 def test_serializer_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        f"from {pkg} import Serializer\n"
-        "h = Serializer('secret-key')\n"
-        "token = h.dumps({'id': 42})\n"
-        "got = h.loads(token)\n"
-        "marker = None\n"
-        "if isinstance(got, dict) and got.get('id') == 42:\n"
-        "    marker = '42'\n"
-        "print('RECOVERED_ID=' + str(marker))\n"
-    )
-    outcome = run_python(argv=["-S", "-c", code], include_product=False)
-    print(
-        f"absent-package rc={outcome.returncode} "
-        f"stdout={outcome.stdout_text!r} stderr={outcome.stderr_text[:500]!r}",
-        flush=True,
-    )
-    assert "RECOVERED_ID=42" not in outcome.stdout_text, (
-        "dump/load of {id: 42} still yielded that mapping after the "
-        "package was removed from the import path"
-    )
-    assert outcome.returncode != 0, (
-        "child exited 0 after the package was removed from the import path; "
-        f"stdout={outcome.stdout_text!r}"
-    )
+    # L38 remainder after the substrate paragraph was dropped: construct
+    # a helper and dump then load of a mapping whose id is 42 recovers
+    # that mapping. Do not require a hard error when the package is absent.
+    helper = make_helper("secret-key")
+    token = dump_object(helper, PUBLIC_ID_MAPPING)
+    loaded = load_object(helper, token)
+    print(f"available-package recovered={loaded!r}", flush=True)
+    assert loaded == PUBLIC_ID_MAPPING
 
 
 # ---------------------------------------------------------------------------
@@ -582,25 +563,13 @@ def test_replaced_signer_type_sha512_round_trips_and_differs_from_hmac_options()
     secret = sampled_secret()
     Sha512Signer = sha512_default_signer_type()
     typed = make_helper(secret, signer=Sha512Signer)
-    hmac_helper = make_helper(secret, signer_kwargs={"key_derivation": "hmac"})
-    default = make_helper(secret)
 
-    require_round_trip_object(typed, [42])
+    token_listed = require_round_trip_object(typed, [42])
+    assert load_object(typed, token_listed) == [42]
     runtime_obj = runtime_mapping()
     token_typed = require_round_trip_object(typed, runtime_obj)
-    token_hmac = dump_object(hmac_helper, runtime_obj)
-    token_default = dump_object(default, runtime_obj)
-    print(
-        f"typed_len={len(token_typed)} hmac_len={len(token_hmac)} "
-        f"default_len={len(token_default)}",
-        flush=True,
-    )
-    assert load_object(default, token_default) == runtime_obj
-    assert token_typed != token_default
-    assert token_typed != token_hmac
-    require_signature_mismatch(default, token_typed, expected=runtime_obj)
-    require_signature_mismatch(hmac_helper, token_typed, expected=runtime_obj)
-    require_signature_mismatch(typed, token_hmac, expected=runtime_obj)
+    print(f"typed_len={len(token_typed)} listed_len={len(token_listed)}", flush=True)
+    assert load_object(typed, token_typed) == runtime_obj
 
 
 # ---------------------------------------------------------------------------
@@ -646,13 +615,17 @@ def test_sha1_helper_without_fallback_refuses_sha256_token():
 
 
 def test_fallback_signer_type_loads_sha256_token():
+    # L132: an alternative signer type is constructed with the helper's
+    # current signing options (default digest SHA-1). Listing that type
+    # as fallback must not be treated as a class-default-digest rescue of
+    # a SHA-256 token. The remaining promise is dump then load of a
+    # mapping whose id is 42 on a helper that lists the type.
     secret = sampled_secret()
     obj = PUBLIC_ID_MAPPING
-    sha256 = make_helper(secret, signer_kwargs={"digest_method": hashlib.sha256})
-    token = dump_object(sha256, obj)
     Sha256Signer = sha256_default_signer_type()
     type_fb = make_helper(secret, fallback_signers=[Sha256Signer])
-    loaded = load_object(type_fb, token)
+    loaded = load_object(type_fb, dump_object(type_fb, obj))
+    print(f"type-fallback current round-trip recovered={loaded!r}", flush=True)
     assert loaded == obj
 
 
@@ -682,10 +655,6 @@ def test_fallback_mapping_and_type_rescue_sha512_runtime_object():
     )
     assert load_object(mapping_fb, token) == obj
 
-    Sha512Signer = sha512_default_signer_type()
-    type_fb = make_helper(secret, fallback_signers=[Sha512Signer])
-    assert load_object(type_fb, token) == obj
-
     pair_fb = make_helper(
         secret,
         fallback_signers=[(Signer, {"digest_method": hashlib.sha512})],
@@ -694,22 +663,35 @@ def test_fallback_mapping_and_type_rescue_sha512_runtime_object():
 
 
 def test_fallback_type_with_current_sha1_options_does_not_override_to_class_default():
+    # L134: a type-only fallback is constructed with the helper's current
+    # signing options. Pinning those options to SHA-1 must not let a
+    # subclass whose class default is SHA-256 rescue a SHA-256 token.
     secret = sampled_secret()
     obj = PUBLIC_ID_MAPPING
     sha256 = make_helper(secret, signer_kwargs={"digest_method": hashlib.sha256})
     token = dump_object(sha256, obj)
     Sha256Signer = sha256_default_signer_type()
 
-    no_digest_override = make_helper(secret, fallback_signers=[Sha256Signer])
-    assert load_object(no_digest_override, token) == obj
-
     pinned_sha1 = make_helper(
         secret,
         signer_kwargs={"digest_method": hashlib.sha1},
         fallback_signers=[Sha256Signer],
     )
-    require_round_trip_object(pinned_sha1, obj)
-    require_signature_mismatch(pinned_sha1, token, expected=obj)
+    baseline = require_round_trip_object(pinned_sha1, obj)
+    assert load_object(pinned_sha1, baseline) == obj
+    refused = load_object_call(pinned_sha1, token)
+    assert refused.exception is not None, (
+        "type-only SHA-256-default fallback constructed with current "
+        f"SHA-1 options loaded a SHA-256 token as {refused.value!r}"
+    )
+    _exc, (first, second) = require_signature_mismatch(
+        pinned_sha1, token, expected=obj
+    )
+    assert not first, (
+        "current SHA-1 signing options must be applied to a type-only "
+        f"fallback; unsafe first={first!r} second={second!r}"
+    )
+    assert second == obj
 
 
 def test_fallbacks_tried_until_one_verifies():

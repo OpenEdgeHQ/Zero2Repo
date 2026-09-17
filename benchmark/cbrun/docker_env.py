@@ -10,12 +10,15 @@ judge runs against the final workspace.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from .state import platform_name
 
 __all__ = [
     "docker_available",
@@ -61,6 +64,7 @@ class Container:
 
     def __init__(self, container_id: str):
         self.container_id = container_id
+        self.paused = False
 
     @staticmethod
     def build_run_argv(
@@ -78,7 +82,7 @@ class Container:
         and the Docker socket is never mounted, so a solving agent cannot reach
         the host daemon.
         """
-        argv = ["docker", "run", "-d", "--rm"]
+        argv = ["docker", "run", "--platform", platform_name(), "-d", "--rm"]
         if name:
             argv += ["--name", name]
         if gpus:
@@ -87,8 +91,8 @@ class Container:
             argv += ["--network", network]
         for host in block_hosts or ():
             argv += ["--add-host", f"{host}:0.0.0.0"]
-        for key, value in (env or {}).items():
-            argv += ["-e", f"{key}={value}"]
+        for key in (env or {}):
+            argv += ["-e", key]
         argv += [image, "sleep", "infinity"]
         return argv
 
@@ -112,7 +116,12 @@ class Container:
             name=name,
             block_hosts=block_hosts,
         )
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            env={**os.environ, **(env or {})},
+        )
         if proc.returncode != 0:
             raise RuntimeError(f"docker run failed: {proc.stderr.strip()}")
         return cls(proc.stdout.strip())
@@ -127,6 +136,10 @@ class Container:
         user: str | None = None,
     ) -> ExecResult:
         """Run a bounded command, capturing output (used for install/judge)."""
+        if timeout_sec is not None:
+            if timeout_sec <= 0:
+                raise ValueError("command timeout must be positive")
+            command = f"timeout --signal=KILL {timeout_sec:g} bash -o pipefail -lc {_shq(command)}"
         argv = self._exec_argv(command, workdir=workdir, env=env, user=user)
         start = time.monotonic()
         try:
@@ -134,10 +147,12 @@ class Container:
                 argv,
                 capture_output=True,
                 text=True,
-                timeout=timeout_sec,
+                errors="replace",
+                env={**os.environ, **(env or {})},
+                timeout=timeout_sec + 5 if timeout_sec is not None else 60,
             )
         except subprocess.TimeoutExpired as exc:
-            tail = (exc.stdout or "") + (exc.stderr or "")
+            tail = _as_text(exc.stdout) + _as_text(exc.stderr)
             return ExecResult(
                 exit_code=124,
                 timed_out=True,
@@ -171,7 +186,8 @@ class Container:
         (typically ``/app``) both stay quiet for ``stall_window_sec``.
         """
         wrapped = (
-            f"timeout --signal=KILL {int(wall_timeout_sec)} bash -lc {_shq(command)}"
+            f"timeout --signal=KILL {int(wall_timeout_sec)} "
+            f"bash -o pipefail -lc {_shq(command)}"
         )
         argv = self._exec_argv(wrapped, workdir=workdir, env=env, user=user)
 
@@ -186,6 +202,8 @@ class Container:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",
+            env={**os.environ, **(env or {})},
             bufsize=1,
         )
 
@@ -312,6 +330,18 @@ class Container:
         res = self.exec(f"test -e {_shq(path)}")
         return res.exit_code == 0
 
+    def pause(self) -> None:
+        """Freeze candidate processes before copying a snapshot."""
+        if self.paused:
+            return
+        proc = subprocess.run(
+            ["docker", "pause", self.container_id],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode:
+            raise RuntimeError(f"cannot freeze candidate container: {proc.stderr.strip()}")
+        self.paused = True
+
     def remove(self) -> None:
         subprocess.run(
             ["docker", "rm", "-f", self.container_id],
@@ -332,9 +362,9 @@ class Container:
             argv += ["-w", workdir]
         if user:
             argv += ["-u", user]
-        for key, value in (env or {}).items():
-            argv += ["-e", f"{key}={value}"]
-        argv += [self.container_id, "bash", "-lc", command]
+        for key in (env or {}):
+            argv += ["-e", key]
+        argv += [self.container_id, "bash", "-o", "pipefail", "-lc", command]
         return argv
 
     def __enter__(self) -> "Container":
@@ -348,6 +378,10 @@ def _shq(text: str) -> str:
     import shlex
 
     return shlex.quote(text)
+
+
+def _as_text(value: str | bytes | None) -> str:
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
 
 
 def _tail(text: str, limit: int = 4000) -> str:

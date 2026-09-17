@@ -59,7 +59,7 @@ Feature points below group these entries by independently verifiable capability.
 - **Form factor:** A pure-Python library with zero runtime third-party dependencies. No compiled extensions, native code, GPU, or accelerator are required or claimed.
 - **Language:** Python 3.8 or newer, including the CPython and PyPy implementations the project tests.
 - **Platforms:** Intended to work on Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter.
-- **Hardware:** CPU-only. The mandatory execution substrate is a real host able to load httpwire from this repository’s source tree and encode then parse one GET request. There is no accelerator profile.
+- **Hardware:** CPU-only. There is no accelerator profile and no removable extra device. A supported interpreter on a standard host is enough to install from this source tree and exercise the library. The package under test, the interpreter, and the standard library are not removable substrates.
 - **I/O:** httpwire contains no I/O. Bytes in and bytes out are the entire interface to the network. A stub that “sends” by writing to a real socket inside the library is not this product.
 - **Protocol dialect:** httpwire itself speaks only HTTP/1.1 on the wire. It understands HTTP/1.0 peers when reading. It does not implement HTTP/2.
 - **Scope:** RFC 7230 message syntax and routing, plus `Expect: 100-continue` from RFC 7231. Not URL routing, conditional GET, cookie policy, or content negotiation.
@@ -76,7 +76,7 @@ For every feature point:
 
 Cheaper proxies (the standard-library HTTP client or server, a regex that splits on blank lines, a hard-coded request/response pair, or a library that performs I/O itself) do **not** satisfy core capabilities. There is no approved degradation scenario that replaces httpwire’s event-to-bytes engine for a core capability.
 
-**Negative control (library substrate):** When httpwire is deliberately not available to an isolated process, constructing a client-role connection and encoding a GET for `/` with Host `example.com` must fail to produce a successful httpwire request encoding — a hard assertion, not a skip. When the interpreter is present and the package is loaded from this tree, that same send yields bytes that a server-role connection can feed and pull back as a GET request for `/` with that Host. Output-equality alone is not proof that the real package ran.
+**Negative control:** none. This product has no removable mandatory substrate (no GPU, accelerator, or extra service). A mandatory CPU-only profile only means Python runs on CPU; it does not license a negative-control clause. Disabling the package under test or the interpreter is not a negative control.
 
 ## Non-goals
 

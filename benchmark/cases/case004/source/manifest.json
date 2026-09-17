@@ -1,16 +1,15 @@
 {
   "schema_version": 3,
   "case_id": "case004",
+  "repo_slug": "itsdangerous",
+  "repository_url": "https://github.com/pallets/itsdangerous.git",
+  "commit": "672971d66a2ef9f85151e53283113f33d642dabd",
   "sensitive_terms": [
     "ItsDangerous",
     "JSONWebSignatureSerializer",
     "Pallets",
     "TimedJSONWebSignatureSerializer",
-    "TimedSerializer",
-    "TimestampSigner",
-    "URLSafeSerializer",
     "URLSafeSerializerMixin",
-    "URLSafeTimedSerializer",
     "contact@palletsprojects.com",
     "discord.gg/pallets",
     "github.com/pallets",
@@ -96,19 +95,15 @@
     "timed_json_web_signature_serializer",
     "timed_serializer",
     "timedjsonwebsignatureserializer",
-    "timedserializer",
     "timestamp-signer",
     "timestamp_signer",
-    "timestampsigner",
     "url-safe-serializer",
     "url-safe-serializer-mixin",
     "url-safe-timed-serializer",
     "url_safe_serializer",
     "url_safe_serializer_mixin",
     "url_safe_timed_serializer",
-    "urlsafeserializer",
-    "urlsafeserializermixin",
-    "urlsafetimedserializer"
+    "urlsafeserializermixin"
   ],
   "runner": {
     "schema_version": 1,
@@ -118,11 +113,42 @@
     "build_command": "",
     "env_probe_command": "PYTHONPATH=src python3 -c \"import os; import signtoken; from signtoken import URLSafeSerializer; assert os.path.realpath(signtoken.__file__).startswith(os.path.realpath('src')); s=URLSafeSerializer('secret key', 'auth'); token=s.dumps({'id': 5, 'name': 'probe'}); assert s.loads(token)=={'id': 5, 'name': 'probe'}\"",
     "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "test_file_patterns": [
+      "tests/**/*.py"
+    ],
+    "source_file_patterns": [
+      "src/**/*.py"
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "signtoken",
     "tech_stack": "Pure Python cryptographic signing helpers for untrusted payloads (flit_core src layout, zero runtime deps, pytest); CPU-only"
   },
-  "status": "released"
+  "hardware_requirements": {
+    "schema_version": 1,
+    "summary": "This is a pure-Python library that cryptographically signs serialized payloads so they can be sent to untrusted environments and verified on return. It has no compiled extensions, native code, or GPU/accelerator requirements, and zero declared runtime dependencies. The documented interpreter floor is Python 3.10 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite.",
+    "profiles": [
+      {
+        "id": "cpu_baseline",
+        "label": "CPU baseline",
+        "mandatory": true,
+        "platforms": [
+          "linux",
+          "darwin",
+          "windows"
+        ],
+        "required_platforms": [
+          "linux"
+        ],
+        "description": "Standard CPU-only Python execution path. Core capability is signing a small mapping into a compact token and verifying that loading the token recovers the original mapping.",
+        "probes": [
+          "cd /opt/codingbench/repo && PYTHONPATH=src python3 -c \"import signtoken, os; assert os.path.realpath(signtoken.__file__).startswith(os.path.realpath('src')); from signtoken import URLSafeSerializer; s=URLSafeSerializer('secret-key'); token=s.dumps({'id': 5}); assert s.loads(token)=={'id': 5}\""
+        ],
+        "setup_notes": "pyproject.toml requires-python >=3.10; the tests dependency group is pytest and freezegun. No system libraries beyond a normal Python toolchain. Documented tox environments also include style, typing, and docs.",
+        "build_notes": "No compiled/native build step. Packaging uses flit_core (pyproject.toml [build-system] requires flit_core<4); the importable package lives under the src layout. Editable install: pip install -e ."
+      }
+    ]
+  },
+  "status": "draft"
 }

@@ -253,6 +253,24 @@ def test_hundred_thousand_brackets_fail_as_parse_not_overflow():
     assert result.ok is False
 
 
+def test_default_nesting_rejects_closed_deep_flow_sequence():
+    """Omitted maxDepth must refuse a closed nest past the finite default.
+
+    js-yaml's omitted default is 100. A closed 200-deep flow sequence
+    succeeds or overflows if the implementation has no finite default.
+    """
+    source = nested_empty_flow_sequences(200)
+    print(f"closed deep flow chars={len(source)} depth=200", flush=True)
+    result = load(source)
+    error = require_parse_failure_not_host_overflow(result)
+    print(
+        f"closed deep flow ok={result.ok!r} "
+        f"report={observer_visible_report(error)!r}",
+        flush=True,
+    )
+    assert result.ok is False
+
+
 def test_aliases_do_not_count_toward_nesting():
     require_parse_failure(load(TEN_NESTED, with_nesting_limit(5)))
     anchor = unique_token()
@@ -550,6 +568,11 @@ def test_repeated_merge_source_counts_walked_keys():
     assert len(once_seq) == 2
     _assert_merged_keys(once_seq[1], pairs)
     require_parse_failure(load(twice, opts))
+    opts_six = merge_parse_options(with_yaml11_schema(), with_merge_budget(6))
+    twice_ok = require_sequence(require_document(load(twice, opts_six)))
+    assert len(twice_ok) == 2
+    _assert_merged_keys(twice_ok[1], pairs)
+    print(f"double-apply at budget 6 keeps {len(pairs)} keys", flush=True)
 
 
 def test_disabled_merge_budget_allows_150_keys():

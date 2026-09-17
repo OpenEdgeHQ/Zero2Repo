@@ -8,8 +8,8 @@ observation could not be classified".
 
 from __future__ import annotations
 
-import base64
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -20,6 +20,7 @@ from _harness import (
     as_pair,
     as_text,
     call,
+    frozen_clock,
     require_value,
     rsplit_once,
 )
@@ -44,11 +45,67 @@ PUBLIC_VALUE = "value"
 PUBLIC_CHANGED_VALUE = "my string"
 PUBLIC_CHANGE_OLD = b"my"
 PUBLIC_CHANGE_NEW = b"other"
-MAX_AGE_SECONDS = 10
-AGE_SUCCESS_SECONDS = 1
-AGE_EXPIRED_SECONDS = 11
-PUBLIC_SIGNING_INSTANT = datetime(2020, 6, 24, 0, 9, 5, tzinfo=timezone.utc)
-OTHER_SIGNING_INSTANT = datetime(2018, 3, 11, 14, 22, 0, tzinfo=timezone.utc)
+
+
+class MAX_AGE_SECONDS(int):
+    """PRD maximum age: 10 seconds.
+
+    Downstream suites import this name, pass it as ``max_age``, and
+    subtract it from other age bindings. The binding is the integer 10,
+    not a callable.
+    """
+
+
+MAX_AGE_SECONDS = MAX_AGE_SECONDS(10)
+
+
+class AGE_SUCCESS_SECONDS(int):
+    """One second after signing still succeeds with maximum age 10.
+
+    Downstream suites import this name and tick the frozen clock by it.
+    The binding is the integer 1, not a callable.
+    """
+
+
+AGE_SUCCESS_SECONDS = AGE_SUCCESS_SECONDS(1)
+
+
+class AGE_EXPIRED_SECONDS(int):
+    """Eleven seconds after signing is expired when maximum age is 10.
+
+    Downstream suites import this name, tick the frozen clock by it, and
+    subtract the success age from it. The binding is the integer 11, not
+    a callable.
+    """
+
+
+AGE_EXPIRED_SECONDS = AGE_EXPIRED_SECONDS(11)
+
+
+class PUBLIC_SIGNING_INSTANT(datetime):
+    """Frozen UTC instant used as the public signing-time oracle.
+
+    Downstream suites import this name and freeze the clock on it.
+    The binding is 2020-06-24 00:09:05 UTC, not a callable.
+    """
+
+
+PUBLIC_SIGNING_INSTANT = PUBLIC_SIGNING_INSTANT(
+    2020, 6, 24, 0, 9, 5, tzinfo=timezone.utc
+)
+
+
+class OTHER_SIGNING_INSTANT(datetime):
+    """A second frozen UTC instant, distinct from the public oracle.
+
+    Downstream suites import this name and freeze the clock on it.
+    The binding is 2018-03-11 14:22:00 UTC, not a callable.
+    """
+
+
+OTHER_SIGNING_INSTANT = OTHER_SIGNING_INSTANT(
+    2018, 3, 11, 14, 22, 0, tzinfo=timezone.utc
+)
 FUTURE_CHECK_INSTANT = datetime(1971, 5, 31, 0, 0, 0, tzinfo=timezone.utc)
 DUMMY_UNDECODABLE_SUFFIX = b"notAtimeStamp!!"
 
@@ -167,6 +224,20 @@ def require_integer_id(loaded: Any, *, ident: int = 42) -> Any:
         flush=True,
     )
     return loaded
+
+
+def runtime_integer_list() -> list[int]:
+    """A short list of integers, not the public id-42 mapping.
+
+    Used so a helper that only round-trips mappings, or that memorizes
+    one canned triple, cannot satisfy the non-mapping dump/load arm.
+    """
+    length = 2 + secrets.randbelow(3)
+    items = [10 + secrets.randbelow(10**6) for _ in range(length)]
+    if items == [7, 8, 9]:
+        items = [items[0] + 1, *items[1:]]
+    print(f"runtime integer list={items!r}", flush=True)
+    return items
 
 
 def require_integer_list(loaded: Any, expected: list[int]) -> Any:
@@ -493,63 +564,63 @@ def dummy_undecodable_time_suffix() -> bytes:
     return DUMMY_UNDECODABLE_SUFFIX
 
 
-def _encode_epoch_time_field(epoch: int) -> bytes:
-    """Fixture encoding: URL-safe base64 of the big-endian integer bytes."""
-    raw = epoch.to_bytes(8, "big").lstrip(b"\x00") or b"\x00"
-    return base64.urlsafe_b64encode(raw).rstrip(b"=")
+def _product_time_field(signer: Any, dummy: bytes) -> bytes:
+    """Middle time field this helper just emitted. Not a product API."""
+    token = sign_value(signer, dummy)
+    field = require_three_part_layout(token, dummy)
+    return require_bytes(field)
 
 
-def out_of_range_time_field() -> bytes:
-    """L174 fixture: time-like encoding that cannot become a calendar date.
+def in_range_time_field(signer: Any) -> bytes:
+    """L174 contrast: a time field this helper emitted at an in-range instant.
 
-    Uses stdlib calendar conversion to pick the epoch. Not a product API.
+    Freezes the clock at a convertible Unix epoch and reads the middle
+    field of a freshly signed token. Epoch 0 is skipped: some integer
+    encodings of zero are empty, which is not a time field. Does not
+    spell the field as this checkout's URL-safe base64 of the integer
+    bytes.
     """
-    candidates = (
-        253402300800,
-        2**40,
-        2**50,
-        2**62,
-    )
-    chosen: int | None = None
-    for epoch in candidates:
-        try:
-            datetime.fromtimestamp(epoch, tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            chosen = epoch
-            break
-    if chosen is None:
-        raise HarnessError(
-            "stdlib accepted every out-of-range candidate as a calendar date"
-        )
-    field = _encode_epoch_time_field(chosen)
+    dummy = b"inr-" + secrets.token_hex(8).encode("ascii")
+    # Non-zero so the middle field cannot be the empty encoding of 0.
+    epoch = 1
+    datetime.fromtimestamp(epoch, tz=timezone.utc)
+    with frozen_clock(epoch):
+        field = _product_time_field(signer, dummy)
     print(
-        f"out-of-range time field epoch={chosen} field={field!r}",
+        f"in-range time field from helper at epoch={epoch} field={field!r}",
         flush=True,
     )
     return field
 
 
-def in_range_time_field() -> bytes:
-    """L174 contrast fixture: time-like encoding that is a calendar date.
+def out_of_range_time_field(signer: Any) -> bytes:
+    """L174 fixture: a time field this helper emitted that is not a calendar date.
 
-    Same encoding family as :func:`out_of_range_time_field`, so the two
-    replacements differ only in whether the field converts to a date.
-    Not a product API.
+    The sealed clock helper refuses to start at an overflow epoch because
+    it prints a calendar instant. Freeze at a last-year instant, tick past
+    the last convertible date, then read the middle field this helper
+    itself just signed. Does not encode a chosen overflow epoch with this
+    checkout's wire spelling.
     """
-    candidates = (0, 1, 1_000_000, 1_600_000_000)
-    for epoch in candidates:
+    dummy = b"oor-" + secrets.token_hex(8).encode("ascii")
+    base = datetime(9999, 12, 1, tzinfo=timezone.utc)
+    for extra_seconds in (86400 * 400, 86400 * 4000, 10**10, 10**12):
+        with frozen_clock(base) as clock:
+            clock.tick(extra_seconds)
+            used_epoch = clock.epoch
+            field = _product_time_field(signer, dummy)
         try:
-            datetime.fromtimestamp(epoch, tz=timezone.utc)
+            datetime.fromtimestamp(used_epoch, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
-            continue
-        field = _encode_epoch_time_field(epoch)
-        print(
-            f"in-range time field epoch={epoch} field={field!r}",
-            flush=True,
-        )
-        return field
+            print(
+                "out-of-range time field from helper "
+                f"epoch={used_epoch} field={field!r}",
+                flush=True,
+            )
+            return field
     raise HarnessError(
-        "stdlib rejected every in-range candidate as a calendar date"
+        "could not freeze a clock past the last calendar date for the "
+        "out-of-range time-field fixture"
     )
 
 
@@ -588,7 +659,7 @@ def arrange_replaced_out_of_range_token(
     """L174: timestamped sign, then replace only the time field. Do not re-sign."""
     token = sign_value(signer, value)
     require_three_part_layout(token, expected_bytes(value))
-    changed = replace_time_field(token, out_of_range_time_field())
+    changed = replace_time_field(token, out_of_range_time_field(signer))
     if not isinstance(changed, bytes):
         raise HarnessError(
             f"replaced token is not bytes; got {type(changed)!r}"
@@ -611,7 +682,7 @@ def arrange_replaced_in_range_token(
     """
     token = sign_value(signer, value)
     require_three_part_layout(token, expected_bytes(value))
-    changed = replace_time_field(token, in_range_time_field())
+    changed = replace_time_field(token, in_range_time_field(signer))
     if not isinstance(changed, bytes):
         raise HarnessError(
             f"replaced token is not bytes; got {type(changed)!r}"
@@ -748,12 +819,45 @@ def require_distinct_failure_kinds(
     left = failure_kind_parts(first, covariates=covariates)
     right = failure_kind_parts(second, covariates=covariates)
     print(f"kind-parts left={left!r} right={right!r}", flush=True)
-    if left == right:
-        raise AssertionError(
-            "the two refusals are not distinguishable after stripping "
-            "input tokens, payloads, and other covariates; "
-            f"left={left!r} right={right!r}"
-        )
+    assert left != right, (
+        "the two refusals are not distinguishable after stripping "
+        "input tokens, payloads, and other covariates; "
+        f"left={left!r} right={right!r}"
+    )
+
+
+def assert_signature_mismatch_not_missing_timestamp(
+    mismatch: BaseException,
+    missing: BaseException,
+    *,
+    covariates: tuple[Any, ...] = (),
+) -> None:
+    """L170: different-secret non-timestamped refusal is not a missing timestamp.
+
+    Does not pin exception class names or message wording. After stripping
+    tokens and payloads, a stable kind difference must remain. A helper that
+    treats every two-part token as a missing timestamp fails this contrast.
+    The name carries ``assert`` so an imported call is a check the suite
+    bail-out audit can see; ``require_*`` imported from another module is not.
+    """
+    left = failure_kind_parts(mismatch, covariates=covariates)
+    right = failure_kind_parts(missing, covariates=covariates)
+    print(f"kind-parts mismatch={left!r} missing={right!r}", flush=True)
+    assert left != right, (
+        "different-secret non-timestamped refusal is not distinguishable "
+        "from a missing timestamp after stripping tokens and payloads; "
+        f"mismatch={left!r} missing={right!r}"
+    )
+    print(
+        "different-secret non-timestamped refusal is a distinct kind "
+        "from missing timestamp",
+        flush=True,
+    )
+
+
+require_signature_mismatch_not_missing_timestamp = (
+    assert_signature_mismatch_not_missing_timestamp
+)
 
 
 def make_none_derivation_timestamped_serializer(*args: Any, **kwargs: Any) -> Any:

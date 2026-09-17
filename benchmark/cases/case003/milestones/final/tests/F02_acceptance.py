@@ -41,7 +41,6 @@ from _helpers import (
     nonempty_seq_scalar,
     observer_visible_report,
     overflow_float_token,
-    oversized_decimal_token,
     plus_decimal_int_token,
     plus_plain_decimal_token,
     plus_zero_o_int_token,
@@ -62,6 +61,11 @@ from _helpers import (
     with_json_schema,
     with_yaml11_schema,
     zero_o_int_token,
+)
+from F02_helpers import (
+    non_octal_leading_zero_token,
+    plus_plain_decimal_magnitude,
+    unsigned_exponent_magnitude,
 )
 
 TYPED_SCHEMA_FNS = (with_json_schema, with_core_schema, with_yaml11_schema)
@@ -136,7 +140,7 @@ def test_failsafe_runtime_plain_stays_string():
 
 
 def test_failsafe_typed_tokens_stay_strings():
-    for token in ("True", "~"):
+    for token in ("True", "~", "null", "false", "0"):
         value = require_document(load(token, with_failsafe_schema()))
         print(f"failsafe token={token!r} value={value!r}", flush=True)
         assert is_string_text(value, token), (
@@ -282,7 +286,7 @@ def test_json_floats_exponents_and_rejected_forms():
     assert is_finite_number(pos_exp, 12 * (10 ** 3)), (
         f"JSON 12e03 must be 12 * 10**3; got {pos_exp!r}"
     )
-    for token in ("+12.3", ".5", ".inf", ".nan", "01.0"):
+    for token in ("+12.3", ".5", ".inf", ".nan", "01.0", ".Inf"):
         value = require_document(load(token, with_json_schema()))
         print(f"json rejected-float {token}={value!r}", flush=True)
         assert is_string_text(value, token), (
@@ -314,6 +318,34 @@ def test_json_runtime_decimal_and_rejected_shapes():
     print(f"json runtime leading-zero-float={leading_zero!r}", flush=True)
     assert is_string_text(
         require_document(load(leading_zero, with_json_schema())), leading_zero
+    )
+
+    for label, token in (
+        ("0b", bin_int_token()[0]),
+        ("0o", zero_o_int_token()[0]),
+        ("0x", hex_int_token()[0]),
+    ):
+        print(f"json runtime {label} stay-string={token!r}", flush=True)
+        assert is_string_text(
+            require_document(load(token, with_json_schema())), token
+        ), f"JSON {token} must stay the input text; got a typed value"
+
+    plus_plain, _plus_plain_value = plus_plain_decimal_token()
+    print(f"json runtime plus-plain={plus_plain!r}", flush=True)
+    assert is_string_text(
+        require_document(load(plus_plain, with_json_schema())), plus_plain
+    ), f"JSON {plus_plain} must stay that text (no leading plus on a number)"
+
+    unsigned = unsigned_exponent_float_token()
+    unsigned_expected = unsigned_exponent_magnitude(unsigned)
+    print(
+        f"json runtime unsigned-exp={unsigned!r} expect={unsigned_expected}",
+        flush=True,
+    )
+    unsigned_got = require_document(load(unsigned, with_json_schema()))
+    assert is_finite_number(unsigned_got, unsigned_expected), (
+        f"JSON {unsigned} must be coeff * 10**exp = {unsigned_expected}; "
+        f"got {unsigned_got!r}"
     )
 
 
@@ -437,17 +469,34 @@ def test_core_implicit_floats_and_specials():
     print(f"core .5={half!r}", flush=True)
     assert is_finite_number(half, 0.5)
 
+    leading_dot = leading_dot_float_token()
+    leading_digits = leading_dot[1:]
+    leading_expected = int(leading_digits) / (10 ** len(leading_digits))
+    print(
+        f"core runtime leading-dot={leading_dot!r} expect={leading_expected}",
+        flush=True,
+    )
+    assert is_finite_number(
+        require_document(load(leading_dot, with_core_schema())),
+        leading_expected,
+    ), (
+        f"Core {leading_dot} must be int(digits)/10**len(digits) "
+        f"= {leading_expected}"
+    )
+
     trailing = require_document(load("12.", with_core_schema()))
     print(f"core 12.={trailing!r}", flush=True)
     assert is_finite_number(trailing, 12)
 
-    plus_a_text, plus_a_value = plus_plain_decimal_token()
+    plus_a_text, _plus_a_unused = plus_plain_decimal_token()
+    plus_a_value = plus_plain_decimal_magnitude(plus_a_text)
     print(f"core plus-decimal {plus_a_text}={plus_a_value}", flush=True)
     assert is_finite_number(
         require_document(load(plus_a_text, with_core_schema())),
         plus_a_value,
     )
-    plus_b_text, plus_b_value = plus_plain_decimal_token()
+    plus_b_text, _plus_b_unused = plus_plain_decimal_token()
+    plus_b_value = plus_plain_decimal_magnitude(plus_b_text)
     print(f"core plus-decimal-2 {plus_b_text}={plus_b_value}", flush=True)
     assert is_finite_number(
         require_document(load(plus_b_text, with_core_schema())),
@@ -644,6 +693,12 @@ def test_yaml11_rejected_integer_forms():
         require_document(load(illegal, with_yaml11_schema())), illegal
     )
 
+    non_octal = non_octal_leading_zero_token()
+    print(f"yaml11 runtime non-octal lead0={non_octal!r}", flush=True)
+    assert is_string_text(
+        require_document(load(non_octal, with_yaml11_schema())), non_octal
+    ), f"YAML 1.1 {non_octal} must stay that text (digits include 8 or 9)"
+
 
 def test_yaml11_explicit_zero_o_int_fails():
     implicit = require_document(load("0o123", with_yaml11_schema()))
@@ -805,6 +860,11 @@ def test_schema_switch_zero_o_prefix():
 def test_schema_switch_runtime_zero_o_underscore_sexagesimal():
     oct_text, oct_value = zero_o_int_token()
     print(f"runtime 0o={oct_text!r} expect={oct_value}", flush=True)
+    json_oct = require_document(load(oct_text, with_json_schema()))
+    print(f"runtime 0o json={json_oct!r}", flush=True)
+    assert is_string_text(json_oct, oct_text), (
+        f"JSON {oct_text} must stay the input text; got {json_oct!r}"
+    )
     assert is_number_not_string(
         require_document(load(oct_text, with_core_schema())), oct_value
     )
@@ -868,6 +928,75 @@ def test_schema_switch_tilde_and_True():
     assert is_bool(core_true, True)
 
 
+def test_schema_switch_runtime_json_vs_core_plus_and_dot():
+    plus_int = plus_decimal_int_token()
+    plus_int_value = int(plus_int[1:])
+    print(f"switch plus-int={plus_int!r} expect={plus_int_value}", flush=True)
+    json_plus_int = require_document(load(plus_int, with_json_schema()))
+    core_plus_int = require_document(load(plus_int, with_core_schema()))
+    print(
+        f"switch plus-int json={json_plus_int!r} core={core_plus_int!r}",
+        flush=True,
+    )
+    assert is_string_text(json_plus_int, plus_int), (
+        f"JSON {plus_int} must stay that text; got {json_plus_int!r}"
+    )
+    assert is_number_not_string(core_plus_int, plus_int_value), (
+        f"Core {plus_int} must be {plus_int_value}; got {core_plus_int!r}"
+    )
+
+    plus_plain, _plus_plain_unused = plus_plain_decimal_token()
+    plus_plain_value = plus_plain_decimal_magnitude(plus_plain)
+    print(
+        f"switch plus-plain={plus_plain!r} expect={plus_plain_value}",
+        flush=True,
+    )
+    json_plus_plain = require_document(load(plus_plain, with_json_schema()))
+    core_plus_plain = require_document(load(plus_plain, with_core_schema()))
+    print(
+        f"switch plus-plain json={json_plus_plain!r} core={core_plus_plain!r}",
+        flush=True,
+    )
+    assert is_string_text(json_plus_plain, plus_plain), (
+        f"JSON {plus_plain} must stay that text; got {json_plus_plain!r}"
+    )
+    assert is_finite_number(core_plus_plain, plus_plain_value), (
+        f"Core {plus_plain} must be {plus_plain_value}; got {core_plus_plain!r}"
+    )
+
+    leading_dot = leading_dot_float_token()
+    leading_digits = leading_dot[1:]
+    leading_expected = int(leading_digits) / (10 ** len(leading_digits))
+    print(
+        f"switch leading-dot={leading_dot!r} expect={leading_expected}",
+        flush=True,
+    )
+    json_dot = require_document(load(leading_dot, with_json_schema()))
+    core_dot = require_document(load(leading_dot, with_core_schema()))
+    print(f"switch leading-dot json={json_dot!r} core={core_dot!r}", flush=True)
+    assert is_string_text(json_dot, leading_dot), (
+        f"JSON {leading_dot} must stay that text; got {json_dot!r}"
+    )
+    assert is_finite_number(core_dot, leading_expected), (
+        f"Core {leading_dot} must be {leading_expected}; got {core_dot!r}"
+    )
+
+
+def test_schema_switch_runtime_unsigned_exponent():
+    token = unsigned_exponent_float_token()
+    expected = unsigned_exponent_magnitude(token)
+    print(f"switch unsigned-exp={token!r} expect={expected}", flush=True)
+    json_v = require_document(load(token, with_json_schema()))
+    yaml11_v = require_document(load(token, with_yaml11_schema()))
+    print(f"switch unsigned-exp json={json_v!r} yaml11={yaml11_v!r}", flush=True)
+    assert is_finite_number(json_v, expected), (
+        f"JSON {token} must be coeff * 10**exp = {expected}; got {json_v!r}"
+    )
+    assert is_string_text(yaml11_v, token), (
+        f"YAML 1.1 {token} must stay that text; got {yaml11_v!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # F. Shared forms across the three typed schemas
 # ---------------------------------------------------------------------------
@@ -882,6 +1011,15 @@ def test_shared_decimals_across_typed_schemas(schema_fn):
         assert is_number_not_string(value, expected), (
             f"{token} must be {expected} on this typed schema; got {value!r}"
         )
+    minus_text, minus_number = json_legal_decimal_token()
+    minus_token = f"-{minus_text}"
+    minus_expected = -minus_number
+    minus_got = require_document(load(minus_token, opts))
+    print(f"shared runtime minus {minus_token}={minus_got!r}", flush=True)
+    assert is_number_not_string(minus_got, minus_expected), (
+        f"{minus_token} must be {minus_expected} on this typed schema; "
+        f"got {minus_got!r}"
+    )
 
 
 def test_shared_explicit_ints_across_typed_schemas():
@@ -963,16 +1101,15 @@ def test_shared_explicit_float_specials(schema_fn):
     assert is_finite_number(half, 0.5)
 
 
-def test_oversized_integer_stays_string():
-    token = oversized_decimal_token()
-    print(f"oversized digits={len(token)} head={token[:16]!r}", flush=True)
+def test_one_followed_by_399_zeros_stays_string():
+    token = "1" + "0" * 399
+    print(f"frozen 400-digit length={len(token)} head={token[:16]!r}", flush=True)
     observed = []
     for opts in _typed_opts():
         value = require_document(load(token, opts))
-        print(f"oversized type={type(value).__name__}", flush=True)
+        print(f"frozen-400 type={type(value).__name__}", flush=True)
         assert is_string_text(value, token), (
-            f"an integer that does not fit in a JavaScript number must stay "
-            f"the digit text; got {value!r}"
+            f"1 followed by 399 zeros must stay that digit string; got {value!r}"
         )
         observed.append(value)
     assert observed[0] == observed[1] == observed[2] == token
@@ -1000,6 +1137,18 @@ def test_empty_explicit_str_seq_map():
     print(f"failsafe empty !!str={failsafe_str!r}", flush=True)
     assert is_string_text(failsafe_str, "")
 
+    failsafe_seq = require_sequence(
+        require_document(load("!!seq", with_failsafe_schema()))
+    )
+    print(f"failsafe empty !!seq={failsafe_seq!r}", flush=True)
+    assert failsafe_seq == []
+
+    failsafe_map = require_plain_mapping(
+        require_document(load("!!map", with_failsafe_schema()))
+    )
+    print(f"failsafe empty !!map keys={list(failsafe_map.keys())!r}", flush=True)
+    assert list(failsafe_map.keys()) == []
+
 
 def test_explicit_seq_on_nonempty_scalar_fails():
     failed = load("!!seq foo")
@@ -1023,6 +1172,18 @@ def test_explicit_seq_on_nonempty_scalar_fails():
     )
     assert runtime.ok is False, (
         f"explicit !!seq on nonempty {other!r} must fail and yield no document"
+    )
+
+    failsafe = load("!!seq foo", with_failsafe_schema())
+    failsafe_error = require_parse_failure(failsafe)
+    print(
+        f"failsafe !!seq foo ok={failsafe.ok!r} "
+        f"report={observer_visible_report(failsafe_error)!r}",
+        flush=True,
+    )
+    assert failsafe.ok is False, (
+        "Failsafe explicit !!seq on a nonempty scalar must fail "
+        "and yield no document"
     )
 
 
@@ -1088,13 +1249,15 @@ def test_failsafe_applies_to_every_multi_document():
 
 def test_json_applies_to_every_multi_document():
     docs = require_sequence(
-        require_document(load_all("null\n---\nTrue\n", with_json_schema()))
+        require_document(load_all("True\n---\n~\n", with_json_schema()))
     )
     print(f"json multi={docs!r}", flush=True)
     assert len(docs) == 2
-    assert is_js_null(docs[0]), f"JSON first document must be null; got {docs[0]!r}"
-    assert is_string_text(docs[1], "True"), (
-        f"JSON second document must stay string True; got {docs[1]!r}"
+    assert is_string_text(docs[0], "True"), (
+        f"JSON first document must stay string True; got {docs[0]!r}"
+    )
+    assert is_string_text(docs[1], "~"), (
+        f"JSON second document must stay string ~; got {docs[1]!r}"
     )
 
 

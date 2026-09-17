@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "repair_owner": "none",
+  "dimensions": {
+    "prd_accuracy": {
+      "score": 5,
+      "rationale": "Full PRD FP-01 through FP-04 match features.json titles, core_capability ids, and oracles. Finite sets the sealed suite depends on are enumerated in public materials: four key-derivation names (concat, django-concat, hmac, none), default digest SHA-1, default separator period, default derivation django-concat, URL-safe alphabet, skip-non-basic-keys via skipkeys on extra dump options, and the README mapping (id 5, name signtoken, secret key, salt auth). Layout src/<package> is stated in the Contract. Observable defaults and failure kinds (signature mismatch vs payload-decode, missing vs malformed timestamp vs expiry, empty no-op signature) match the neutralized GT. Preamble sentences before the first feature heading (tamper refusal, default JSON, age check, compression-when-shorter, salt isolation, secret lists, unsafe-load pair, integrity-not-confidentiality, SHA-1 / django-concat / period defaults) each have a failing assertion if ignored."
+    },
+    "gt_core_logic": {
+      "score": 5,
+      "rationale": "GT is a real library: HMAC and no-op algorithms, four named derivations, secret-list rotation, JSON serialize-and-sign with fallbacks and unsafe pair, timestamped age check with timezone-aware UTC signing time, URL-safe compact JSON plus compression when shorter. This run did not produce SFT, so excerpt-vs-original is not scored. features.json F01–F04 all have verification.status passed, gt_verified true, and red_check probe-ok from b-loop-probes. This review ran agent_verify suite --all --world neutral: collected 257, 257 passed, exit 0. D recorded the same 257-pass command under the neutralized image (accept_cursor status complete)."
+    },
+    "artifact_consistency": {
+      "score": 5,
+      "rationale": "test_usage names and the package-root import list are the eight Contract classes; tests import those literals from the package root (no private submodule imports). Constructor keywords, max_age, return_timestamp, skipkeys, default_digest_method, dump/load streams, and loads_unsafe/load_unsafe used by tests are named in the Contract, including the time-field replace-without-re-sign that F03 fixtures satisfy by reading a field the helper itself emitted. test_manifest lists existing files, workdir is '.', and execution_groups own F01–F04. coverage_matrix features{}.test_files match features.json ownership. Suite honesty is d_verify_evidence (257 passed) plus accept_cursor status complete, reconfirmed this run. Objective gate reported no contract-coverage-gap."
+    },
+    "leakage": {
+      "score": 5,
+      "rationale": "Objective gate reported no issues. leak_judge already cleared the published surface (PRD, Contract, hidden tests, runner install/build/test strings). Public hardware notes state contestant-machine constraints only and do not quote pipeline-internal paths or hidden-test node ids. Published install_command pins registry packages (pytest, clock-freezing helper, build backend) with no identity URL. This verdict uses neutralized product names only."
+    },
+    "test_focus": {
+      "score": 5,
+      "rationale": "Acceptance files assert PRD-facing outcomes: sign/recover/validate, dump/load/unsafe pair, max_age and signing-time datetime, URL-safe alphabet and compression marker. They inspect failure objects via constructor args or public attributes rather than private internals or message-text pins. Helper modules define no collected tests; the 257 items are the four acceptance files."
+    },
+    "test_correctness": {
+      "score": 5,
+      "rationale": "No skip/xfail. Assertions can fail. Failures raise or return the documented pair; they are not absence-of-success only. Recorded probe kills: F01 skip-verify by test_changed_payload_my_to_other_refused; F02 compact-json by test_token_for_list_one_through_four_includes_json_text; F03 ignore-max-age by test_signer_max_age_10_expired_at_eleven_seconds; F04 never-compress by test_thousand_a_payload_section_begins_with_period. Adversarial self-verification passed with 20/21/25/18 probes killed and no survivor. mutants/ is absent; probe evidence is the cheat-resistance record. Whole-suite negative-arm audit of the mechanical reading list: flagged arms either assert the PRD carrier (raise, validity false, signature-mismatch pair with first item false, construction refuse, empty signature section as the promised no-op observable, empty mapping as the skipkeys success oracle, signing-time datetime present or absent, leftover kind-parts distinct) or are positive contrasts, not evadable silence."
+    },
+    "prd_coverage": {
+      "score": 5,
+      "rationale": "Every coverage_matrix capability is core_covered with test_refs on the owning FNN files. Each capability has at least one recorded probe kill in adversarial/{fid}/verdict.json capability_coverage. Mandatory profile is cpu_baseline only (Python on CPU); there is no removable accelerator substrate, so a negative-control clause is not required. Output oracles plus cheat probes discriminate hollow stubs. No env-gated skip leaves the suite green. Preamble obligations (tamper, JSON default, age, compression, salt, secret lists, unsafe pair, readable-but-unforgeable payload) are asserted, not merely mentioned."
+    },
+    "design_goal_unity": {
+      "score": 5,
+      "rationale": "PRD, Contract, GT, and hidden tests describe one importable signing library: bytes signer, object serializer, timestamped age check, URL-safe compact/compressed tokens. No D_ISSUES_FOR_E or CODE_ISSUES_FOR_D handoff. F_GATE_REPORT had no objective-gate issues. Published runner install is env-only (pytest, clock helper, build backend); test_command is PYTHONPATH=src pytest on the sealed files. This-run agent_verify suite --all --world neutral plus D's d_verify_evidence and accept_cursor complete reproduce the full 257-item suite under the neutralized image."
+    }
+  },
+  "findings": [],
+  "tests_digest": "9de54d87572c80b54bc2bc0f6b3e03fec04db1f16ff4c0d6766bf41d76e21d7b"
+}

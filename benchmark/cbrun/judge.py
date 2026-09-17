@@ -22,6 +22,7 @@ __all__ = [
     "run_isolated_judge",
     "export_app",
     "import_app",
+    "validate_judge_report",
 ]
 
 # The judge script is shared with the Harbor adapter (single source of truth).
@@ -29,13 +30,18 @@ _HARBOR = Path(__file__).resolve().parent.parent / "coding_bench_harbor"
 FINAL_JUDGE_SRC = _HARBOR / "final_judge.py"
 TEST_COUNTS_SRC = _HARBOR / "test_counts.py"
 LAUNCHER_SRC = _HARBOR / "pytest_launcher.py"
+NODE_BLOCK_SRC = _HARBOR / "_cb_import_block.cjs"
 
 CONTAINER_TESTS_FINAL = "/tests/final"
 CONTAINER_TASK_TOML = "/task.toml"
 CONTAINER_JUDGE_PATH = "/tests/final_judge.py"
 CONTAINER_LAUNCHER_PATH = "/tests/pytest_launcher.py"
+CONTAINER_NODE_BLOCK_PATH = "/tests/_cb_import_block.cjs"
 CONTAINER_VERIFIER_DIR = "/logs/verifier"
 CONTAINER_APP = "/app"
+
+_PYTHON_BAN_ECOSYSTEMS = frozenset({"pip", "conda", "source"})
+_NODE_BAN_ECOSYSTEMS = frozenset({"npm"})
 
 
 @dataclass
@@ -45,6 +51,35 @@ class JudgeOutcome:
     exit_code: int
     seconds: float
     report: dict = field(default_factory=dict)
+
+
+def validate_judge_report(report: dict | None) -> tuple[float, str | None]:
+    """Return ``(reward, judge_error)`` from a final_judge report.
+
+    Reward must be 0 or 1. A passing reward without verified counts, or
+    with failed/error tests, is a harness error and scores 0.
+    """
+    if not isinstance(report, dict) or not report:
+        return 0.0, "final_judge produced no report"
+    raw_reward = report.get("reward")
+    reward = (
+        float(raw_reward)
+        if isinstance(raw_reward, (int, float)) and not isinstance(raw_reward, bool)
+        else -1.0
+    )
+    judge_error = report.get("judge_error")
+    if judge_error:
+        return 0.0, str(judge_error)
+    final = report.get("final")
+    if reward not in (0.0, 1.0):
+        return 0.0, "invalid non-binary reward in judge report"
+    if not isinstance(final, dict) or final.get("counts_parsed") is not True or not final.get("total_count"):
+        return 0.0, "judge report has no verified test counts"
+    if reward == 1.0 and (
+        final.get("failed_count", 0) or final.get("error_count", 0) or not final.get("passed_count")
+    ):
+        return 0.0, "passing reward contradicts test counts"
+    return reward, None
 
 
 def export_app(container: Container, dest: Path) -> Path:
@@ -57,8 +92,7 @@ def export_app(container: Container, dest: Path) -> Path:
     dest.mkdir(parents=True, exist_ok=True)
     ok = container.cp_from(CONTAINER_APP, dest)
     if not ok:
-        # Empty or missing /app: leave an empty tree the judge can still mount.
-        (dest / "app").mkdir(parents=True, exist_ok=True)
+        raise RuntimeError("could not export candidate /app; refusing to judge an empty replacement")
     workspace = dest / "app"
     return workspace if workspace.is_dir() else dest
 
@@ -74,6 +108,23 @@ def import_app(container: Container, host_app: Path) -> None:
     container.exec(f"chmod -R a+rX {CONTAINER_APP}")
 
 
+def _import_ban_env(denylist) -> dict[str, str]:
+    """Process-level import ban, routed by ecosystem. Never enable both blindly."""
+    if denylist is None:
+        return {}
+    tokens = [str(x).strip() for x in getattr(denylist, "import_ban", ()) if str(x).strip()]
+    if not tokens:
+        return {}
+    eco = str(getattr(denylist, "ecosystem", "") or "").strip().lower()
+    env = {"CODING_BENCH_IMPORT_BAN": ",".join(tokens)}
+    if eco in _PYTHON_BAN_ECOSYSTEMS:
+        return env
+    if eco in _NODE_BAN_ECOSYSTEMS:
+        env["NODE_OPTIONS"] = f"--require {CONTAINER_NODE_BLOCK_PATH}"
+        return env
+    return env
+
+
 def run_judge(
     container: Container,
     *,
@@ -81,6 +132,8 @@ def run_judge(
     task_toml: bytes,
     test_timeout_sec: float,
     artifacts_dir: Path,
+    denylist=None,
+    judge_bans: list[str] | tuple[str, ...] = (),
 ) -> JudgeOutcome:
     """Inject hidden tests + task.toml, run final_judge, parse the reward."""
     if not (Path(tests_final_dir) / "test_manifest.json").is_file():
@@ -98,6 +151,11 @@ def run_judge(
     container.cp_to(FINAL_JUDGE_SRC, CONTAINER_JUDGE_PATH)
     container.cp_to(TEST_COUNTS_SRC, "/tests/test_counts.py")
     container.cp_to(LAUNCHER_SRC, CONTAINER_LAUNCHER_PATH)
+    ban_env = _import_ban_env(denylist)
+    if "NODE_OPTIONS" in ban_env:
+        if not NODE_BLOCK_SRC.is_file():
+            raise RuntimeError(f"_cb_import_block.cjs not found at {NODE_BLOCK_SRC}")
+        container.cp_to(NODE_BLOCK_SRC, CONTAINER_NODE_BLOCK_PATH)
     container.exec(f"mkdir -p {CONTAINER_VERIFIER_DIR}")
 
     env = {
@@ -106,7 +164,18 @@ def run_judge(
         "CODING_BENCH_TASK_TOML": CONTAINER_TASK_TOML,
         "CODING_BENCH_VERIFIER_DIR": CONTAINER_VERIFIER_DIR,
         "CODING_BENCH_PYTEST_LAUNCHER": CONTAINER_LAUNCHER_PATH,
+        **ban_env,
     }
+    bans = [str(x).strip() for x in judge_bans if str(x).strip()]
+    if bans:
+        env["CODING_BENCH_JUDGE_BANS"] = ",".join(bans)
+        if "NODE_OPTIONS" not in env:
+            eco = str(getattr(denylist, "ecosystem", "") or "").strip().lower()
+            if eco in _NODE_BAN_ECOSYSTEMS:
+                if not NODE_BLOCK_SRC.is_file():
+                    raise RuntimeError(f"_cb_import_block.cjs not found at {NODE_BLOCK_SRC}")
+                container.cp_to(NODE_BLOCK_SRC, CONTAINER_NODE_BLOCK_PATH)
+                env["NODE_OPTIONS"] = f"--require {CONTAINER_NODE_BLOCK_PATH}"
     res = container.exec(
         f"PYTHONPATH=/tests python3 {CONTAINER_JUDGE_PATH}",
         env=env,
@@ -131,18 +200,21 @@ def run_judge(
         except json.JSONDecodeError:
             report = {}
 
-    if report:
-        reward = float(report.get("reward", 0.0) or 0.0)
-        judge_error = report.get("judge_error")
-    else:
+    if not isinstance(report, dict):
+        report = {}
+    reward, judge_error = validate_judge_report(report)
+    if res.timed_out:
+        judge_error = f"judge timed out after {test_timeout_sec}s"
         reward = 0.0
-        if res.timed_out:
-            judge_error = f"judge timed out after {test_timeout_sec}s"
-        else:
-            judge_error = (
-                f"final_judge produced no report (exit {res.exit_code}); "
-                f"tail: {res.tail[-800:]}"
-            )
+    elif not report:
+        judge_error = (
+            f"final_judge produced no report (exit {res.exit_code}); "
+            f"tail: {res.tail[-800:]}"
+        )
+        reward = 0.0
+    elif res.exit_code and not judge_error:
+        judge_error = f"judge process failed (exit {res.exit_code})"
+        reward = 0.0
 
     return JudgeOutcome(
         reward=reward,
@@ -163,6 +235,8 @@ def run_isolated_judge(
     artifacts_dir: Path,
     workspace_export_dir: Path,
     gpus: str | None = None,
+    denylist=None,
+    judge_bans: list[str] | tuple[str, ...] = (),
 ) -> JudgeOutcome:
     """Judge ``/app`` from *solve_container* inside a fresh copy of *image*.
 
@@ -180,6 +254,8 @@ def run_isolated_judge(
             task_toml=task_toml,
             test_timeout_sec=test_timeout_sec,
             artifacts_dir=artifacts_dir,
+            denylist=denylist,
+            judge_bans=judge_bans,
         )
     finally:
         judge_container.remove()

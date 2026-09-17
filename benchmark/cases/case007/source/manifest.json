@@ -131,7 +131,6 @@
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'hatchling==1.27.0' 'hatch-vcs==0.5.0' && rm -rf /var/lib/apt/lists/*",
     "repo_warm_command": "python3 -m pip install --no-cache-dir --break-system-packages -e .",
     "build_command": "",
-    "env_probe_command": "PYTHONPATH=src python3 -c \"import os, otpkit; assert os.path.realpath(otpkit.__file__).startswith(os.path.realpath('src')); totp = otpkit.TOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'); assert totp.at(1111111111) == '050471'; hotp = otpkit.HOTP('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'); assert hotp.at(1) == '287082'; assert hotp.verify('287082', 1)\"",
     "test_command_template": "PYTHONPATH=src python3 -m unittest {test_files}",
     "workdir": "."
   },

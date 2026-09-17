@@ -27,9 +27,9 @@ __all__ = [
     "resolve_invocation",
 ]
 
-# CLI npm packages. Versions default to "@latest" (matching the released task
-# image) but SHOULD be pinned for reproducible benchmark results via the env
-# vars below; cbrun warns when they are unpinned.
+# CLI npm packages. Versions must be pinned for reproducible runs.
+# CBRUN_ALLOW_UNPINNED_CLI=1 is a local-smoke escape hatch only.
+_UNPINNED_OK = "CBRUN_ALLOW_UNPINNED_CLI"
 _CLI_PACKAGES = {
     "codex": ("@openai/codex", "CBRUN_CODEX_VERSION"),
     "opencode": ("opencode-ai", "CBRUN_OPENCODE_VERSION"),
@@ -49,12 +49,28 @@ def cli_version_spec(backend: str, environ: dict[str, str] | None = None) -> str
     """Return the version pin suffix used by the backend installer."""
     _require_backend(backend)
     environ = os.environ if environ is None else environ
+    allow_unpinned = (environ.get(_UNPINNED_OK, "") or "").strip() == "1"
     if backend == "cursor":
         pinned = (environ.get(_CURSOR_VERSION_ENV, "") or "").strip()
-        return pinned or "latest"
+        if pinned:
+            return pinned
+        if allow_unpinned:
+            return "latest"
+        raise RuntimeError(
+            f"cbrun: {_CURSOR_VERSION_ENV} is unset; pin the CLI version. "
+            f"Set {_CURSOR_VERSION_ENV}=<version> or {_UNPINNED_OK}=1 "
+            "for local smoke tests."
+        )
     _pkg, env_key = _CLI_PACKAGES[backend]
     pinned = (environ.get(env_key, "") or "").strip()
-    return f"@{pinned}" if pinned else "@latest"
+    if pinned:
+        return f"@{pinned}"
+    if allow_unpinned:
+        return "@latest"
+    raise RuntimeError(
+        f"cbrun: {env_key} is unset; pin the CLI version. "
+        f"Set {env_key}=<version> or {_UNPINNED_OK}=1 for local smoke tests."
+    )
 
 
 def _cursor_install_command(environ: dict[str, str] | None) -> str:

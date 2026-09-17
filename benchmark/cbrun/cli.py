@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .agent_spec import BACKENDS
@@ -67,7 +69,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "output" / "cbrun",
+        default=None,
+        help="New output directory. Defaults to a unique timestamped directory.",
     )
     parser.add_argument(
         "--cache-root",
@@ -139,16 +142,23 @@ def main(argv: list[str] | None = None) -> int:
     else:
         backends = args.backend or ["codex"]
 
-    for backend in backends:
-        if backend is None:
-            continue
-        spec = cli_version_spec(backend)
-        if spec in ("@latest", "latest"):
-            print(
-                f"warning: {backend} CLI is unpinned ({spec}); set "
-                f"CBRUN_{backend.upper().replace('-', '_')}_VERSION for reproducible runs.",
-                file=sys.stderr,
-            )
+    # Deliverable images contain no agent CLI, so the pin check only applies
+    # to trial runs.
+    if not args.build_images:
+        for backend in backends:
+            if backend is None:
+                continue
+            try:
+                spec = cli_version_spec(backend)
+            except RuntimeError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+            if spec in ("@latest", "latest"):
+                print(
+                    f"warning: {backend} CLI is unpinned ({spec}); set "
+                    f"CBRUN_{backend.upper().replace('-', '_')}_VERSION for reproducible runs.",
+                    file=sys.stderr,
+                )
 
     try:
         case_dirs = _iter_case_dirs(args.cases_root, args.case, args.all)
@@ -174,6 +184,24 @@ def main(argv: list[str] | None = None) -> int:
             print(tag)
         return 1 if failed else 0
 
+    if args.out is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        args.out = (
+            Path(__file__).resolve().parent.parent
+            / "output"
+            / "cbrun"
+            / f"{stamp}-{uuid.uuid4().hex[:8]}"
+        )
+    args.out = args.out.resolve()
+    try:
+        args.out.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        print(
+            f"error: output directory already exists; choose a new --out: {args.out}",
+            file=sys.stderr,
+        )
+        return 2
+
     if not args.model:
         print("error: --model is required unless --build-images", file=sys.stderr)
         return 2
@@ -185,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     results: list[TrialResult] = []
+    write_summary(results, args.out)
     for case_dir in case_dirs:
         trial_labels = backends if args.agent_spec is None else [Path(args.agent_spec).stem]
         for label, backend in zip(trial_labels, backends):
@@ -217,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"  FAILED: {result.error}", file=sys.stderr)
             results.append(result)
+            write_summary(results, args.out)
 
     summary_path = write_summary(results, args.out)
     print(format_reward_matrix(results))

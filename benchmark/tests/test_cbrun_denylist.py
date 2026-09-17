@@ -14,10 +14,12 @@ sys.path.insert(0, str(BENCHMARK_ROOT))
 from cbrun.denylist import (  # noqa: E402
     DenylistSpec,
     FORBIDDEN_IMPORT_BAN,
+    MissingDenylist,
     build_fix_instruction,
     line_imports_token,
     load_denylist,
     normalize_pkg_name,
+    require_denylist,
     scan_installed_warnings,
     scan_workspace_imports,
     validate_denylist_artifact,
@@ -278,3 +280,87 @@ def test_validate_denylist_artifact_accepts_released_case_shape() -> None:
         )
         payload = json.loads(denylist_path.read_text(encoding="utf-8"))
         assert validate_denylist_artifact(payload, manifest, case_id=case_dir.name) == []
+
+
+def test_require_denylist_raises_when_file_missing(tmp_path: Path) -> None:
+    with pytest.raises(MissingDenylist, match="missing"):
+        require_denylist(tmp_path)
+
+
+def test_require_denylist_raises_when_bans_empty(tmp_path: Path) -> None:
+    dest = tmp_path / "source" / "denylist.json"
+    dest.parent.mkdir()
+    dest.write_text(json.dumps({"install_ban": [], "import_ban": []}), encoding="utf-8")
+    with pytest.raises(MissingDenylist, match="no install_ban"):
+        require_denylist(tmp_path)
+    assert load_denylist(tmp_path) is None
+
+
+def test_run_trial_missing_denylist_fails_before_docker(tmp_path: Path, monkeypatch) -> None:
+    from cbrun import run_case
+
+    called = {"image": False}
+
+    def boom(*_a, **_k):
+        called["image"] = True
+        raise AssertionError("ensure_agent_image must not run")
+
+    monkeypatch.setattr(run_case, "load_case", lambda *_a, **_k: type("C", (), {"case_id": "x", "docker_gpus": None})())
+    monkeypatch.setattr(run_case, "_check_public_leakage", lambda *_a, **_k: None)
+    monkeypatch.setattr(run_case, "discover_steps", lambda *_a, **_k: [])
+    monkeypatch.setattr(run_case, "ensure_agent_image", boom)
+    with pytest.raises(MissingDenylist, match="missing"):
+        run_case.run_trial(
+            tmp_path,
+            model="m",
+            out_dir=tmp_path / "out",
+            cache_root=tmp_path / "cache",
+            enforce_denylist=True,
+        )
+    assert called["image"] is False
+
+
+def test_run_trial_no_enforce_records_flag(tmp_path: Path, monkeypatch) -> None:
+    from cbrun import run_case
+    from cbrun.results import TrialResult
+
+    class FakeImage:
+        deliverable_image = "d"
+        agent_image = "a"
+        tests_cache_dir = tmp_path / "cache" / "tests"
+
+    class FakeInv:
+        spec = type("S", (), {"name": "codex", "model_prefix": "keep"})()
+        spec_hash = "h"
+        resolved_model = "m"
+        run_as = "root"
+        env_keys = []
+
+    captured: dict = {}
+    real = TrialResult
+
+    def wrap(*args, **kwargs):
+        obj = real(*args, **kwargs)
+        captured["result"] = obj
+        return obj
+
+    monkeypatch.setattr(run_case, "load_case", lambda *_a, **_k: type("C", (), {"case_id": "x", "docker_gpus": None})())
+    monkeypatch.setattr(run_case, "_check_public_leakage", lambda *_a, **_k: None)
+    monkeypatch.setattr(run_case, "discover_steps", lambda *_a, **_k: [])
+    monkeypatch.setattr(run_case, "ensure_agent_image", lambda *_a, **_k: FakeImage())
+    monkeypatch.setattr(run_case, "resolve_agent", lambda **_k: FakeInv())
+    monkeypatch.setattr(run_case, "TrialResult", wrap)
+
+    def fake_start(*_a, **_k):
+        raise RuntimeError("stop-before-container")
+
+    monkeypatch.setattr(run_case.Container, "start", fake_start)
+    with pytest.raises(RuntimeError, match="stop-before-container"):
+        run_case.run_trial(
+            tmp_path,
+            model="m",
+            out_dir=tmp_path / "out",
+            cache_root=tmp_path / "cache",
+            enforce_denylist=False,
+        )
+    assert captured["result"].denylist_enforced is False

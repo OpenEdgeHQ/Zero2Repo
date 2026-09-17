@@ -30,11 +30,13 @@ from .denylist import (
     ScanResult,
     build_fix_instruction,
     load_denylist,
+    require_denylist,
     scan_installed_warnings,
     scan_workspace_imports,
 )
 from .docker_env import Container, ExecResult
 from .images import AgentImage, ensure_agent_image
+from .state import file_manifest, image_identity, platform_name, source_identity, utc_now
 from .instruction import build_instruction
 from .isolation import synthesize_task_toml
 from .judge import run_isolated_judge
@@ -108,10 +110,11 @@ def run_trial(
     _check_public_leakage(case, allow_leakage=allow_leakage)
     steps = discover_steps(case)
     limits = limits or resolve_limits(multiplier=timeout_multiplier)
-    denylist = load_denylist(case_dir) if enforce_denylist else None
+    denylist = require_denylist(case_dir) if enforce_denylist else None
 
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(exist_ok=False)
 
     image = ensure_agent_image(
         case.case_id,
@@ -119,6 +122,7 @@ def run_trial(
         case_dir=case_dir,
         force=force_image,
         backend=backend,
+        enforce_denylist=enforce_denylist,
     )
 
     gpus = case.docker_gpus or None
@@ -145,7 +149,19 @@ def run_trial(
         run_as=invocation.run_as or "root",
         model_prefix=invocation.spec.model_prefix,
         env_keys=list(invocation.env_keys),
+        denylist_enforced=enforce_denylist,
+        started_at=utc_now(),
+        platform=platform_name(),
+        provenance=source_identity(case_dir),
+        test_files=file_manifest(image.tests_cache_dir / "final"),
     )
+    try:
+        result.agent_image_id = image_identity(image.agent_image)["id"]
+        result.deliverable_image_id = image_identity(image.deliverable_image)["id"]
+    except (RuntimeError, OSError, ValueError):
+        pass
+    result.provenance["agent_image"] = result.agent_image_id
+    result.provenance["deliverable_image"] = result.deliverable_image_id
 
     block_hosts = GITHUB_BLOCK_HOSTS if block_github else None
     container = Container.start(
@@ -178,9 +194,44 @@ def run_trial(
                 break
         result.passed_steps = passed_steps
     finally:
-        container.remove()
+        _archive_trial(container, out_dir=out_dir, result=result)
+        result.finished_at = utc_now()
 
     return result
+
+
+def _archive_trial(container: Container, *, out_dir: Path, result: TrialResult) -> None:
+    """Freeze the container, archive ``/app`` and ``/logs/agent``, then remove it.
+
+    Every failure is recorded on ``result.artifact_errors``; nothing raises.
+    """
+    try:
+        # ``docker exec`` is refused on a paused container, so probe the log
+        # directory before pausing; ``docker cp`` still works afterwards.
+        has_agent_logs = False if container.paused else container.path_exists("/logs/agent")
+        if not container.paused:
+            try:
+                container.pause()
+            except RuntimeError:
+                pass
+        workspace = out_dir / "workspace"
+        if not container.cp_from(CONTAINER_WORKDIR, workspace):
+            result.artifact_errors.append("could not archive /app")
+        else:
+            result.logs["workspace"] = str(workspace)
+        if has_agent_logs or container.paused:
+            logs_dir = out_dir / "container_logs"
+            if container.cp_from("/logs/agent", logs_dir):
+                result.logs["container_logs"] = str(logs_dir)
+            elif has_agent_logs:
+                result.artifact_errors.append("could not archive /logs/agent")
+    except Exception as exc:  # noqa: BLE001
+        result.artifact_errors.append(f"archive: {type(exc).__name__}: {exc}")
+    finally:
+        try:
+            container.remove()
+        except Exception as exc:  # noqa: BLE001
+            result.artifact_errors.append(f"container cleanup: {exc}")
 
 
 def _run_agent_setup(
@@ -458,6 +509,8 @@ def _run_step(
         artifacts_dir=out_dir,
         workspace_export_dir=out_dir / "judge_workspace",
         gpus=case.docker_gpus or None,
+        denylist=denylist,
+        judge_bans=case.judge_bans,
     )
     result.reward = outcome.reward
     result.judge_error = outcome.judge_error

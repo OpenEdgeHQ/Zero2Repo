@@ -15,5 +15,11 @@ benchmark/cases/_mapping.private.json
 benchmark/cases/*/source/denylist.json
 .DS_Store
 
-# Local working notes / review guides (not published)
-doc/
+# Local working notes (not published). Tracked review/rejudge entries stay.
+doc/*
+!doc/rejudge.py
+!doc/benchmark_review_guide.md
+!doc/case009_cow_probe.md
+
+# Paper draft (not published with the benchmark)
+latex/

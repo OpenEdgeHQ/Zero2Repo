@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "features": {
+    "F01": {
+      "core_capabilities": [
+        {
+          "id": "F01-cap-01",
+          "description": "Parse empty, whitespace-only, or comment-only text (including a comment with no line feed) as an empty mapping, and parse a root document such as `one = 1` / `two = 'two'` / `arr = []` into those three values"
+        },
+        {
+          "id": "F01-cap-02",
+          "description": "Treat every key as a string: bare keys (digits, hyphen vs underscore, letter case), quoted keys (empty, `#`, spaces, literal dots, non-ASCII), and keyword-looking keys (`true`, `false`, `inf`, `nan`)"
+        },
+        {
+          "id": "F01-cap-03",
+          "description": "Create nested mappings from dotted keys, ignore spaces around dots in pairs and in table headers (`[ g . h . i ]` equals `[g.h.i]`), treat a quoted interior dot as part of the name, and allow further dotted keys under the same prefix"
+        },
+        {
+          "id": "F01-cap-04",
+          "description": "Open tables with square-bracket headers, omit super-tables (`[x.y.z.w]` then later `[x]`), and declare a new sub-table after dotted keys have already created a nested table (`[fruit.apple.texture]` after `apple.color`)"
+        },
+        {
+          "id": "F01-cap-05",
+          "description": "Append one mapping per `[[array-of-tables]]` repetition, attach nested arrays of tables to the most recently appended parent, attach a later single-bracket header whose first part is that array name to the current item (`[[arr]]` then `[arr.subtab]`), imply parent tables from a nested header, allow a later parent header to add a sibling key, and refuse a dotted key that treats that array as a table (`arr.val1 = 1` after `[[tab.arr]]` then `[tab]`)"
+        },
+        {
+          "id": "F01-cap-06",
+          "description": "Construct inline tables as mappings of string keys, including empty braces, dotted keys inside braces, and TOML v1.1.0 newlines, comments, and trailing commas"
+        },
+        {
+          "id": "F01-cap-07",
+          "description": "Construct arrays as sequences, including empty, mixed-type, nested, multiline, comment-between-elements, and trailing-comma forms"
+        },
+        {
+          "id": "F01-cap-08",
+          "description": "Treat `#` as a comment to end of line (but keep a hash inside a string), allow comments glued to values and after headers, ignore space or tab indentation, and treat a carriage-return/line-feed pair as one line feed"
+        },
+        {
+          "id": "F01-cap-09",
+          "description": "Refuse duplicate keys, reopening a header-opened table, overwriting a value with a table or array-of-tables header, mutating an inline table, missing values, multiline-string keys and headers, and a header that spans lines or shares its line with a pair. An inline array nested 470 levels, an inline table nested 310 levels, and a dotted key with 310 parts each succeed as scored lower bounds; extra depth is the implementer's and is not scored"
+        }
+      ],
+      "test_files": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ]
+    },
+    "F02": {
+      "core_capabilities": [
+        {
+          "id": "F02-cap-01",
+          "description": "Construct lowercase `true` and `false` as booleans, not as integers or strings"
+        },
+        {
+          "id": "F02-cap-02",
+          "description": "Parse the four string forms: basic and literal (one-line), multiline basic (line-joining backslash, discarded opening newline, four-or-five-quote close), and multiline literal (no escapes, apostrophes in the value)"
+        },
+        {
+          "id": "F02-cap-03",
+          "description": "Replace the documented basic-string escapes, including `\\e`, `\\xHH`, `\\uHHHH`, and `\\UHHHHHHHH`, and apply the same escapes in quoted keys so `\"\\u0000\"` and `'\\u0000'` are different keys"
+        },
+        {
+          "id": "F02-cap-04",
+          "description": "Construct integers in decimal, hexadecimal (`0x`), octal (`0o`), and binary (`0b`), including signs on decimal values, digit underscores, and signed zeros as integer 0"
+        },
+        {
+          "id": "F02-cap-05",
+          "description": "Construct default floats from fractional and exponent spellings and from `inf` / `+inf` / `-inf` / `nan` / `+nan` / `-nan`"
+        },
+        {
+          "id": "F02-cap-06",
+          "description": "Construct offset date-times as timezone-aware, local date-times as timezone-naive, local dates, and local times, including `T`/`t`/space separators, omitted seconds, leap-year dates, ordinary standard-library values, six-digit microseconds (`1987-07-05T17:45:56.123Z` has 123000 microseconds), and truncation of further fractional digits to six"
+        },
+        {
+          "id": "F02-cap-07",
+          "description": "Refuse illegal scalar spellings as the decode error in FP-04, not as a type error: wrong-case booleans, leading-zero decimals, leading-dot floats (`.12345`), capital `0X`/`0O`/`0B` prefixes, illegal underscores and bases, incomplete or non-scalar escapes, a raw form-feed in a one-line string, unclosed strings, impossible calendar values, and hour 24 / minute 60 / second 60"
+        }
+      ],
+      "test_files": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ]
+    },
+    "F03": {
+      "core_capabilities": [
+        {
+          "id": "F03-cap-01",
+          "description": "Parse a binary-mode UTF-8 file to the same document mapping as the string-parse entry on the same characters, including arrays of tables, other FP-01 / FP-02 documents, and a file with no bytes (empty mapping)"
+        },
+        {
+          "id": "F03-cap-02",
+          "description": "Interpret the file's bytes as UTF-8 so a carriage-return/line-feed pair between keys is treated as one line feed per FP-01"
+        },
+        {
+          "id": "F03-cap-03",
+          "description": "Refuse a text-mode file object with a type error, not a decode error, and return no document mapping"
+        },
+        {
+          "id": "F03-cap-04",
+          "description": "Yield no document mapping when the bytes are not valid UTF-8; the call does not succeed"
+        }
+      ],
+      "test_files": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ]
+    },
+    "F04": {
+      "core_capabilities": [
+        {
+          "id": "F04-cap-01",
+          "description": "Refuse invalid TOML with the product's decode error (a kind of value error) and return no document mapping, including `]] this is invalid TOML [[`, `val=.`, unclosed strings, and duplicate keys"
+        },
+        {
+          "id": "F04-cap-02",
+          "description": "Identify the offending place as a 1-based line and column when the problem is inside the document, or as end-of-document when the input ended too early (`fwfw=`), with the unformatted reason, original document, and 0-based offset recoverable separately from the formatted report"
+        },
+        {
+          "id": "F04-cap-03",
+          "description": "Fail the documented invalid constructs: lone `.`, unclosed array or inline table, missing commas, unclosed headers, a form-feed in a comment, wrong-case booleans, and mixed-case `inf`/`nan`"
+        },
+        {
+          "id": "F04-cap-04",
+          "description": "When a caller supplies the decode error with reason `error parsing`, document `v=1` / `[table]` / `v='val'`, and offset 13, recover line 3, column 2, and each of reason, document, offset, line, and column"
+        },
+        {
+          "id": "F04-cap-05",
+          "description": "Refuse a bytes object or a boolean on the string-parse entry with a type error, not a decode error"
+        }
+      ],
+      "test_files": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ]
+    },
+    "F05": {
+      "core_capabilities": [
+        {
+          "id": "F05-cap-01",
+          "description": "For `precision-matters = 0.982492` and a decimal converter, yield a decimal equal to the decimal of the characters `0.982492`, not a binary float of that magnitude"
+        },
+        {
+          "id": "F05-cap-02",
+          "description": "Convert special float tokens `inf`, `+inf`, `-inf`, `nan`, `+nan`, and `-nan` through the same converter, and leave integers unconverted (`a = 1` stays an integer while `b = 1.0` becomes a decimal)"
+        },
+        {
+          "id": "F05-cap-03",
+          "description": "When no converter is supplied, construct TOML floats as Python floats per FP-02"
+        },
+        {
+          "id": "F05-cap-04",
+          "description": "If the converter returns a dictionary or a list (including a subtype of either), fail with a value error, not a decode error, and return no document mapping"
+        }
+      ],
+      "test_files": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ]
+    }
+  },
+  "capabilities": [
+    {
+      "capability_id": "F01-cap-01",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Parse empty, whitespace-only, or comment-only text (including a comment with no line feed) as an empty mapping, and parse a root document such as `one = 1` / `two = 'two'` / `arr = []` into those three values"
+    },
+    {
+      "capability_id": "F01-cap-02",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat every key as a string: bare keys (digits, hyphen vs underscore, letter case), quoted keys (empty, `#`, spaces, literal dots, non-ASCII), and keyword-looking keys (`true`, `false`, `inf`, `nan`)"
+    },
+    {
+      "capability_id": "F01-cap-03",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Create nested mappings from dotted keys, ignore spaces around dots in pairs and in table headers (`[ g . h . i ]` equals `[g.h.i]`), treat a quoted interior dot as part of the name, and allow further dotted keys under the same prefix"
+    },
+    {
+      "capability_id": "F01-cap-04",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Open tables with square-bracket headers, omit super-tables (`[x.y.z.w]` then later `[x]`), and declare a new sub-table after dotted keys have already created a nested table (`[fruit.apple.texture]` after `apple.color`)"
+    },
+    {
+      "capability_id": "F01-cap-05",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Append one mapping per `[[array-of-tables]]` repetition, attach nested arrays of tables to the most recently appended parent, attach a later single-bracket header whose first part is that array name to the current item (`[[arr]]` then `[arr.subtab]`), imply parent tables from a nested header, allow a later parent header to add a sibling key, and refuse a dotted key that treats that array as a table (`arr.val1 = 1` after `[[tab.arr]]` then `[tab]`)"
+    },
+    {
+      "capability_id": "F01-cap-06",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct inline tables as mappings of string keys, including empty braces, dotted keys inside braces, and TOML v1.1.0 newlines, comments, and trailing commas"
+    },
+    {
+      "capability_id": "F01-cap-07",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct arrays as sequences, including empty, mixed-type, nested, multiline, comment-between-elements, and trailing-comma forms"
+    },
+    {
+      "capability_id": "F01-cap-08",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat `#` as a comment to end of line (but keep a hash inside a string), allow comments glued to values and after headers, ignore space or tab indentation, and treat a carriage-return/line-feed pair as one line feed"
+    },
+    {
+      "capability_id": "F01-cap-09",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse duplicate keys, reopening a header-opened table, overwriting a value with a table or array-of-tables header, mutating an inline table, missing values, multiline-string keys and headers, and a header that spans lines or shares its line with a pair. An inline array nested 470 levels, an inline table nested 310 levels, and a dotted key with 310 parts each succeed as scored lower bounds; extra depth is the implementer's and is not scored"
+    },
+    {
+      "capability_id": "F02-cap-01",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct lowercase `true` and `false` as booleans, not as integers or strings"
+    },
+    {
+      "capability_id": "F02-cap-02",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Parse the four string forms: basic and literal (one-line), multiline basic (line-joining backslash, discarded opening newline, four-or-five-quote close), and multiline literal (no escapes, apostrophes in the value)"
+    },
+    {
+      "capability_id": "F02-cap-03",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Replace the documented basic-string escapes, including `\\e`, `\\xHH`, `\\uHHHH`, and `\\UHHHHHHHH`, and apply the same escapes in quoted keys so `\"\\u0000\"` and `'\\u0000'` are different keys"
+    },
+    {
+      "capability_id": "F02-cap-04",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct integers in decimal, hexadecimal (`0x`), octal (`0o`), and binary (`0b`), including signs on decimal values, digit underscores, and signed zeros as integer 0"
+    },
+    {
+      "capability_id": "F02-cap-05",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct default floats from fractional and exponent spellings and from `inf` / `+inf` / `-inf` / `nan` / `+nan` / `-nan`"
+    },
+    {
+      "capability_id": "F02-cap-06",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct offset date-times as timezone-aware, local date-times as timezone-naive, local dates, and local times, including `T`/`t`/space separators, omitted seconds, leap-year dates, ordinary standard-library values, six-digit microseconds (`1987-07-05T17:45:56.123Z` has 123000 microseconds), and truncation of further fractional digits to six"
+    },
+    {
+      "capability_id": "F02-cap-07",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse illegal scalar spellings as the decode error in FP-04, not as a type error: wrong-case booleans, leading-zero decimals, leading-dot floats (`.12345`), capital `0X`/`0O`/`0B` prefixes, illegal underscores and bases, incomplete or non-scalar escapes, a raw form-feed in a one-line string, unclosed strings, impossible calendar values, and hour 24 / minute 60 / second 60"
+    },
+    {
+      "capability_id": "F03-cap-01",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Parse a binary-mode UTF-8 file to the same document mapping as the string-parse entry on the same characters, including arrays of tables, other FP-01 / FP-02 documents, and a file with no bytes (empty mapping)"
+    },
+    {
+      "capability_id": "F03-cap-02",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Interpret the file's bytes as UTF-8 so a carriage-return/line-feed pair between keys is treated as one line feed per FP-01"
+    },
+    {
+      "capability_id": "F03-cap-03",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a text-mode file object with a type error, not a decode error, and return no document mapping"
+    },
+    {
+      "capability_id": "F03-cap-04",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Yield no document mapping when the bytes are not valid UTF-8; the call does not succeed"
+    },
+    {
+      "capability_id": "F04-cap-01",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse invalid TOML with the product's decode error (a kind of value error) and return no document mapping, including `]] this is invalid TOML [[`, `val=.`, unclosed strings, and duplicate keys"
+    },
+    {
+      "capability_id": "F04-cap-02",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Identify the offending place as a 1-based line and column when the problem is inside the document, or as end-of-document when the input ended too early (`fwfw=`), with the unformatted reason, original document, and 0-based offset recoverable separately from the formatted report"
+    },
+    {
+      "capability_id": "F04-cap-03",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Fail the documented invalid constructs: lone `.`, unclosed array or inline table, missing commas, unclosed headers, a form-feed in a comment, wrong-case booleans, and mixed-case `inf`/`nan`"
+    },
+    {
+      "capability_id": "F04-cap-04",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "When a caller supplies the decode error with reason `error parsing`, document `v=1` / `[table]` / `v='val'`, and offset 13, recover line 3, column 2, and each of reason, document, offset, line, and column"
+    },
+    {
+      "capability_id": "F04-cap-05",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a bytes object or a boolean on the string-parse entry with a type error, not a decode error"
+    },
+    {
+      "capability_id": "F05-cap-01",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "For `precision-matters = 0.982492` and a decimal converter, yield a decimal equal to the decimal of the characters `0.982492`, not a binary float of that magnitude"
+    },
+    {
+      "capability_id": "F05-cap-02",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Convert special float tokens `inf`, `+inf`, `-inf`, `nan`, `+nan`, and `-nan` through the same converter, and leave integers unconverted (`a = 1` stays an integer while `b = 1.0` becomes a decimal)"
+    },
+    {
+      "capability_id": "F05-cap-03",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "When no converter is supplied, construct TOML floats as Python floats per FP-02"
+    },
+    {
+      "capability_id": "F05-cap-04",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "If the converter returns a dictionary or a list (including a subtype of either), fail with a value error, not a decode error, and return no document mapping"
+    }
+  ]
+}

@@ -50,14 +50,14 @@ Feature points below group these entries by independently verifiable capability.
 - **Form factor:** A pure-Python library with zero runtime third-party dependencies. Optional compiled wheels exist on some platforms for speed; they are not required. The default, graded path is the pure-Python parser.
 - **Language:** Python 3.8 or newer, including the CPython and PyPy implementations the project tests.
 - **Platforms:** Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter.
-- **Hardware:** CPU-only. No GPU or accelerator is required or claimed. The mandatory execution substrate is a real host that can import tomlparse from this repository’s source tree and parse a one-table document.
+- **Hardware:** CPU-only. No GPU or accelerator is required or claimed. The mandatory execution substrate is a real host that can import Tomlparse from this repository’s source tree and parse a one-table document.
 - **TOML dialect:** TOML v1.1.0. Behaviors that exist only in older Tomlparse releases (TOML v1.0.0-only, text-mode file objects as parse input) are not this product.
 - **Result types:** Successful parses return plain mappings, sequences, and scalars from Python and its standard library. The product does not return custom node types in order to keep comments or layout.
 - **Error text:** Wording of decode-error messages is informational. Graded behavior is success versus failure, the exception kind, and (when a parse fails) that the failure identifies the offending place in the document — not a particular sentence.
 
 ## Capability discrimination (global)
 
-Every feature point below is a **core capability**. None is an accelerator-backed mandatory-substrate GPU feature.
+Every feature point below is a **core capability**. None is an accelerator-backed mandatory-substrate GPU feature. The only hardware profile is a CPU baseline: there is no removable GPU, accelerator, or extra service. A negative-control clause that disables the package under test or the interpreter is not applicable and is not written.
 
 For every feature point:
 
@@ -65,8 +65,6 @@ For every feature point:
 - **Absent / hollow:** Parse always succeeds or always fails; every scalar stays a string; tables are not nested; invalid TOML is accepted; a writer is required to “round-trip”; floats cannot be built as decimals.
 
 Cheaper proxies (a JSON parser, a TOML subset that skips date-times or dotted keys, a hard-coded fixture table, or a comment-preserving toolkit that is not this parser) do **not** satisfy core capabilities. There is no approved degradation scenario that replaces Tomlparse’s parser for a core capability.
-
-**Negative control (library substrate):** When Tomlparse is deliberately not importable in an isolated subprocess (removed from the import path), a parse of the one-line document `name = "probe"` must fail to produce a successful Tomlparse document mapping — a hard assertion, not a skip. When the interpreter is present and the package is imported from this tree, that same document yields a mapping whose `name` value is the string `probe`. Output-equality alone is not proof that the real package ran.
 
 ## Non-goals
 
@@ -76,7 +74,7 @@ Cheaper proxies (a JSON parser, a TOML subset that skips date-times or dotted ke
 - Shipping a command-line program, a web server, or a configuration framework.
 - Guaranteeing a particular parse-throughput benchmark. Speed is a design goal, not a graded oracle.
 - Treating the benchmark harness, the fuzzer, the profiler, or packaging scripts as product capabilities.
-- Treating a fallback import of the standard-library TOML module on Python 3.11+ as a Tomlparse feature. That pattern is integrator guidance for dependency selection; this product’s graded entries are Tomlparse’s own parse entries.
+- Treating a fallback import of the standard-library TOML module on Python 3.11+ as a Tomlparse feature. That pattern is integrator guidance for dependency selection; this product’s graded entries are Tomlparse’s own parse entries. The implementation must not delegate `loads` or `load` to `tomllib` or another existing TOML parser.
 
 ---
 
@@ -115,11 +113,12 @@ Cheaper proxies (a JSON parser, a TOML subset that skips date-times or dotted ke
 - A key/value pair must have a value. A line `key =` with nothing after the equals (except whitespace or a comment) fails. A line with no key before the equals fails.
 - A pair whose key is a multiline string fails: `"""key""" = 1` does not yield a mapping. A table header whose name is a multiline string fails: `["""tbl"""]` then `k = 1` does not yield a mapping.
 - A table header must close on the same line: `[tbl` then a line feed then `]` then `k = 1` fails. A header cannot share its line with a following pair: `[tbl] k = 1` on one line fails.
-- An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. An inline array, inline table, or dotted key nested deeper than the interpreter’s recursion limit fails with a recursion error and does not yield a mapping.
+- An inline array nested 470 levels deep succeeds. An inline table nested 310 levels deep succeeds. A dotted key with 310 parts succeeds. Those depths are scored lower bounds: a caller who builds those documents must receive a mapping. How much farther an implementation can nest, and whether a still-deeper document fails because the interpreter refuses a deeper call, is the implementer’s and is not scored.
 
 **Verifiable oracle:**
 
-- Success: empty or comment-only text is an empty mapping; `one = 1` / `two = 'two'` / `arr = []` matches those three values; `1234` as a key is the string `1234`; `name` and `Name` are distinct; `false = false` and `true = 1` coexist; `"" = "blank"` uses the empty key; `"with.dot"` is one key; `name.first` and `"name".'last'` nest under `name`; `[ g . h . i ]` matches `[g.h.i]`; `[x.y.z.w]` then `[x]` succeeds; `[fruit]` with `apple.color` then `[fruit.apple.texture]` succeeds; two `[[players]]` items yield a two-element sequence; nested `[[albums.songs]]` attach to the current album; `[arr.subtab]` after each `[[arr]]` attaches to that item; `{ x = 1, y = 2 }` is a mapping of string keys to integers; `{ c = 1, }` with a newline and a trailing comma succeeds; `[1,]` and `[1, 1.1]` succeed; `#` in a string is kept; `true=true#true` is boolean true; carriage-return/line-feed between keys is one separator; 310 nested inline tables and 470 nested arrays succeed.
+- The documents named in this feature are TOML v1.1.0 documents. An outside party holding that specification and the document text can check that the listed structures are allowed, including newlines and trailing commas in inline tables.
+- Success: empty or comment-only text is an empty mapping; `one = 1` / `two = 'two'` / `arr = []` matches those three values; `1234` as a key is the string `1234`; `name` and `Name` are distinct; `false = false` and `true = 1` coexist; `"" = "blank"` uses the empty key; `"with.dot"` is one key; `name.first` and `"name".'last'` nest under `name`; `[ g . h . i ]` matches `[g.h.i]`; `[x.y.z.w]` then `[x]` succeeds; `[fruit]` with `apple.color` then `[fruit.apple.texture]` succeeds; two `[[players]]` items yield a two-element sequence; nested `[[albums.songs]]` attach to the current album; `[arr.subtab]` after each `[[arr]]` attaches to that item; `{ x = 1, y = 2 }` is a mapping of string keys to integers; `{ c = 1, }` with a newline and a trailing comma succeeds; `[1,]` and `[1, 1.1]` succeed; `#` in a string is kept; `true=true#true` is boolean true; carriage-return/line-feed between keys is one separator; an inline table nested 310 levels, an inline array nested 470 levels, and a dotted key with 310 parts each yield a mapping.
 - Failure / absence: every key stays at the root; dotted keys do not nest; array-of-tables items overwrite instead of append; inline tables reject newlines or trailing commas; comments become keys; duplicate keys silently keep the last value; `a = { b = 1 }` then `a.b = 2` succeeds; empty text fails; after `[[tab.arr]]` then `[tab]`, `arr.val1 = 1` succeeds; `"""key""" = 1` succeeds; `[tbl] k = 1` on one line succeeds.
 
 ---
@@ -147,17 +146,19 @@ Cheaper proxies (a JSON parser, a TOML subset that skips date-times or dotted ke
 
 **Boundary / error behavior:**
 
-- Boolean tokens are only `true` and `false` in lowercase. `True`, `FALSE`, `t`, and `f` are not booleans and, as values, fail (FP-04).
-- A decimal integer with a leading zero other than the number zero itself fails: `01` fails; `+01` and `-01` fail. A hex/octal/binary prefix with a capital letter (`0X1`, `0O1`, `0B1`) fails. A leading or trailing underscore, a doubled underscore, a sign on a hex/octal/binary integer, or digits that do not belong to that base, fail.
-- A float with a leading zero on the integer part other than a single `0` before the decimal point fails: `03.14`, `+03.14`, and `-03.14` fail. A float that begins with a decimal point fails: `.12345`, `+.12345`, and `-.12345` fail. A token that is only a dot, or that has a trailing dot with no fractional digit, fails as a float.
+- Each token below is not a valid TOML v1.1.0 scalar. The parse does not yield a document mapping. The failure is the decode error in FP-04, not a type error and not a missing mapping with some other exception kind.
+- Boolean tokens are only `true` and `false` in lowercase. `True`, `FALSE`, `t`, and `f` as values fail that way.
+- A decimal integer with a leading zero other than the number zero itself fails: `01`; `+01` and `-01`. A hex/octal/binary prefix with a capital letter (`0X1`, `0O1`, `0B1`) fails. A leading or trailing underscore, a doubled underscore, a sign on a hex/octal/binary integer, or digits that do not belong to that base, fail.
+- A float with a leading zero on the integer part other than a single `0` before the decimal point fails: `03.14`, `+03.14`, and `-03.14`. A float that begins with a decimal point fails: `.12345`, `+.12345`, and `-.12345`. A token that is only a dot, or that has a trailing dot with no fractional digit, fails as a float.
 - An escaped code point that is not a Unicode scalar (a UTF-16 surrogate) fails. An incomplete `\x`, `\u`, or `\U` hex run fails. A backslash in a basic string that is not one of the escapes listed above fails.
 - A raw control character other than tab is illegal inside a one-line string: a basic string that contains a raw form-feed character fails. A carriage return that is not part of a carriage-return/line-feed pair is illegal inside a multiline basic string. An unclosed string of any of the four forms fails.
-- A calendar value that matches the date-time shape but is not a real date fails: `1988-02-30` as a local date fails; a February 29 on a non-leap year fails. An hour outside 0 through 23, a minute outside 0 through 59, or a second outside 0 through 59 fails: `2006-01-01T24:00:00Z` fails; `17:60:00` as a local time fails; `17:45:60` fails.
+- A calendar value that matches the date-time shape but is not a real date fails: `1988-02-30` as a local date; a February 29 on a non-leap year. An hour outside 0 through 23, a minute outside 0 through 59, or a second outside 0 through 59 fails: `2006-01-01T24:00:00Z`; `17:60:00` as a local time; `17:45:60`.
 
 **Verifiable oracle:**
 
-- Success: `true` / `false` are booleans; `"hello"` is a string; `'\\x20'` is the four characters backslash, x, 2, 0; a multiline basic string with a line-joining backslash concatenates without a newline; `"\e"` is code point 27; `"\x68\x65\x6c\x6c\x6f\x0a"` is `hello` plus a line feed; `0xDEADBEEF` is the corresponding integer; `0o755` and `0b11010110` are integers; `42` is an integer and `3.14` is a float; `inf` is positive infinity and `nan` is a NaN; `1979-05-27T07:32:00-08:00` is aware; `1988-10-27t01:01:01` is naive; `1988-10-27` is a date; `13:37` is a time with second 0; `2000-02-29` is accepted; `"\u0000"` and `'\u0000'` as keys are two different keys.
-- Failure / absence: `true` is the integer 1 or the string `true`; hex integers stay strings; date-times stay strings; `\e` and `\x` are rejected; `01` is accepted as 1; `.12345` is accepted as a float; `03.14` is accepted; `1988-02-30` is accepted; `2006-01-01T24:00:00Z` is accepted; a naive date-time is stored as UTC; seconds-omitted date-times are rejected.
+- The scalar spellings named in this feature are TOML v1.1.0 tokens. An outside party holding that specification and the document text can check that the listed forms are allowed, including the `\e` and `\x` string escapes and date-times whose seconds are omitted. The Python value each token becomes is the observation this feature grades.
+- Success: `true` / `false` are booleans; `"hello"` is a string; `'\x20'` is the four characters backslash, x, 2, 0; a multiline basic string with a line-joining backslash concatenates without a newline; `"\e"` is code point 27; `"\x68\x65\x6c\x6c\x6f\x0a"` is `hello` plus a line feed; `0xDEADBEEF` is the corresponding integer; `0o755` and `0b11010110` are integers; `42` is an integer and `3.14` is a float; `inf` is positive infinity and `nan` is a NaN; `1979-05-27T07:32:00-08:00` is aware; `1988-10-27t01:01:01` is naive; `1988-10-27` is a date; `13:37` is a time with second 0; `2000-02-29` is accepted; `"\u0000"` and `'\u0000'` as keys are two different keys; `1987-07-05T17:45:56.123Z` has 123000 microseconds; a fractional second with more than six digits keeps the first six as microseconds and still succeeds.
+- Failure / absence: `true` is the integer 1 or the string `true`; hex integers stay strings; date-times stay strings; `\e` and `\x` are rejected; `01` is accepted as 1; `.12345` is accepted as a float; `03.14` is accepted; `1988-02-30` is accepted; `2006-01-01T24:00:00Z` is accepted; a naive date-time is stored as UTC; seconds-omitted date-times are rejected; the listed illegal scalars yield a mapping, or fail as a type error rather than as the decode error in FP-04.
 
 ---
 
@@ -213,11 +214,11 @@ Cheaper proxies (a JSON parser, a TOML subset that skips date-times or dotted ke
 - The string-parse entry accepts a Python text string only. Passing a bytes object such as `v = 1` encoded as bytes, or passing a boolean, fails with a **type error**, not a decode error. The observer can tell “wrong Python type” from “invalid TOML”.
 - The binary-file entry’s refusal of a text-mode file is a type error (FP-03), not a decode error.
 - Wording of the decode-error report is not a compatibility contract. Two faithful implementations may phrase the report differently as long as the parse fails, the exception is the decode error, and the location of the failure is identifiable as specified above.
-- Recursion failures from FP-01 are recursion errors, not decode errors. The observer can tell those two failure kinds apart.
 
 **Verifiable oracle:**
 
-- Success of this capability means refusal: `]] this is invalid TOML [[` does not return a mapping and raises the decode error; `val=.` fails as a decode error; `v = "abc` (unclosed) fails; `True` as a value fails; `a = 1` then `a = 2` fails; a comment containing a form-feed character fails; a string-parse of bytes fails as a type error; a string-parse of a boolean fails as a type error; supplying the decode error with reason `error parsing`, the three-line document above, and offset 13 yields recovered line 3, column 2.
+- The documents named in this feature are inputs an outside party can check against TOML v1.1.0: if that specification forbids the document, this product must not return a mapping, and the failure must be the decode error.
+- Success of this capability means refusal: `]] this is invalid TOML [[` does not return a mapping and raises the decode error; `val=.` fails as a decode error; `v = "abc` (unclosed) fails; `True` as a value fails; `a = 1` then `a = 2` fails; a comment containing a form-feed character fails; the illegal scalars listed in FP-02 fail as this same decode error; a string-parse of bytes fails as a type error; a string-parse of a boolean fails as a type error; supplying the decode error with reason `error parsing`, the three-line document above, and offset 13 yields recovered line 3, column 2.
 - Failure / absence: invalid TOML returns a mapping; invalid TOML raises a generic exception that is not the decode error; bytes are silently decoded; `True` is accepted as boolean true; unclosed strings are accepted; type errors and decode errors cannot be told apart; a failed parse still returns a partial mapping.
 
 ---

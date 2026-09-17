@@ -43,10 +43,13 @@ def test_run_argv_blocks_github_hosts() -> None:
     assert "api.github.com:0.0.0.0" in argv
 
 
+_UNPINNED = {"CBRUN_ALLOW_UNPINNED_CLI": "1"}
+
+
 def test_agent_dockerfile_clears_app_workspace() -> None:
     from cbrun.images import _build_dockerfile  # noqa: WPS433
 
-    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", None)
+    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", _UNPINNED)
     assert "rm -rf /app" in df
     assert "/opt/codingbench/repo" in df
     assert "/opt/cb-warm" in df
@@ -57,7 +60,7 @@ def test_agent_dockerfile_clears_app_workspace() -> None:
 def test_agent_dockerfile_all_backends_uses_per_cli_install() -> None:
     from cbrun.images import _build_dockerfile  # noqa: WPS433
 
-    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", None)
+    df = _build_dockerfile("codingbench-benchmark/sample:deliverable", _UNPINNED)
     assert "npm prefix -g" in df
     assert "@openai/codex" in df
     assert "opencode-ai" in df
@@ -73,7 +76,7 @@ def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
 
     df = _build_dockerfile(
         "codingbench-benchmark/sample:deliverable",
-        None,
+        _UNPINNED,
         backend="cursor",
     )
     assert "cursor.com/install" in df
@@ -126,7 +129,17 @@ def _seed_tests_dir(tmp_path: Path) -> Path:
 def test_run_judge_parses_reward_from_report(tmp_path: Path) -> None:
     final_dir = _seed_tests_dir(tmp_path)
     fake = _FakeContainer(
-        report={"reward": 1.0, "judge_error": None},
+        report={
+            "reward": 1.0,
+            "judge_error": None,
+            "final": {
+                "counts_parsed": True,
+                "total_count": 1,
+                "passed_count": 1,
+                "failed_count": 0,
+                "error_count": 0,
+            },
+        },
         exec_result=ExecResult(exit_code=0),
     )
     outcome = judge.run_judge(
@@ -200,7 +213,17 @@ def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) 
     solve.cp_from = _cp_from  # type: ignore[method-assign]
 
     judge_fake = _FakeContainer(
-        report={"reward": 1.0, "judge_error": None},
+        report={
+            "reward": 1.0,
+            "judge_error": None,
+            "final": {
+                "counts_parsed": True,
+                "total_count": 1,
+                "passed_count": 1,
+                "failed_count": 0,
+                "error_count": 0,
+            },
+        },
         exec_result=ExecResult(exit_code=0),
     )
     started: list[tuple[str, dict]] = []

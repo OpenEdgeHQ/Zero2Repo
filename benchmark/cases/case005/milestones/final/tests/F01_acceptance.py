@@ -2,8 +2,11 @@
 """Acceptance tests for HTTP events and header normalization (FP-01).
 
 Exercises event constructors on their own, before any connection is
-involved. Failures must be local protocol errors (not remote) and, when
-the PRD names a suggested status, that integer.
+involved. Failures must be local protocol errors (not remote).
+Transfer-Encoding gzip or chunked together with gzip is a local
+protocol error whose suggested status is 501. Host refusals in this
+feature are graded as local protocol errors; this feature does not name
+a suggested-status integer for them.
 """
 
 from __future__ import annotations
@@ -11,7 +14,6 @@ from __future__ import annotations
 import time
 from http import HTTPStatus
 
-from _harness import product_package_name, run_python
 from F01_helpers import (
     client_connection,
     connection_side_states,
@@ -40,7 +42,7 @@ from F01_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# S. Library-substrate negative control
+# S. Loaded-package GET / with Host example.com
 # ---------------------------------------------------------------------------
 
 
@@ -61,32 +63,6 @@ def test_get_slash_host_constructs_when_package_importable():
     assert type(method) is bytes
     assert type(target) is bytes
     assert type(version) is bytes
-
-
-def test_request_construct_fails_when_package_not_importable():
-    pkg = product_package_name()
-    code = (
-        "ok = False\n"
-        "try:\n"
-        f"    import {pkg} as _pkg\n"
-        "    _Request = _pkg.Request\n"
-        "    _ev = _Request(\n"
-        "        method='GET', target='/',\n"
-        "        headers=[('Host', 'example.com')],\n"
-        "    )\n"
-        "    ok = _ev is not None\n"
-        "    if ok:\n"
-        "        print('CONSTRUCTED_REQUEST')\n"
-        "except Exception as _exc:\n"
-        "    print('CONSTRUCT_UNAVAILABLE')\n"
-        "    print(type(_exc).__name__)\n"
-    )
-    result = run_python(code=code, include_product=False)
-    text = result.stdout_text
-    print(f"negative-control stdout={text!r}", flush=True)
-    print(f"negative-control stderr={result.stderr_text!r}", flush=True)
-    assert "CONSTRUCTED_REQUEST" not in text
-    assert "CONSTRUCT_UNAVAILABLE" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1118,14 +1094,15 @@ def test_gzip_501_differs_from_missing_host_400():
         ),
         suggested=501,
     )
-    host_exc = require_local_refusal(request_result(headers=[]))
+    host_exc = require_local_refusal(
+        request_result(headers=[]),
+    )
     gzip_status = suggested_status(gzip_exc)
     print(
         f"gzip suggested={gzip_status} missing-host type={type(host_exc).__name__}",
         flush=True,
     )
     assert gzip_status == 501
-    assert host_exc is not None
 
 
 def test_transfer_encoding_gzip_refused_on_non_request():

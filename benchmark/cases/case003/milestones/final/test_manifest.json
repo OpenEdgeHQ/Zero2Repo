@@ -3,10 +3,14 @@
   "step": "final",
   "test_files": [
     "tests/F01_acceptance.py",
+    "tests/F01_helpers.py",
     "tests/F02_acceptance.py",
+    "tests/F02_helpers.py",
     "tests/F03_acceptance.py",
     "tests/F04_acceptance.py",
+    "tests/F04_helpers.py",
     "tests/F05_acceptance.py",
+    "tests/F05_helpers.py",
     "tests/F06_acceptance.py",
     "tests/F07_acceptance.py"
   ],
@@ -14,7 +18,7 @@
     "tests/_harness.py",
     "tests/conftest.py"
   ],
-  "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F05_acceptance.py tests/F06_acceptance.py tests/F07_acceptance.py",
+  "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F01_helpers.py tests/F02_acceptance.py tests/F02_helpers.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F04_helpers.py tests/F05_acceptance.py tests/F05_helpers.py tests/F06_acceptance.py tests/F07_acceptance.py",
   "test_command_template": "python3 -m pytest {test_files}",
   "workdir": ".",
   "execution_groups": [
@@ -23,18 +27,20 @@
         "F01"
       ],
       "test_files": [
-        "tests/F01_acceptance.py"
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
       ],
-      "test_command": "python3 -m pytest tests/F01_acceptance.py"
+      "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F01_helpers.py"
     },
     {
       "feature_ids": [
         "F02"
       ],
       "test_files": [
-        "tests/F02_acceptance.py"
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
       ],
-      "test_command": "python3 -m pytest tests/F02_acceptance.py"
+      "test_command": "python3 -m pytest tests/F02_acceptance.py tests/F02_helpers.py"
     },
     {
       "feature_ids": [
@@ -50,18 +56,20 @@
         "F04"
       ],
       "test_files": [
-        "tests/F04_acceptance.py"
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
       ],
-      "test_command": "python3 -m pytest tests/F04_acceptance.py"
+      "test_command": "python3 -m pytest tests/F04_acceptance.py tests/F04_helpers.py"
     },
     {
       "feature_ids": [
         "F05"
       ],
       "test_files": [
-        "tests/F05_acceptance.py"
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
       ],
-      "test_command": "python3 -m pytest tests/F05_acceptance.py"
+      "test_command": "python3 -m pytest tests/F05_acceptance.py tests/F05_helpers.py"
     },
     {
       "feature_ids": [

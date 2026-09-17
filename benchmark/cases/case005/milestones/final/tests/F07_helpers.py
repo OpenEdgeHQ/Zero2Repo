@@ -47,38 +47,155 @@ from F04_helpers import (
 )
 
 
-def client_waiting_flag(conn: Any) -> bool:
-    """Read whether the client is waiting for 100-continue.
+# Waiting-flag reports are identified by role-asymmetric visibility
+# (PRD line 301), not by a published attribute spelling. Bound after an
+# HTTP/1.1 Expect 100-continue request with a non-empty body.
+_CLIENT_WAITING_NAME: str | None = None
+_THEY_WAITING_NAME: str | None = None
 
-    Attribute missing, probe crash, or a non-bool value raises. Never
-    returns False to mean "could not look".
+
+def _public_bools(conn: Any) -> dict[str, bool]:
+    """Map public attribute names to bool values. Probe failure raises.
+
+    A missing listing, a lookup crash, or a public name that cannot
+    be read is not rewritten as "no booleans" or False.
     """
-    raw = attr(conn, "client_is_waiting_for_100_continue")
+    if conn is None:
+        raise HarnessError("cannot read public booleans of None")
+    try:
+        names = dir(conn)
+    except Exception as exc:
+        raise HarnessError(
+            f"cannot list public attributes of {type(conn).__name__}: {exc}"
+        ) from exc
+    found: dict[str, bool] = {}
+    for name in names:
+        if name.startswith("_"):
+            continue
+        raw = attr(conn, name)
+        if callable(raw):
+            continue
+        if type(raw) is bool:
+            try:
+                found[name] = as_bool(raw)
+            except HarnessError as exc:
+                raise HarnessError(
+                    f"public attribute {name!r} is not a bool: {exc}"
+                ) from exc
+    print(
+        f"public_bools n={len(found)} true={sum(1 for v in found.values() if v)}",
+        flush=True,
+    )
+    return found
+
+
+def bind_waiting_reports(client: Any, server: Any) -> tuple[str, str]:
+    """Identify the two waiting reports by the role split on this pair.
+
+    After an HTTP/1.1 Expect 100-continue request with a non-empty body:
+    the client-waiting report is the public boolean that is true on both
+    the client-role and server-role connections; the they-are-waiting
+    report is the public boolean that is true only on the server-role
+    connection and false on the client-role connection. Missing reports
+    or a probe that is not a bool raise — never rewritten as False.
+
+    Does not match a checkout spelling. The names this checkout or an
+    equivalent form happen to use are not part of the assertion.
+    """
+    global _CLIENT_WAITING_NAME, _THEY_WAITING_NAME
+    client_bools = _public_bools(client)
+    server_bools = _public_bools(server)
+    shared = set(client_bools) & set(server_bools)
+    both_true = sorted(
+        name
+        for name in shared
+        if client_bools[name] is True and server_bools[name] is True
+    )
+    server_only = sorted(
+        name
+        for name in shared
+        if server_bools[name] is True and client_bools[name] is False
+    )
+    if not both_true:
+        raise AssertionError(
+            "no public boolean is true on both the client-role and "
+            "server-role connections after Expect 100-continue"
+        )
+    if len(both_true) != 1:
+        raise AssertionError(
+            "more than one public boolean is true on both connections; "
+            "cannot identify the client-waiting report from the role split"
+        )
+    if not server_only:
+        raise AssertionError(
+            "no public boolean is true only on the server-role connection "
+            "and false on the client-role connection after Expect 100-continue"
+        )
+    if len(server_only) != 1:
+        raise AssertionError(
+            "more than one public boolean is true only on the server-role "
+            "connection; cannot identify the they-are-waiting report from "
+            "the role split"
+        )
+    _CLIENT_WAITING_NAME = both_true[0]
+    _THEY_WAITING_NAME = server_only[0]
+    print(
+        "waiting_reports bound by role split: "
+        "client-waiting true on both, they-waiting true only on server",
+        flush=True,
+    )
+    return _CLIENT_WAITING_NAME, _THEY_WAITING_NAME
+
+
+def _ensure_waiting_reports() -> tuple[str, str]:
+    """Return bound report names, discovering from a fresh Expect pair if needed.
+
+    Discovery is the HTTP/1.1 Expect Content-Length 100 walk line 322
+    names. A later HTTP/1.0 or no-Expect arm then reads those same
+    reports. Failure to classify raises; it is never "not waiting".
+    """
+    if _CLIENT_WAITING_NAME is not None and _THEY_WAITING_NAME is not None:
+        return _CLIENT_WAITING_NAME, _THEY_WAITING_NAME
+    client = client_connection()
+    server = server_connection()
+    encoded = require_send_bytes(
+        send_event(client, make_request(headers=public_expect_headers()))
+    )
+    feed_ok(server, encoded)
+    pull_kind(server, "request")
+    return bind_waiting_reports(client, server)
+
+
+def _read_bound_bool(conn: Any, name: str, *, label: str) -> bool:
+    raw = attr(conn, name)
     try:
         flag = as_bool(raw)
     except HarnessError as exc:
-        raise HarnessError(
-            f"client-waiting flag is not a bool: {exc}"
-        ) from exc
-    print(f"client_waiting_flag={flag}", flush=True)
+        raise HarnessError(f"{label} is not a bool: {exc}") from exc
+    print(f"{label}={flag}", flush=True)
     return flag
+
+
+def client_waiting_flag(conn: Any) -> bool:
+    """Read whether the client is waiting for 100-continue.
+
+    Uses the report discovered by role split, not a fixed spelling.
+    Attribute missing, probe crash, or a non-bool value raises. Never
+    returns False to mean "could not look".
+    """
+    name, _they = _ensure_waiting_reports()
+    return _read_bound_bool(conn, name, label="client_waiting_flag")
 
 
 def they_are_waiting_flag(conn: Any) -> bool:
     """Read whether the peer is waiting for 100-continue.
 
+    Uses the report discovered by role split, not a fixed spelling.
     Attribute missing, probe crash, or a non-bool value raises. Never
     returns False to mean "could not look".
     """
-    raw = attr(conn, "they_are_waiting_for_100_continue")
-    try:
-        flag = as_bool(raw)
-    except HarnessError as exc:
-        raise HarnessError(
-            f"they-waiting flag is not a bool: {exc}"
-        ) from exc
-    print(f"they_are_waiting_flag={flag}", flush=True)
-    return flag
+    _client, name = _ensure_waiting_reports()
+    return _read_bound_bool(conn, name, label="they_are_waiting_flag")
 
 
 def require_waiting_flags(
@@ -558,6 +675,7 @@ def deny_and_complete(client: Any, server: Any, status: int) -> Any:
 __all__ = (
     "accept_connect",
     "accept_upgrade",
+    "bind_waiting_reports",
     "client_waiting_flag",
     "connect_request",
     "deny_and_complete",

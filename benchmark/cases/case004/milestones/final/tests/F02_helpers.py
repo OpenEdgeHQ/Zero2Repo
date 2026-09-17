@@ -29,9 +29,41 @@ from _harness import (
 # Period is the product default separator (PRD). Own name: do not re-export
 # a predecessor's DEFAULT_SEPARATOR.
 SERIALIZER_SEPARATOR = b"."
-TEXT_SEPARATOR = "."
-JSON_LIST_ONE_THROUGH_FOUR = "[1, 2, 3, 4]"
-PUBLIC_ID_MAPPING = {"id": 42}
+
+
+class TEXT_SEPARATOR(str):
+    """The product default payload/signature separator as text: a period.
+
+    Downstream suites import this name and use it as text (containment,
+    concatenation, replacement). The binding is the period character, not a
+    callable.
+    """
+
+
+TEXT_SEPARATOR = TEXT_SEPARATOR(".")
+
+
+class JSON_LIST_ONE_THROUGH_FOUR(str):
+    """JSON text of the list of integers 1 through 4, including spaces.
+
+    Downstream suites import this name and use it as that JSON text (membership
+    in a token, equality with a payload section). The binding is the text, not
+    a callable.
+    """
+
+
+JSON_LIST_ONE_THROUGH_FOUR = JSON_LIST_ONE_THROUGH_FOUR("[1, 2, 3, 4]")
+
+
+class PUBLIC_ID_MAPPING(dict):
+    """Mapping whose ``id`` is 42.
+
+    Downstream suites import this name and dump, load, and compare it as a
+    mapping. The binding is that mapping, not a callable.
+    """
+
+
+PUBLIC_ID_MAPPING = PUBLIC_ID_MAPPING({"id": 42})
 _NO_EXPECTED = object()
 
 

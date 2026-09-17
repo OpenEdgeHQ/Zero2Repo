@@ -1,0 +1,963 @@
+{
+  "schema_version": 1,
+  "features": {
+    "F01": {
+      "core_capabilities": [
+        {
+          "id": "F01-cap-01",
+          "description": "Expose exactly six distinguishable event kinds and construct a request (GET / Host example.com, default version 1.1), informational-response (status 100), response (status 204), data (payload asdf), end-of-message (empty trailing headers), and field-less connection-closed event"
+        },
+        {
+          "id": "F01-cap-02",
+          "description": "Store method, target, and HTTP version as byte strings (native ASCII text or a byte buffer accepted), keep version as two digits separated by a dot, and default a request version to 1.1"
+        },
+        {
+          "id": "F01-cap-03",
+          "description": "Require Host on HTTP/1.1 requests, allow an HTTP/1.0 request with no Host, refuse two Host headers even on HTTP/1.0, and expose hOSt as ordinary host plus raw hOSt"
+        },
+        {
+          "id": "F01-cap-04",
+          "description": "Accept informational status in [100, 200) and final-response status in [200, 1000), default both to HTTP version 1.1 and an empty reason (store a caller-supplied reason such as OK as bytes), refuse the crossed pair (informational 200, response 100) and a non-integer status, and store an integer-valued status constant as a plain integer"
+        },
+        {
+          "id": "F01-cap-05",
+          "description": "Normalize headers to lowercase byte name/value pairs without surrounding whitespace while preserving order and recovering caller name casing through the raw-items view"
+        },
+        {
+          "id": "F01-cap-06",
+          "description": "Accept Content-Length: 1, collapse two Content-Length: 0 headers or a '0 , 0' value to one 0, and refuse non-integer values, disagreeing headers, a single disagreeing '1 , 1,2' value, or a digit string longer than 20 digits"
+        },
+        {
+          "id": "F01-cap-07",
+          "description": "Accept Transfer-Encoding chunked or cHuNkEd as lowercase transfer-encoding/chunked, refuse a second Transfer-Encoding header even when both values are chunked, and refuse gzip or chunked together with gzip as a local protocol error whose suggested status is 501"
+        },
+        {
+          "id": "F01-cap-08",
+          "description": "Refuse illegal header names, header values, request targets, and methods (whitespace, NUL, CR/LF, form feed, vertical tab, non-ASCII names, control names, method-not-a-token), while keeping some non-whitespace control bytes inside values such as Set-Cookie with byte 1"
+        }
+      ],
+      "test_files": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ]
+    },
+    "F02": {
+      "core_capabilities": [
+        {
+          "id": "F02-cap-01",
+          "description": "Construct a connection in the client or server role so complementary roles are recorded, both sides start IDLE, and the nine named states are queryable"
+        },
+        {
+          "id": "F02-cap-02",
+          "description": "Return need-data on a pull of a fresh connection, retain incomplete stored bytes across a split feed, and resume the same event after further fragments (GET /xml Host httpbin.org plus a fragmented 200)"
+        },
+        {
+          "id": "F02-cap-03",
+          "description": "Encode a client GET / with Host example.com and Content-Length 10 as HTTP/1.1 bytes that a server-role connection pulls as that same request, leaving client SEND_BODY and server SEND_RESPONSE"
+        },
+        {
+          "id": "F02-cap-04",
+          "description": "Round-trip informational 100 then response 200 Content-Length 11 (empty reason unless supplied; last Content-Length bytes then a further pull yields end-of-message) plus matching data and end-of-message events so both sides reach DONE, without the library itself writing or reading a socket"
+        },
+        {
+          "id": "F02-cap-05",
+          "description": "Write Host before every other request header and write the original header-name casing from construction, not the ordinary lowercased view"
+        },
+        {
+          "id": "F02-cap-06",
+          "description": "Pull a peer HTTP/1.0 GET / with no headers as version 1.0 plus end-of-message, refuse sending a non-1.1 version (FP-05), and retain the pulled peer HTTP version for the rest of the connection"
+        },
+        {
+          "id": "F02-cap-07",
+          "description": "Accept lone-LF or mixed line endings, an omitted reason phrase, empty or tab-only header values, and obsolete line folding that joins Some continuations as 'multi-line header nonsense I guess'"
+        },
+        {
+          "id": "F02-cap-08",
+          "description": "Refuse a role that is neither client nor server, and refuse when pulled a folded first header, a header name with trailing space/tab before the colon, a nameless colon, garbage after the request or response line, a NUL in a header value or target, a TLS Client/Server Hello, a lone NUL or space, or a blank-line-only feed, as a remote protocol error"
+        },
+        {
+          "id": "F02-cap-09",
+          "description": "Refuse a non-empty feed after an empty end-of-receive feed as a runtime error distinguishable from a protocol error, while allowing further empty chunks"
+        }
+      ],
+      "test_files": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ]
+    },
+    "F03": {
+      "core_capabilities": [
+        {
+          "id": "F03-cap-01",
+          "description": "Frame a request body as empty (no framing headers), as exactly N Content-Length raw bytes, or as chunked data plus an optional trailing-header end-of-message, and recover the same payloads on the peer"
+        },
+        {
+          "id": "F03-cap-02",
+          "description": "Choose response framing from the peer HTTP version (chunked for HTTP/1.1, close-delimited raw bytes for HTTP/1.0 or no request yet), recover an HTTP/1.0 200 with no framing headers as data then end-of-message then connection-closed on empty feed, and let Transfer-Encoding: chunked win over Content-Length"
+        },
+        {
+          "id": "F03-cap-03",
+          "description": "Complete HEAD, 204, 304, and CONNECT 2xx with an empty body while still emitting the framing headers HEAD would have used for GET (chunked to HTTP/1.1, close to HTTP/1.0)"
+        },
+        {
+          "id": "F03-cap-04",
+          "description": "Mark pulled chunked data events as start, end, both, or neither of a chunk (hello whole vs hel/l/o split), discard chunk extensions, and accept extra spaces or tabs after the chunk size"
+        },
+        {
+          "id": "F03-cap-05",
+          "description": "Passthrough-send a length-bearing placeholder so Content-Length 10 and HTTP/1.0 close-delimited sequences are only that object, chunked sequences keep the object among framing pieces, and a following Content-Length end-of-message succeeds"
+        },
+        {
+          "id": "F03-cap-06",
+          "description": "Refuse extra or missing Content-Length bytes, trailing headers on Content-Length or HTTP/1.0 framing, and pulled chunks whose size is over 20 hex digits, contains a NUL, or is not followed by CRLF, as the specified local or remote protocol errors"
+        }
+      ],
+      "test_files": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ]
+    },
+    "F04": {
+      "core_capabilities": [
+        {
+          "id": "F04-cap-01",
+          "description": "Walk one request/response cycle through the queryable states IDLE to SEND_BODY/SEND_RESPONSE to SEND_BODY to DONE, including optional informational-response events while the server stays in SEND_RESPONSE"
+        },
+        {
+          "id": "F04-cap-02",
+          "description": "Allow a server in IDLE to send a response such as 408 Connection: close with no request having arrived"
+        },
+        {
+          "id": "F04-cap-03",
+          "description": "Enable keep-alive only when both sides speak HTTP/1.1 and neither Connection value contains close (case-insensitive, comma-separated); otherwise enter MUST_CLOSE and add Connection: close to the server's response (client-requested close echoed on a 204; HTTP/1.0 GET yields close on a bare 200)"
+        },
+        {
+          "id": "F04-cap-04",
+          "description": "When both sides are DONE, start the next cycle so both return to IDLE and a second HTTP/1.1 exchange (DELETE /foo then 404) can run, with the peer HTTP version from FP-02 still present"
+        },
+        {
+          "id": "F04-cap-05",
+          "description": "Refuse a second client request until the next cycle has been started after the full response is pulled (no client pipelining)"
+        },
+        {
+          "id": "F04-cap-06",
+          "description": "Deliver pipelined server requests one cycle at a time: after /1's end-of-message a further pull is paused; after the response and start-next-cycle, /2 then /3 become available; leftover bytes after /3 stay paused in trailing data"
+        },
+        {
+          "id": "F04-cap-07",
+          "description": "Refuse start-next-cycle when either side is not DONE as a recoverable local protocol error that does not enter ERROR, and refuse reuse after an HTTP/1.0 exchange"
+        }
+      ],
+      "test_files": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ]
+    },
+    "F05": {
+      "core_capabilities": [
+        {
+          "id": "F05-cap-01",
+          "description": "Distinguish local protocol errors from remote protocol errors and from the runtime error used for bytes after end-of-receive, and carry a suggested status that defaults to 400"
+        },
+        {
+          "id": "F05-cap-02",
+          "description": "Treat invalid event construction and start-next-cycle-before-DONE as recoverable local protocol errors so a later valid construction or a later valid start still succeeds"
+        },
+        {
+          "id": "F05-cap-03",
+          "description": "Treat a failed pull of peer-violating bytes (gibberish plus a blank line) as an unrecoverable remote protocol error: their state is ERROR, further pulls fail, our state is not ERROR, and a server can still send 400 with Connection: close"
+        },
+        {
+          "id": "F05-cap-04",
+          "description": "Treat a failed send of a non-1.1 request or response as an unrecoverable local protocol error: our state is ERROR, their state is not, and a subsequent otherwise-valid send also fails"
+        },
+        {
+          "id": "F05-cap-05",
+          "description": "Mark send as failed so our state becomes ERROR (idempotent if done twice), their state is unchanged, and a following send fails as a local protocol error"
+        },
+        {
+          "id": "F05-cap-06",
+          "description": "Enforce the incomplete-event size limit (default 16 kibibytes, suggested status 431) on an unfinished request or response line plus headers: a 4000-a Big header succeeds at limit 5000 and fails at 4000; a complete 10000-byte body succeeds at limit 5000; pipelined leftovers fail only when that next message is parsed; an endless header eventually fails"
+        },
+        {
+          "id": "F05-cap-07",
+          "description": "Treat a receive-side close in the middle of a Content-Length or chunked body, or in the middle of a request line, as a remote protocol error (short-body 5 of 100 is observable), not as a clean connection-closed event; contrast with an HTTP/1.0 close-delimited body, where the empty chunk is end-of-message then connection-closed"
+        }
+      ],
+      "test_files": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ]
+    },
+    "F06": {
+      "core_capabilities": [
+        {
+          "id": "F06-cap-01",
+          "description": "Send a connection-closed event so state updates and no bytes are produced, including a fresh client going CLOSED while the server side becomes MUST_CLOSE, and the reversed walk from a fresh server"
+        },
+        {
+          "id": "F06-cap-02",
+          "description": "Treat an empty feed as the peer closing their sending side: when the close is legal a pull yields connection-closed, and further pulls keep yielding connection-closed while further empty feeds remain allowed"
+        },
+        {
+          "id": "F06-cap-03",
+          "description": "Allow a client half-close after a finished GET /foo so the server stays in SEND_RESPONSE and can still send the response"
+        },
+        {
+          "id": "F06-cap-04",
+          "description": "Allow either side to send connection-closed after both DONE (idempotent if already CLOSED) and let a MUST_CLOSE server reach CLOSED by sending connection-closed"
+        },
+        {
+          "id": "F06-cap-05",
+          "description": "Let a server finish pipelined GET /1 and /2 that arrived before the client half-closed, then send connection-closed from MUST_CLOSE to CLOSED"
+        },
+        {
+          "id": "F06-cap-06",
+          "description": "Refuse connection-closed from SEND_RESPONSE or from the middle of a Content-Length body as a local protocol error, treat extra request bytes after the peer is CLOSED as a remote protocol error, and keep the bytes-after-EOF failure as a runtime error"
+        }
+      ],
+      "test_files": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ]
+    },
+    "F07": {
+      "core_capabilities": [
+        {
+          "id": "F07-cap-01",
+          "description": "Let a server in SEND_RESPONSE send one or more informational-response events (including 100) before the final response, and let the client pull them while still able to send the request body"
+        },
+        {
+          "id": "F07-cap-02",
+          "description": "Set the client-waiting-for-100-continue flag on both connections, and the they-are-waiting flag only on the server, for an HTTP/1.1 Expect: 100-continue request with a non-empty body; clear those flags on 100, on a final response, or when the client sends data or end-of-message; do not set them for HTTP/1.0 Expect"
+        },
+        {
+          "id": "F07-cap-03",
+          "description": "Treat CONNECT 2xx and Upgrade 101 as acceptance and CONNECT non-2xx or Upgrade 200 as denial; when both are proposed accept at most one"
+        },
+        {
+          "id": "F07-cap-04",
+          "description": "Enter MIGHT_SWITCH_PROTOCOL on the client only after the proposing request's end-of-message, pause the server pull until accept or deny, and on denial return to ordinary HTTP so the next cycle can run"
+        },
+        {
+          "id": "F07-cap-05",
+          "description": "On acceptance enter SWITCHED_PROTOCOL permanently: further HTTP sends fail as a local protocol error, pulls stay paused, and later bytes accumulate in trailing data (123 then 456 become 123456 with receive still open)"
+        },
+        {
+          "id": "F07-cap-06",
+          "description": "While switch-paused, an empty feed sets the trailing-data receive-closed flag and leaves the pull paused; after denial that empty feed is a connection-closed event; after acceptance the pull stays paused"
+        },
+        {
+          "id": "F07-cap-07",
+          "description": "After a denial plus start-next-cycle, leftover bytes such as GET / HTTP/1.0 pull as that request plus end-of-message; a client in MIGHT_SWITCH_PROTOCOL cannot send another request"
+        }
+      ],
+      "test_files": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ]
+    }
+  },
+  "capabilities": [
+    {
+      "capability_id": "F01-cap-01",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Expose exactly six distinguishable event kinds and construct a request (GET / Host example.com, default version 1.1), informational-response (status 100), response (status 204), data (payload asdf), end-of-message (empty trailing headers), and field-less connection-closed event"
+    },
+    {
+      "capability_id": "F01-cap-02",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Store method, target, and HTTP version as byte strings (native ASCII text or a byte buffer accepted), keep version as two digits separated by a dot, and default a request version to 1.1"
+    },
+    {
+      "capability_id": "F01-cap-03",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Require Host on HTTP/1.1 requests, allow an HTTP/1.0 request with no Host, refuse two Host headers even on HTTP/1.0, and expose hOSt as ordinary host plus raw hOSt"
+    },
+    {
+      "capability_id": "F01-cap-04",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept informational status in [100, 200) and final-response status in [200, 1000), default both to HTTP version 1.1 and an empty reason (store a caller-supplied reason such as OK as bytes), refuse the crossed pair (informational 200, response 100) and a non-integer status, and store an integer-valued status constant as a plain integer"
+    },
+    {
+      "capability_id": "F01-cap-05",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Normalize headers to lowercase byte name/value pairs without surrounding whitespace while preserving order and recovering caller name casing through the raw-items view"
+    },
+    {
+      "capability_id": "F01-cap-06",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept Content-Length: 1, collapse two Content-Length: 0 headers or a '0 , 0' value to one 0, and refuse non-integer values, disagreeing headers, a single disagreeing '1 , 1,2' value, or a digit string longer than 20 digits"
+    },
+    {
+      "capability_id": "F01-cap-07",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept Transfer-Encoding chunked or cHuNkEd as lowercase transfer-encoding/chunked, refuse a second Transfer-Encoding header even when both values are chunked, and refuse gzip or chunked together with gzip as a local protocol error whose suggested status is 501"
+    },
+    {
+      "capability_id": "F01-cap-08",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse illegal header names, header values, request targets, and methods (whitespace, NUL, CR/LF, form feed, vertical tab, non-ASCII names, control names, method-not-a-token), while keeping some non-whitespace control bytes inside values such as Set-Cookie with byte 1"
+    },
+    {
+      "capability_id": "F02-cap-01",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Construct a connection in the client or server role so complementary roles are recorded, both sides start IDLE, and the nine named states are queryable"
+    },
+    {
+      "capability_id": "F02-cap-02",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Return need-data on a pull of a fresh connection, retain incomplete stored bytes across a split feed, and resume the same event after further fragments (GET /xml Host httpbin.org plus a fragmented 200)"
+    },
+    {
+      "capability_id": "F02-cap-03",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Encode a client GET / with Host example.com and Content-Length 10 as HTTP/1.1 bytes that a server-role connection pulls as that same request, leaving client SEND_BODY and server SEND_RESPONSE"
+    },
+    {
+      "capability_id": "F02-cap-04",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Round-trip informational 100 then response 200 Content-Length 11 (empty reason unless supplied; last Content-Length bytes then a further pull yields end-of-message) plus matching data and end-of-message events so both sides reach DONE, without the library itself writing or reading a socket"
+    },
+    {
+      "capability_id": "F02-cap-05",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Write Host before every other request header and write the original header-name casing from construction, not the ordinary lowercased view"
+    },
+    {
+      "capability_id": "F02-cap-06",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Pull a peer HTTP/1.0 GET / with no headers as version 1.0 plus end-of-message, refuse sending a non-1.1 version (FP-05), and retain the pulled peer HTTP version for the rest of the connection"
+    },
+    {
+      "capability_id": "F02-cap-07",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept lone-LF or mixed line endings, an omitted reason phrase, empty or tab-only header values, and obsolete line folding that joins Some continuations as 'multi-line header nonsense I guess'"
+    },
+    {
+      "capability_id": "F02-cap-08",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a role that is neither client nor server, and refuse when pulled a folded first header, a header name with trailing space/tab before the colon, a nameless colon, garbage after the request or response line, a NUL in a header value or target, a TLS Client/Server Hello, a lone NUL or space, or a blank-line-only feed, as a remote protocol error"
+    },
+    {
+      "capability_id": "F02-cap-09",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a non-empty feed after an empty end-of-receive feed as a runtime error distinguishable from a protocol error, while allowing further empty chunks"
+    },
+    {
+      "capability_id": "F03-cap-01",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Frame a request body as empty (no framing headers), as exactly N Content-Length raw bytes, or as chunked data plus an optional trailing-header end-of-message, and recover the same payloads on the peer"
+    },
+    {
+      "capability_id": "F03-cap-02",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Choose response framing from the peer HTTP version (chunked for HTTP/1.1, close-delimited raw bytes for HTTP/1.0 or no request yet), recover an HTTP/1.0 200 with no framing headers as data then end-of-message then connection-closed on empty feed, and let Transfer-Encoding: chunked win over Content-Length"
+    },
+    {
+      "capability_id": "F03-cap-03",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Complete HEAD, 204, 304, and CONNECT 2xx with an empty body while still emitting the framing headers HEAD would have used for GET (chunked to HTTP/1.1, close to HTTP/1.0)"
+    },
+    {
+      "capability_id": "F03-cap-04",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Mark pulled chunked data events as start, end, both, or neither of a chunk (hello whole vs hel/l/o split), discard chunk extensions, and accept extra spaces or tabs after the chunk size"
+    },
+    {
+      "capability_id": "F03-cap-05",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Passthrough-send a length-bearing placeholder so Content-Length 10 and HTTP/1.0 close-delimited sequences are only that object, chunked sequences keep the object among framing pieces, and a following Content-Length end-of-message succeeds"
+    },
+    {
+      "capability_id": "F03-cap-06",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse extra or missing Content-Length bytes, trailing headers on Content-Length or HTTP/1.0 framing, and pulled chunks whose size is over 20 hex digits, contains a NUL, or is not followed by CRLF, as the specified local or remote protocol errors"
+    },
+    {
+      "capability_id": "F04-cap-01",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Walk one request/response cycle through the queryable states IDLE to SEND_BODY/SEND_RESPONSE to SEND_BODY to DONE, including optional informational-response events while the server stays in SEND_RESPONSE"
+    },
+    {
+      "capability_id": "F04-cap-02",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Allow a server in IDLE to send a response such as 408 Connection: close with no request having arrived"
+    },
+    {
+      "capability_id": "F04-cap-03",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enable keep-alive only when both sides speak HTTP/1.1 and neither Connection value contains close (case-insensitive, comma-separated); otherwise enter MUST_CLOSE and add Connection: close to the server's response (client-requested close echoed on a 204; HTTP/1.0 GET yields close on a bare 200)"
+    },
+    {
+      "capability_id": "F04-cap-04",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "When both sides are DONE, start the next cycle so both return to IDLE and a second HTTP/1.1 exchange (DELETE /foo then 404) can run, with the peer HTTP version from FP-02 still present"
+    },
+    {
+      "capability_id": "F04-cap-05",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a second client request until the next cycle has been started after the full response is pulled (no client pipelining)"
+    },
+    {
+      "capability_id": "F04-cap-06",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Deliver pipelined server requests one cycle at a time: after /1's end-of-message a further pull is paused; after the response and start-next-cycle, /2 then /3 become available; leftover bytes after /3 stay paused in trailing data"
+    },
+    {
+      "capability_id": "F04-cap-07",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse start-next-cycle when either side is not DONE as a recoverable local protocol error that does not enter ERROR, and refuse reuse after an HTTP/1.0 exchange"
+    },
+    {
+      "capability_id": "F05-cap-01",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Distinguish local protocol errors from remote protocol errors and from the runtime error used for bytes after end-of-receive, and carry a suggested status that defaults to 400"
+    },
+    {
+      "capability_id": "F05-cap-02",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat invalid event construction and start-next-cycle-before-DONE as recoverable local protocol errors so a later valid construction or a later valid start still succeeds"
+    },
+    {
+      "capability_id": "F05-cap-03",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat a failed pull of peer-violating bytes (gibberish plus a blank line) as an unrecoverable remote protocol error: their state is ERROR, further pulls fail, our state is not ERROR, and a server can still send 400 with Connection: close"
+    },
+    {
+      "capability_id": "F05-cap-04",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat a failed send of a non-1.1 request or response as an unrecoverable local protocol error: our state is ERROR, their state is not, and a subsequent otherwise-valid send also fails"
+    },
+    {
+      "capability_id": "F05-cap-05",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Mark send as failed so our state becomes ERROR (idempotent if done twice), their state is unchanged, and a following send fails as a local protocol error"
+    },
+    {
+      "capability_id": "F05-cap-06",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enforce the incomplete-event size limit (default 16 kibibytes, suggested status 431) on an unfinished request or response line plus headers: a 4000-a Big header succeeds at limit 5000 and fails at 4000; a complete 10000-byte body succeeds at limit 5000; pipelined leftovers fail only when that next message is parsed; an endless header eventually fails"
+    },
+    {
+      "capability_id": "F05-cap-07",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat a receive-side close in the middle of a Content-Length or chunked body, or in the middle of a request line, as a remote protocol error (short-body 5 of 100 is observable), not as a clean connection-closed event; contrast with an HTTP/1.0 close-delimited body, where the empty chunk is end-of-message then connection-closed"
+    },
+    {
+      "capability_id": "F06-cap-01",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Send a connection-closed event so state updates and no bytes are produced, including a fresh client going CLOSED while the server side becomes MUST_CLOSE, and the reversed walk from a fresh server"
+    },
+    {
+      "capability_id": "F06-cap-02",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat an empty feed as the peer closing their sending side: when the close is legal a pull yields connection-closed, and further pulls keep yielding connection-closed while further empty feeds remain allowed"
+    },
+    {
+      "capability_id": "F06-cap-03",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Allow a client half-close after a finished GET /foo so the server stays in SEND_RESPONSE and can still send the response"
+    },
+    {
+      "capability_id": "F06-cap-04",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Allow either side to send connection-closed after both DONE (idempotent if already CLOSED) and let a MUST_CLOSE server reach CLOSED by sending connection-closed"
+    },
+    {
+      "capability_id": "F06-cap-05",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Let a server finish pipelined GET /1 and /2 that arrived before the client half-closed, then send connection-closed from MUST_CLOSE to CLOSED"
+    },
+    {
+      "capability_id": "F06-cap-06",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py",
+        "tests/F06_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse connection-closed from SEND_RESPONSE or from the middle of a Content-Length body as a local protocol error, treat extra request bytes after the peer is CLOSED as a remote protocol error, and keep the bytes-after-EOF failure as a runtime error"
+    },
+    {
+      "capability_id": "F07-cap-01",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Let a server in SEND_RESPONSE send one or more informational-response events (including 100) before the final response, and let the client pull them while still able to send the request body"
+    },
+    {
+      "capability_id": "F07-cap-02",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Set the client-waiting-for-100-continue flag on both connections, and the they-are-waiting flag only on the server, for an HTTP/1.1 Expect: 100-continue request with a non-empty body; clear those flags on 100, on a final response, or when the client sends data or end-of-message; do not set them for HTTP/1.0 Expect"
+    },
+    {
+      "capability_id": "F07-cap-03",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat CONNECT 2xx and Upgrade 101 as acceptance and CONNECT non-2xx or Upgrade 200 as denial; when both are proposed accept at most one"
+    },
+    {
+      "capability_id": "F07-cap-04",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enter MIGHT_SWITCH_PROTOCOL on the client only after the proposing request's end-of-message, pause the server pull until accept or deny, and on denial return to ordinary HTTP so the next cycle can run"
+    },
+    {
+      "capability_id": "F07-cap-05",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "On acceptance enter SWITCHED_PROTOCOL permanently: further HTTP sends fail as a local protocol error, pulls stay paused, and later bytes accumulate in trailing data (123 then 456 become 123456 with receive still open)"
+    },
+    {
+      "capability_id": "F07-cap-06",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "While switch-paused, an empty feed sets the trailing-data receive-closed flag and leaves the pull paused; after denial that empty feed is a connection-closed event; after acceptance the pull stays paused"
+    },
+    {
+      "capability_id": "F07-cap-07",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py",
+        "tests/F07_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "After a denial plus start-next-cycle, leftover bytes such as GET / HTTP/1.0 pull as that request plus end-of-message; a client in MIGHT_SWITCH_PROTOCOL cannot send another request"
+    }
+  ]
+}

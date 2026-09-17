@@ -438,7 +438,7 @@ A no-argument call that returns a decorator. Applying that decorator to a functi
 
 Registration is optional. Without it, dispatched children still run and the unregistered function does not.
 
-When registered, the function runs after the dispatched children: child callback output appears before this processor’s output. It is called with the collected return value as its first positional argument. This group’s own parameter destinations are passed as keywords: the converted value for a declared option destination is present under that destination name.
+When registered, the function runs after the dispatched children: child callback output appears before this processor’s output. It is called with the collected return value as its first positional argument. This group’s own parameter destinations are passed as keywords: the converted value for a declared option destination is present under that destination name. The result callback is the consumer of those child return values: they are delivered to it after the children run and are not left unconsumed for a later unused hook.
 
 **Chain mode** (`chain=True`):
 
@@ -704,7 +704,7 @@ Import `argument` from the package root (`from `optlyn` import `argument``). Dec
 - `param_decls` — positional declaration strings. A single destination name is the usual form. That name is the destination delivered to the callback. It is not an option flag: a single token that starts with `--` and then that destination name is a usage failure, not delivery of that destination.
 - `attrs` — forwarded to the argument. Names used here include `required`, `nargs`, `envvar`, `default`, `type`, `deprecated`, `help`, and `metavar`.
 
-Returns a decorator. That decorator attaches the argument and returns the same function (or, if the function is already a command, appends the argument to that command).
+Returns a decorator. That decorator attaches the argument and returns the same function (or, if the function is already a command, appends the argument to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Required, optional, and defaulted
 
@@ -784,7 +784,7 @@ When standard output is a terminal, the call writes a screen-clear sequence. Aft
 
 Import `command` from the package root (`from `optlyn` import `command``). Decorator that builds a command and uses the decorated function as the callback. The decorated name is then a command instance: it can be invoked as a command-line application, passed to a group’s `add_command`, and has `main`.
 
-May be applied by calling `command` and then applying the result to a function. Keyword arguments such as `name`, `help`, and `context_settings` are accepted on that call. Parameters previously attached to the function by `option` or `argument` are registered on the created command.
+May be applied by calling `command` and then applying the result to a function. Keyword arguments such as `name`, `help`, and `context_settings` are accepted on that call. Parameters previously attached to the function by `option` or `argument` are moved onto the created command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Signature
 
@@ -942,7 +942,7 @@ Import `confirmation_option` from the package root (`from `optlyn` import `confi
 - `param_decls` — option names. When omitted, the single name `--yes` is used.
 - `attrs` — forwarded to the underlying option. Names used here include `prompt`. The flag is a boolean flag, is not delivered to the command callback, and prompts when omitted.
 
-Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command).
+Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Observable behavior
 
@@ -967,7 +967,7 @@ Import `custom_version_option` from the package root (`from `optlyn` import `cus
 - `param_decls` — option names. When omitted, the single name `--version` is used.
 - `attrs` — forwarded to the underlying option. The flag is eager, is not delivered to the command callback, and does not require other parameters.
 
-Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command).
+Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Observable behavior
 
@@ -1219,7 +1219,7 @@ An interrupt key sequence and an end-of-file key sequence are failures, not retu
 
 Import `group` from the package root (`from `optlyn` import `group``). Decorator that builds a group and uses the decorated function as the callback. A group is a command that holds named subcommands. The decorated name is then a group instance: it can be invoked the same way as a command (including `main`), and it exposes `add_command`.
 
-May be applied as `group`() with parentheses and no arguments. Name derivation and attachment of decorated `option` / `argument` parameters are the same as `command`.
+May be applied as `group`() with parentheses and no arguments. Name derivation and attachment of decorated `option` / `argument` parameters are the same as `command`: creating the group moves those declarations onto the new group and removes them from the function; decorating the same function again starts from an empty declaration list.
 
 ### Signature
 
@@ -1303,7 +1303,7 @@ Import `help_option` from the package root (`from `optlyn` import `help_option``
 
 - `param_decls` — option names for this extra help flag. `help_option("--help")` declares the conventional name `--help`.
 
-Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command).
+Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Observable behavior
 
@@ -1423,7 +1423,7 @@ Several options may be attached to one command. Each has its own public flag and
 - `param_decls` — positional declaration strings. A name with two leading dashes is a long option. A declared name with no leading dash is the destination delivered to the callback. Several names (a public flag and a destination) may be given; they all set the same destination.
 - `attrs` — forwarded to the option. Names used here include `is_flag`, `type`, `default`, `help`, `multiple`, `envvar`, `allow_from_autoenv`, `nargs`, `prompt`, `required`, `prompt_required`, `hide_input`, `confirmation_prompt`, `deprecated`, `metavar`, `shell_complete`, `hidden`, `expose_value`, `flag_value`, `is_eager`, `show_default`, and `show_envvar`.
 
-Returns a decorator. That decorator attaches the option and returns the same function (or, if the function is already a command, appends the option to that command).
+Returns a decorator. That decorator attaches the option and returns the same function (or, if the function is already a command, appends the option to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Optional flags
 
@@ -1726,7 +1726,7 @@ Import `password_option` from the package root (`from `optlyn` import `password_
 - `param_decls` — option names and an optional destination, with the same rules as `option`.
 - `attrs` — forwarded to the underlying option. Prompting, hidden input, and a confirmation prompt are enabled.
 
-Returns a decorator. That decorator attaches the option and returns the same function (or, if the function is already a command, appends the option to that command). The callback receives the typed secret under the option’s destination name.
+Returns a decorator. That decorator attaches the option and returns the same function (or, if the function is already a command, appends the option to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list. The callback receives the typed secret under the option’s destination name.
 
 ### Observable behavior
 
@@ -1749,6 +1749,8 @@ Import `pause` from the package root (`from `optlyn` import `pause``). Prints a 
 ```
 
 No arguments. No return value is required.
+
+A session is interactive when standard input is attached to a PTY (or standard input or standard output is a TTY). A piped standard input without a controlling TTY is not interactive.
 
 ### Non-interactive
 
@@ -1996,7 +1998,7 @@ Import `version_option` from the package root (`from `optlyn` import `version_op
 - `package_name` — distribution or import name used when `version` is omitted.
 - `attrs` — forwarded to the underlying option. The flag is eager, is not delivered to the command callback, and does not require other parameters.
 
-Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command).
+Returns a decorator. That decorator attaches the flag and returns the same function (or, if the function is already a command, appends the flag to that command). When `command` or `group` later creates a command from that function, attached declarations are moved onto the new command and removed from the function; decorating the same function again starts from an empty declaration list.
 
 ### Observable behavior
 

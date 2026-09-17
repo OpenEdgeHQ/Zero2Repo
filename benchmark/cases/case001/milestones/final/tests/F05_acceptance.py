@@ -30,11 +30,13 @@ from F01_helpers import (
 )
 from F02_helpers import (
     is_float,
+    require_aware_datetime,
     require_bool,
     require_date,
     require_finite_float,
     require_inf,
     require_int,
+    require_naive_datetime,
     require_str,
 )
 from F03_helpers import parse_binary, utf8_source
@@ -64,6 +66,8 @@ _NAMED_SPECIALS = (
     "notnum3=+nan"
 )
 _NAMED_INT_THEN_FLOAT = "a = 1\nb = 1.0"
+_NAMED_OFFSET_DATETIME = "1979-05-27T07:32:00-08:00"
+_NAMED_LOCAL_DATETIME = "1988-10-27t01:01:01"
 _NAMED_F01 = "f=0.1"
 _NAMED_VAL_DOT = "val=."
 _RESERVED_FINITE = frozenset({"0.982492", "0.1", "1.0", "3.14", "0.123"})
@@ -475,6 +479,56 @@ def test_float_under_table_header_is_converted():
     assert not is_float(value)
 
 
+def test_datetime_not_passed_through_converter():
+    """A supplied converter leaves date-times as date-times (L228).
+
+    Offset and local date-times stay the FP-02 values. They are not built
+    through the float converter. Integers, strings, booleans, tables, and
+    arrays are already covered on other arms; this arm is date-times.
+    """
+    offset_key = runtime_token()
+    local_key = runtime_token()
+    float_key = runtime_token()
+    spelling = _runtime_finite_spelling()
+    source = (
+        f"{offset_key} = {_NAMED_OFFSET_DATETIME}\n"
+        f"{local_key} = {_NAMED_LOCAL_DATETIME}\n"
+        f"{float_key} = {spelling}"
+    )
+    wrapper, recorded = recording_converter(decimal_from_text)
+    converted = _converted_mapping(source, wrapper)
+    default = _default_mapping(source)
+
+    offset_converted = require_aware_datetime(require_path(converted, offset_key))
+    offset_default = require_aware_datetime(require_path(default, offset_key))
+    print(
+        f"offset converted={offset_converted!r} default={offset_default!r}",
+        flush=True,
+    )
+    assert offset_converted == offset_default, (
+        f"supplied converter changed the offset date-time: "
+        f"{offset_converted!r} != {offset_default!r}"
+    )
+
+    local_converted = require_naive_datetime(require_path(converted, local_key))
+    local_default = require_naive_datetime(require_path(default, local_key))
+    print(
+        f"local converted={local_converted!r} default={local_default!r}",
+        flush=True,
+    )
+    assert local_converted == local_default, (
+        f"supplied converter changed the local date-time: "
+        f"{local_converted!r} != {local_default!r}"
+    )
+
+    require_decimal_equal(require_path(converted, float_key), spelling)
+    print(f"datetime recorded len={len(recorded)} items={recorded!r}", flush=True)
+    assert len(recorded) == 1, (
+        f"expected one float token through the converter, got {len(recorded)}: "
+        f"{recorded!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # G — binary-file entry uses the same converter
 # ---------------------------------------------------------------------------
@@ -567,6 +621,37 @@ def test_binary_integer_not_passed_through_converter():
     require_int(require_path(mapping, "a"), 1)
     require_decimal_equal(require_path(mapping, "b"), "1.0")
     print(f"binary recorded len={len(recorded)} items={recorded!r}", flush=True)
+    assert len(recorded) == 1, (
+        f"expected one float token through the converter, got {len(recorded)}: "
+        f"{recorded!r}"
+    )
+
+
+def test_binary_datetime_not_passed_through_converter():
+    """Binary-file entry: a supplied converter leaves date-times as date-times."""
+    dt_key = runtime_token()
+    float_key = runtime_token()
+    spelling = _runtime_finite_spelling()
+    source = f"{dt_key} = {_NAMED_OFFSET_DATETIME}\n{float_key} = {spelling}"
+    wrapper, recorded = recording_converter(decimal_from_text)
+    converted = _binary_converted_buffer(source, wrapper)
+    default = _binary_default_buffer(source)
+
+    converted_dt = require_aware_datetime(require_path(converted, dt_key))
+    default_dt = require_aware_datetime(require_path(default, dt_key))
+    print(
+        f"binary offset converted={converted_dt!r} default={default_dt!r}",
+        flush=True,
+    )
+    assert converted_dt == default_dt, (
+        f"binary supplied converter changed the date-time: "
+        f"{converted_dt!r} != {default_dt!r}"
+    )
+    require_decimal_equal(require_path(converted, float_key), spelling)
+    print(
+        f"binary datetime recorded len={len(recorded)} items={recorded!r}",
+        flush=True,
+    )
     assert len(recorded) == 1, (
         f"expected one float token through the converter, got {len(recorded)}: "
         f"{recorded!r}"

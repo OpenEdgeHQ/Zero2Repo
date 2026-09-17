@@ -82,11 +82,41 @@ Exact signatures, option defaults, and raised conditions for individual symbols 
 
 **Anchors and aliases.** An `&name` label and a later `*name` refer to the same constructed value (same identity, not a copy). A recursive alias is allowed for the default sequence and mapping tags.
 
-**Limits.** Default collection nesting (`maxDepth`) is 100 levels and does not count aliases. Default alias budget (`maxAliases`) is unlimited (`-1`; `0` rejects every alias). Default merge-key budget (`maxTotalMergeKeys`) is 10000 keys processed by `<<` across one `load` / `loadAll` call (`-1` disables). Crossing a limit fails the parse and yields no document. The alias budget is per document; the merge-key budget is per call. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
+**Limits.** A default for `maxDepth` exists when the key is omitted: the omitted limit is finite and does not count aliases. A collection nest of 100000 opening brackets fails under that omitted default as a parse failure, not an uncaught host overflow. The omitted numeric collection-count pair is not part of this surface. Default alias budget (`maxAliases`) is unlimited (`-1`; `0` rejects every alias). Default merge-key budget (`maxTotalMergeKeys`) is 10000 keys processed by `<<` across one `load` / `loadAll` call (`-1` disables). Crossing a limit fails the parse and yields no document. The alias budget is per document; the merge-key budget is per call. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
 
 **Untrusted input.** The YAML design allows a tiny document to expand into a huge object graph. Walking a constructed value after a successful parse (for example by converting it to JSON) is the caller’s responsibility.
 
 **No product-owned process exit codes on the library path.** `load`, `loadAll`, and `dump` report outcomes by returning a value or throwing. They do not exit the host process.
+
+## `Interface_Contract`
+
+Named exports. The single-document parse entry is `load`. The multi-document parse entry is `loadAll`. Both take YAML text as the first argument and an optional options object as the second.
+
+```
+`load`(input, options?)
+`loadAll`(input, options?)
+```
+
+`load` returns exactly one constructed value. It throws when the stream is empty, contains only whitespace and comments, or contains more than one document. `loadAll` returns every constructed document, in order, as an array. An empty stream, or a stream of only whitespace and comments, returns an empty array. A failed parse throws and does not yield a usable document (and no prefix of a multi-document list). The exact exception class name and the exact wording of the message are not part of this surface.
+
+### Parse option keys
+
+The options object accepted by `load` and `loadAll` uses these keys:
+
+- `schema` — schema selection. Both parse entries use `CORE_SCHEMA` when this key is omitted. Pass `YAML11_SCHEMA` to select the YAML 1.1 schema. Attach `mergeTag` with `withTags` on `CORE_SCHEMA` when merge keys are needed without the rest of YAML 1.1.
+- `maxDepth` — collection nesting depth. Aliases do not count toward this limit.
+- `maxAliases` — alias count per document.
+- `maxTotalMergeKeys` — merge-key work across the whole call.
+
+### Limits
+
+A default for `maxDepth` exists when the key is omitted: the omitted limit is finite. A collection nest of 100000 opening brackets fails under that omitted default as a parse failure, not an uncaught host overflow. The omitted numeric collection-count pair is not part of this surface. A flow sequence of ten nested empty sequences succeeds when `maxDepth` is 20 and fails when it is 5. At `maxDepth` 5, a sequence of ten aliases to one empty sequence succeeds, and a recursive self-alias into the default sequence still succeeds.
+
+Default `maxAliases` is unlimited. Passing `-1` requests that unlimited budget explicitly. Passing `0` rejects every alias. A document with one anchored mapping and two aliases to it succeeds under the omitted default, under an explicit `-1`, and under a budget of 2, and fails under a budget of 1 or `0`. The budget is applied per document: a two-document stream in which each document has one alias succeeds when the budget is 1, and fails when the budget is 0.
+
+Default `maxTotalMergeKeys` is 10000 keys processed by `<<` across one `load` / `loadAll` call. Passing `-1` disables the budget. When the key is omitted, a document that merges 10000 distinct one-key mappings into one mapping succeeds, and a document that merges 10001 such mappings fails. Each key of a merge source is counted every time that source is applied, even when the key is already present and is not copied again. Applying the same source twice counts twice. The budget accumulates across the whole call and is shared across every document of a multi-document parse. Merge-key work is counted only when merge keys apply: under `CORE_SCHEMA` without `mergeTag`, a mapping key literally named `<<` is stored as that property and is not counted as merge-key work.
+
+Crossing a limit fails the parse and yields no document. These limits do not change type resolution: a parse of `answer: 42` still yields a mapping whose `answer` property is the number 42. Documents in a multi-document stream may be separated by `---`. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
 
 ## `Schema`
 

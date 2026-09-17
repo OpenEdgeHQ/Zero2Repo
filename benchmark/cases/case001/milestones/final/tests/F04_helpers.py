@@ -1,8 +1,10 @@
 # feature: F04
 """Observation helpers for refusing invalid TOML (FP-04).
 
-Recoverable place fields are read from the public decode-error instance.
-A missing field or a wrong type is a harness failure, never a sentinel.
+Reason, document, and offset are read from the public decode-error instance.
+The 1-based line and column are leftover sortable integers after those
+covariates; attribute spellings of the two place numbers are not the identity.
+A missing value or a wrong type is a harness failure, never a sentinel.
 """
 
 from __future__ import annotations
@@ -102,24 +104,102 @@ def recover_offset(exc: BaseException) -> int:
     return value
 
 
+def _is_place_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _one_based_place(document: str, offset: int) -> tuple[int, int]:
+    """1-based line and column of the character at 0-based *offset*.
+
+    This is the meaning of those two numbers given the recovered document
+    and offset (PRD: 1-based line and 1-based column of that character).
+    It is not a lookup of a product field name.
+    """
+    if not isinstance(document, str):
+        raise HarnessError(
+            f"document for place recovery is not text: {type(document)!r}"
+        )
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise HarnessError(
+            f"offset for place recovery is not an int: {type(offset)!r}"
+        )
+    if offset < 0:
+        raise HarnessError(f"offset {offset} is negative")
+    line = document.count("\n", 0, offset) + 1
+    if line == 1:
+        column = offset + 1
+    else:
+        column = offset - document.rindex("\n", 0, offset)
+    return line, column
+
+
+def _leftover_place_ints(exc: BaseException) -> list[int]:
+    """Integer values on *exc* after dropping reason, document, and offset.
+
+    Walks public attributes and properties. Does not select by place-number
+    spellings. The independently recovered 0-based offset field is a
+    covariate and is excluded. A lookup that fails for a reason other than
+    a missing attribute raises.
+    """
+    found: list[int] = []
+    for name in dir(exc):
+        if name.startswith("_") or name == "pos":
+            continue
+        try:
+            value = getattr(exc, name)
+        except AttributeError:
+            continue
+        except Exception as err:
+            raise HarnessError(
+                f"reading a place integer on the decode error failed: {err!r}"
+            ) from err
+        if callable(value):
+            continue
+        if _is_place_int(value):
+            found.append(value)
+    return found
+
+
+def _recover_place_pair(exc: BaseException) -> tuple[int, int]:
+    """Return the 1-based line and column stored on *exc*.
+
+    After dropping reason, document, and offset, leftover sortable integers
+    are the identity. They are labeled as line and column by the 1-based
+    place of the recovered offset in the recovered document, then compared
+    to those leftover integers — not to a field name.
+    """
+    document = recover_document(exc)
+    offset = recover_offset(exc)
+    leftover = _leftover_place_ints(exc)
+    if not leftover:
+        raise HarnessError(
+            "decode error has no leftover sortable integers for the "
+            f"1-based place: {exc!r}"
+        )
+    line, column = _one_based_place(document, offset)
+    if line not in leftover:
+        raise HarnessError(
+            f"1-based line {line} is not among leftover place integers "
+            f"{leftover!r} on {exc!r}"
+        )
+    if column not in leftover:
+        raise HarnessError(
+            f"1-based column {column} is not among leftover place integers "
+            f"{leftover!r} on {exc!r}"
+        )
+    return line, column
+
+
 def recover_line(exc: BaseException) -> int:
     """Return the 1-based line number from a decode-error instance."""
-    value = _require_field(exc, "lineno")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise HarnessError(
-            f"line is not an int: {type(value)!r}: {value!r}"
-        )
-    return value
+    line, _column = _recover_place_pair(exc)
+    return line
 
 
 def recover_column(exc: BaseException) -> int:
     """Return the 1-based column number from a decode-error instance."""
-    value = _require_field(exc, "colno")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise HarnessError(
-            f"column is not an int: {type(value)!r}: {value!r}"
-        )
-    return value
+    _line, column = _recover_place_pair(exc)
+    return column
 
 
 def formatted_report(exc: BaseException) -> str:

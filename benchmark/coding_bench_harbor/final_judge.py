@@ -208,10 +208,27 @@ def _launcher_env(product_paths: list[str]) -> dict[str, str]:
     env["CODING_BENCH_TESTS_FINAL"] = str(TESTS_FINAL)
     env["CODING_BENCH_PRODUCT_PATHS"] = ":".join(product_paths)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
     env.pop("PYTHONPATH", None)
     env.pop("PYTHONSTARTUP", None)
     env.pop("PYTEST_ADDOPTS", None)
     return env
+
+
+def _run_logged(command, *, log_path: Path, **kwargs) -> subprocess.CompletedProcess:
+    """Write output as it arrives so an outer timeout preserves diagnostics."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("wb") as output:
+        proc = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, **kwargs)
+        captured = getattr(proc, "stdout", None) or getattr(proc, "stderr", None)
+        if captured and output.tell() == 0:
+            output.write(captured if isinstance(captured, bytes) else str(captured).encode())
+    return subprocess.CompletedProcess(
+        command,
+        proc.returncode,
+        stdout=log_path.read_text(encoding="utf-8", errors="replace"),
+        stderr="",
+    )
 
 
 def _run_pytest_launcher(
@@ -222,17 +239,16 @@ def _run_pytest_launcher(
 ) -> subprocess.CompletedProcess:
     if not LAUNCHER_PATH.is_file():
         raise JudgeError(f"pytest launcher missing: {LAUNCHER_PATH}")
-    argv = ["python3", "-I", str(LAUNCHER_PATH), *rest_args]
+    argv = ["python3", "-u", "-I", str(LAUNCHER_PATH), *rest_args]
     user = _pytest_user()
     if user:
         argv = ["runuser", "-u", user, "--", *argv]
     try:
-        return subprocess.run(
+        return _run_logged(
             argv,
+            log_path=VERIFIER_DIR / "final_tests.log",
             cwd=str(cwd),
             env=_launcher_env(product_paths),
-            capture_output=True,
-            text=True,
         )
     except FileNotFoundError as exc:
         raise JudgeError(f"pytest launcher not runnable: {exc}") from exc
@@ -240,12 +256,12 @@ def _run_pytest_launcher(
 
 def _run_shell(command: str, cwd: Path) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(
-            command,
+        return _run_logged(
+            "set -o pipefail; " + command,
+            log_path=VERIFIER_DIR / "final_tests.log",
             shell=True,
+            executable="/bin/bash",
             cwd=str(cwd),
-            capture_output=True,
-            text=True,
         )
     except FileNotFoundError as exc:
         raise JudgeError(f"test command not available: {exc}") from exc
@@ -336,13 +352,13 @@ def _run_acceptance(script_path: Path, workspace: Path) -> dict:
     env["PYTHONSAFEPATH"] = "1"
     env["PYTHONNOUSERSITE"] = "1"
     try:
-        proc = subprocess.run(
-            cmd,
+        proc = _run_logged(
+            "set -o pipefail; " + cmd,
+            log_path=VERIFIER_DIR / "run_acceptance.log",
             shell=True,
+            executable="/bin/bash",
             cwd=str(workspace),
             env=env,
-            capture_output=True,
-            text=True,
         )
     except FileNotFoundError as exc:
         raise JudgeError(f"acceptance script not runnable: {exc}") from exc

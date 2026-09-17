@@ -121,8 +121,7 @@
     "repo_warm_command": "go mod download",
     "build_command": "GOPROXY=https://proxy.golang.org,direct GOFLAGS=-buildvcs=false FORCE_LOCALIZE=true make",
     "test_command_template": "python3 -m pytest {test_files}",
-    "workdir": ".",
-    "env_probe_command": "GOFLAGS=-buildvcs=false go build -o /tmp/cb-env-probe . && printf 'probe-payload\\n' > /tmp/cb-env-probe-blob && /tmp/cb-env-probe pointer --file=/tmp/cb-env-probe-blob"
+    "workdir": "."
   },
   "init_metadata": {
     "suggested_neutral_name": "vcs-largefile-client",

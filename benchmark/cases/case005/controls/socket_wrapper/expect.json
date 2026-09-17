@@ -1,0 +1,1 @@
+{"reward": 0, "note": "workspace opens a socket; judge_bans socket/subprocess must fail the calling test."}

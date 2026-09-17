@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .limits import TerminalStatus
+from .state import atomic_json
 
 __all__ = ["TrialResult", "write_summary", "format_reward_matrix"]
 
@@ -43,6 +43,16 @@ class TrialResult:
     denylist_violation: str | None = None
     denylist_warnings: list[str] = field(default_factory=list)
     denylist_fix_attempts: int = 0
+    denylist_enforced: bool = False
+    started_at: str | None = None
+    finished_at: str | None = None
+    agent_image_id: str | None = None
+    deliverable_image_id: str | None = None
+    platform: str | None = None
+    test_files: dict[str, str] = field(default_factory=dict)
+    test_count: int | None = None
+    artifact_errors: list[str] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,7 +72,7 @@ def write_summary(results: list[TrialResult], out_dir: Path) -> Path:
         "aggregate": _aggregate(results),
     }
     path = out_dir / "summary.json"
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    atomic_json(path, payload)
     return path
 
 
@@ -104,7 +114,7 @@ def format_reward_matrix(results: list[TrialResult]) -> str:
                 mark = "PASS" if r.passed else "FAIL"
                 token = f"{mark}({r.terminal_status})"
                 if r.judge_error:
-                    token = f"JUDGE_ERR"
+                    token = "JUDGE_ERR"
             row.append(token.ljust(col_w))
         lines.append("  ".join(row))
     return "\n".join(lines)

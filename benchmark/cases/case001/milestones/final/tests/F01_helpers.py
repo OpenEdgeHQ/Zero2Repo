@@ -170,8 +170,9 @@ def require_nested_empty_except_chain(
 def require_sequence_mappings_contain(obj: Any, key: str) -> Sequence[Any]:
     """Assert *obj* is a sequence of mappings that each contain *key*.
 
-    The nested value under *key* is not inspected: the named yield is only
-    that each mapping contains that key. A non-sequence, a non-mapping item,
+    The nested value under *key* is not inspected here: callers that need a
+    pair bound on that current item (for example ``val`` on ``subtab``)
+    walk the sub-table themselves. A non-sequence, a non-mapping item,
     or a missing *key* fails out loud — never as absence.
     """
     if not isinstance(key, str):
@@ -221,7 +222,11 @@ def require_decode_failure(result: CallResult) -> BaseException:
 
 
 def require_recursion_failure(result: CallResult) -> BaseException:
-    """Require a recursion error that is not a decode error, and no mapping."""
+    """Require a recursion error that is not a decode error, and no mapping.
+
+    FP-01 does not score extra nesting depth. Later feature points that do
+    name a recursion-error carrier still import this helper.
+    """
     if result.exception is None:
         raise AssertionError(
             f"parse succeeded with {result.value!r}; expected a recursion error"

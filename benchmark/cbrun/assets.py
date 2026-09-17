@@ -39,6 +39,7 @@ class CaseSpec:
     workdir: str
     docker_image: str
     docker_gpus: str
+    judge_bans: tuple[str, ...]
     hardware_text: str | None
     # Raw assets for downstream phases.
     assets: CaseAssets
@@ -75,6 +76,16 @@ def load_case(case_dir: Path | str) -> CaseSpec:
     runner_raw = _runner_raw(assets)
     docker_image = str(runner_raw.get("docker_image", "") or "").strip()
     docker_gpus = str(runner_raw.get("docker_gpus", "") or "").strip()
+    raw_bans = runner_raw.get("judge_bans") or []
+    if isinstance(raw_bans, str):
+        raw_bans = [part.strip() for part in raw_bans.split(",")]
+    from .denylist import ALLOWED_JUDGE_BANS
+
+    judge_bans = tuple(
+        str(item).strip()
+        for item in raw_bans
+        if str(item).strip() in ALLOWED_JUDGE_BANS
+    )
 
     hw_path = case_dir / "public" / "Hardware_Requirements.md"
     hardware_text = None
@@ -94,6 +105,7 @@ def load_case(case_dir: Path | str) -> CaseSpec:
         workdir=assets.runner.workdir or ".",
         docker_image=docker_image,
         docker_gpus=docker_gpus,
+        judge_bans=judge_bans,
         hardware_text=hardware_text,
         assets=assets,
     )

@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "repair_owner": "none",
+  "dimensions": {
+    "prd_accuracy": {
+      "score": 5,
+      "rationale": "The Full PRD matches the live library's observable behavior across FP-01 through FP-07: six event kinds and Host/header/Content-Length/Transfer-Encoding construction; client/server Connection send/feed/pull with the nine named states and need-data; Content-Length, chunked, and HTTP/1.0 close-delimited framing plus passthrough send; keep-alive, Connection close, reuse, client non-pipelining, and serial server pipelining; distinguishable local/remote/runtime failures, suggested status 400/501/431, send_failed, and the 16-kibibyte incomplete-event limit; half-duplex close; informational responses, Expect 100-continue, CONNECT/Upgrade switches, and trailing data. Finite sets are enumerated (six events, nine states, three framings, empty-body HEAD/204/304). Layout is a flat importable package with no CLI or sockets. Feature points mirror features.json F01–F07."
+    },
+    "gt_core_logic": {
+      "score": 5,
+      "rationale": "The neutralized tree is a real protocol engine (event types, header normalization, readers/writers, receive buffer, and connection state machine), not stubs. produce_sft is off, so excerpt-versus-original is not scored. Every non-scaffolding feature in features.json has verification.status passed, gt_verified true, and red_check probe-ok from b-loop probes. This review's agent_verify suite --all --world neutral collected 397 items and exited 0, matching D's sealed ALL-suite green."
+    },
+    "artifact_consistency": {
+      "score": 5,
+      "rationale": "PRD, Contract, test_manifest, coverage_matrix, and features.json agree on package httpwire and the published constructors/methods/fields the suite binds (Request/InformationalResponse/Response/Data/EndOfMessage/ConnectionClosed, Connection with role then optional limit, send/receive_data/next_event/start_next_cycle/send_failed/send_with_data_passthrough, our_state/their_state/states/their_http_version/trailing_data/waiting flags, NEED_DATA/PAUSED, LocalProtocolError/RemoteProtocolError). Objective gate reported no contract-coverage-gap and no test-usage-not-grounded warning. Every test_manifest file exists with workdir \".\". Suite honesty is d_verify_evidence.json plus accept_cursor.json status complete, independently re-run here: 397 passed, exit 0, world neutral."
+    },
+    "leakage": {
+      "score": 5,
+      "rationale": "The objective-gate / leak_judge pass is honored: no test-reference-leak and no runner-identity-leak. PRD, Contract, hidden tests, and published runner install/build/test strings use the neutralized product name and registry-pinned pytest/setuptools; they do not quote hidden test paths or node ids. Hardware_Requirements.md describes contestant CPU-only constraints without pipeline-internal paths. A blacklisted term that D correctly kept (ordinary protocol tokens, waived third-party names) is not treated as a leak."
+    },
+    "test_focus": {
+      "score": 5,
+      "rationale": "Hidden tests target PRD oracles per feature point: construction and header rules (F01); encode/feed/pull, Host-first wire order, folding, and no library I/O (F02); the three framings, empty-body statuses, chunk-role marks, passthrough identity, and local/remote framing errors (F03); keep-alive/reuse/pipelining (F04); error kinds, suggested status, send_failed, and the incomplete-event limit (F05); connection-closed and half-close (F06); 100-continue flags and CONNECT/Upgrade trailing data (F07). Helpers classify public outcomes via getattr; they do not import private modules. No pytest skip/xfail gates the suite green. Helper files contain no test_ functions, so listing them in the pytest command cannot empty-select."
+    },
+    "test_correctness": {
+      "score": 5,
+      "rationale": "Assertions fail on hollow or wrong implementations. Construction refusals require LocalProtocolError (not remote) and no event; pull refusals require RemoteProtocolError and ERROR on their side; bytes-after-EOF require a runtime error distinguishable from both protocol kinds. Suggested status is read as an integer carrier, not message text. Empty trailers, empty reason, absent peer version, and empty HEAD/204/304 bodies are the promised success values, not absence-only failure arms. Mechanical negative-arm hits that are real failures already assert the PRD carrier (local/remote class, NEED_DATA, PAUSED, trailing_data pair, ConnectionClosed, or refused construction with no Connection object). Illegal-role construction asserts an exception and no Connection instance, matching the PRD carrier that no object is produced. Recorded B-loop probes killed every listed mutant with 0 survived: F01 19/19 (skip-host-checks killed by test_http11_missing_host_empty_headers_is_local_protocol_error); F02 23/23 (drop-incomplete-bytes killed by test_split_200_for_xml_httpbin_returns_need_data_then_response); F03 21/21 (no-cl-enforcement killed by test_data_exceeding_content_length_is_local_error); F04 20/20 (http10-as-keepalive killed by test_http10_get_adds_close_on_bare_200); F05 15/15 (collapse-error-kinds killed by test_local_remote_and_runtime_errors_are_distinguishable); F06 16/16 (close-emits-bytes killed via send_connection_closed / require_no_extra_bytes); F07 21/21 (never-set-expect-flags killed by test_http11_expect_content_length_100_sets_waiting_flags). mutants/ is absent and red_check is b-loop-probes, which is allowed. No private-API imports, no always-true tautologies, no empty-selection pass."
+    },
+    "prd_coverage": {
+      "score": 5,
+      "rationale": "Preamble obligations have real assertions: no library I/O (F02 test_send_returns_bytes_and_does_not_require_a_socket); protocol-error kinds and suggested status (F05); HTTP/1.0 peers readable but not reusable including a keep-alive token (F04); gzip/deflate Transfer-Encoding 501 (F01); empty default reason (F01/F02); discarded chunk extensions (F03); split /xml 200 need-data then response (F02); form-feed/vertical-tab header values refused (F01 test_header_value_cr_lf_ff_vt_nul_refused); 21-digit Content-Length refused (F01 test_twenty_one_ones_content_length_refused). Coverage matrix core capabilities map onto those files. Negative control is correctly absent: CPU-only, no removable substrate. Package-not-importable is not a skip and is not required."
+    },
+    "design_goal_unity": {
+      "score": 5,
+      "rationale": "GT, PRD, Contract, and hidden tests jointly specify one bring-your-own-I/O HTTP/1.1 wire library: events in, bytes out, bytes in, events out, with a queryable state machine and typed protocol errors. No F_GATE_REPORT errors remained. No D_ISSUES_FOR_E handoff. The deliverable a contestant must build from public materials is the same product the sealed suite grades."
+    }
+  },
+  "repair_notes": "Closing-E agent_verify suite --all --world neutral exited 0: collected 397, 397 passed. That matches milestones/unified/d_verify_evidence.json (397 passed, world neutral) and accept_cursor.json status complete. Mechanical-scan negative arms were reviewed against the whole-PRD carrier rule and are either success-path emptiness/contrast or already assert the named carrier (local / remote / runtime error, NEED_DATA, PAUSED, ConnectionClosed, trailing_data pair, or refused construction with no Connection object). No overlay assertions were required.",
+  "findings": [],
+  "tests_digest": "db9afe70e985e78e60659c2d8c4d127f7a2e7cdeeeb7a45000fa24648eda094f"
+}

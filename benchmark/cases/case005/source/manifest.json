@@ -1,6 +1,9 @@
 {
   "schema_version": 3,
   "case_id": "case005",
+  "repo_slug": "h11",
+  "repository_url": "https://github.com/python-hyper/h11.git",
+  "commit": "62c5068c971579d61fa1b55373390e12f25fd856",
   "sensitive_terms": [
     "A pure-Python HTTP/1.1 protocol library",
     "A pure-Python, bring-your-own-I/O implementation of HTTP/1.1",
@@ -115,13 +118,48 @@
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'setuptools==75.8.0' 'pytest==8.3.5' 'pytest-cov==6.0.0' && rm -rf /var/lib/apt/lists/*",
     "repo_warm_command": "python3 -m pip install --no-cache-dir --break-system-packages -e .",
     "build_command": "",
-    "env_probe_command": "PYTHONPATH=. python3 -c \"import os; import httpwire; assert os.path.realpath(httpwire.__file__).startswith(os.path.realpath('httpwire')); client = httpwire.Connection(our_role=httpwire.CLIENT); wire = client.send(httpwire.Request(method='GET', target='/probe', headers=[('Host', 'localhost')])); assert wire.startswith(b'GET /probe HTTP/1.1'); assert client.send(httpwire.EndOfMessage()) == b''; server = httpwire.Connection(our_role=httpwire.SERVER); server.receive_data(wire); event = server.next_event(); assert type(event) is httpwire.Request and event.method == b'GET' and event.target == b'/probe'\"",
+    "env_probe_command": "PYTHONPATH=. python3 -c \"import os; import httpwire; assert os.path.realpath(httpwire.__file__).startswith(os.path.realpath('httpwire')); client = httpwire.Connection(httpwire.CLIENT); wire = client.send(httpwire.Request(method='GET', target='/probe', headers=[('Host', 'localhost')])); assert wire.startswith(b'GET /probe HTTP/1.1'); assert client.send(httpwire.EndOfMessage()) == b''; server = httpwire.Connection(httpwire.SERVER); server.receive_data(wire); event = server.next_event(); assert type(event) is httpwire.Request and event.method == b'GET' and event.target == b'/probe'\"",
     "test_command_template": "PYTHONPATH=. python3 -m pytest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "judge_bans": [
+      "socket",
+      "subprocess"
+    ],
+    "test_file_patterns": [
+      "httpwire/tests/**/*.py"
+    ],
+    "source_file_patterns": [
+      "httpwire/*.py"
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "httpwire",
     "tech_stack": "Pure Python bring-your-own-I/O HTTP/1.1 protocol state machine (setuptools flat layout, zero runtime deps, pytest); CPU-only"
   },
-  "status": "released"
+  "hardware_requirements": {
+    "schema_version": 1,
+    "summary": "This is a pure-Python library that encodes high-level HTTP request and response events into on-the-wire bytes and parses incoming bytes back into events, without performing any network I/O of its own. It has no compiled extensions, native code, or GPU/accelerator requirements, and zero declared runtime dependencies. The documented interpreter floor is Python 3.8 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite.",
+    "profiles": [
+      {
+        "id": "cpu_baseline",
+        "label": "CPU baseline",
+        "mandatory": true,
+        "platforms": [
+          "linux",
+          "darwin",
+          "windows"
+        ],
+        "required_platforms": [
+          "linux"
+        ],
+        "description": "Standard CPU-only Python execution path. Core capability is encoding a client-role HTTP/1.1 request event from this repository's source tree into on-the-wire bytes.",
+        "probes": [
+          "cd /opt/codingbench/repo && PYTHONPATH=. python3 -c \"import httpwire, os; assert os.path.realpath(httpwire.__file__).startswith(os.path.realpath('httpwire')); conn = httpwire.Connection(our_role=httpwire.CLIENT); data = conn.send(httpwire.Request(method='GET', target='/', headers=[('Host', 'example.com')])); assert data.startswith(b'GET / HTTP/1.1')\""
+        ],
+        "setup_notes": "setup.py python_requires >=3.8 and declares no install_requires. Classifiers list CPython 3.8-3.12 and PyPy. tox envlist is format, py38-py312/pypy3, mypy; testenv deps are pytest and pytest-cov from test-requirements.txt; commands are pytest --cov=httpwire --cov-config=.coveragerc httpwire. CI on ubuntu-latest runs tox across CPython 3.8-3.13 and PyPy 3.9/3.10. CONTRIBUTING.md documents pip install tox && tox. No system libraries beyond a normal Python toolchain.",
+        "build_notes": "No compiled/native build step. Packaging uses setuptools via setup.py (find_packages(exclude=['httpwire.tests'])). The importable package lives at the repository root (flat layout). Documented install: pip install httpwire. Editable install: pip install -e . CI uses tox which installs the package into each env."
+      }
+    ]
+  },
+  "status": "draft"
 }

@@ -32,8 +32,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import agents
-from .denylist import write_shim_assets
+from .denylist import probe_banned_imports, write_shim_assets
 from .docker_env import image_exists
+from .state import FINGERPRINT_LABEL, digest, file_manifest, image_identity, image_matches, platform_name
 
 # Defense in depth when :deliverable was built before workspace sanitization existed.
 _AGENT_APP_SANITIZE = (
@@ -81,7 +82,7 @@ def extract_hidden_tests(deliverable_image: str, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     create = subprocess.run(
-        ["docker", "create", deliverable_image],
+        ["docker", "create", "--platform", platform_name(), deliverable_image],
         capture_output=True,
         text=True,
     )
@@ -185,12 +186,18 @@ def ensure_agent_image(
     force: bool = False,
     environ: dict[str, str] | None = None,
     backend: str | None = None,
+    enforce_denylist: bool = True,
 ) -> AgentImage:
     """Build (or reuse) the ``:agent`` image and extract hidden tests.
 
     Idempotent: when the ``:agent`` image and the tests cache already exist and
     ``force`` is False, returns immediately.
     """
+    if enforce_denylist and case_dir is not None:
+        from .denylist import require_denylist
+
+        require_denylist(case_dir)
+
     deliverable = deliverable_image or deliverable_tag(case_id)
     if not image_exists(deliverable) or (force and case_dir is not None):
         if case_dir is None:
@@ -203,24 +210,44 @@ def ensure_agent_image(
         deliverable = ensure_deliverable_image(case_dir, force=force)
 
     tag = agent_tag(case_id, backend)
-    tests_cache = Path(cache_root) / case_id / "tests"
+    try:
+        deliverable_id = image_identity(deliverable)["id"]
+    except (RuntimeError, OSError, ValueError):
+        deliverable_id = deliverable
+    tests_cache = Path(cache_root) / case_id / deliverable_id.replace("sha256:", "") / "tests"
     final_dir = tests_cache / "final"
-
     cached_ready = (final_dir / "test_manifest.json").is_file()
-    if image_exists(tag) and cached_ready and not force:
-        return AgentImage(case_id, deliverable, tag, tests_cache)
-
-    # Always (re)extract hidden tests so the host cache matches the deliverable.
-    extract_hidden_tests(deliverable, tests_cache)
 
     with tempfile.TemporaryDirectory() as ctx:
         build_ctx = Path(ctx)
         denylist_snippet = ""
         if case_dir is not None:
-            denylist_snippet = write_shim_assets(build_ctx, case_dir / "source" / "denylist.json")
+            denylist_snippet = write_shim_assets(
+                build_ctx,
+                case_dir / "source" / "denylist.json",
+                required=enforce_denylist,
+            )
         dockerfile = _build_dockerfile(
             deliverable, environ, denylist_snippet=denylist_snippet, backend=backend
         )
+        fingerprint = digest(
+            {
+                "deliverable_id": deliverable_id,
+                "dockerfile": dockerfile,
+                "platform": platform_name(),
+                "backend": backend,
+                "shim_assets": file_manifest(build_ctx),
+            }
+        )
+        if (
+            not force
+            and image_exists(tag)
+            and image_matches(tag, fingerprint)
+            and cached_ready
+        ):
+            return AgentImage(case_id, deliverable, tag, tests_cache)
+
+        extract_hidden_tests(deliverable, tests_cache)
         df_path = build_ctx / "Dockerfile"
         df_path.write_text(dockerfile, encoding="utf-8")
         print(
@@ -228,10 +255,18 @@ def ensure_agent_image(
             flush=True,
         )
         build = subprocess.run(
-            ["docker", "build", "-t", tag, "-f", str(df_path), ctx],
+            [
+                "docker", "build", "--platform", platform_name(),
+                "--label", f"{FINGERPRINT_LABEL}={fingerprint}",
+                "-t", tag, "-f", str(df_path), ctx,
+            ],
         )
         if build.returncode != 0:
             raise RuntimeError(f"docker build of {tag} failed (exit {build.returncode})")
+        if case_dir is not None:
+            probe = probe_banned_imports(tag, case_dir / "source" / "denylist.json")
+            if probe.errors:
+                raise RuntimeError("; ".join(probe.errors))
     return AgentImage(case_id, deliverable, tag, tests_cache)
 
 

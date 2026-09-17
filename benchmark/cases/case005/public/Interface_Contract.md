@@ -74,7 +74,7 @@ The surfaces group as:
 
 **No command-line product.** There is no console-script entry and no `python -m` program that is part of this surface. Outcomes are returned or raised from library calls. Library entries do not exit the host process as their success or failure report. There are no product exit codes.
 
-**No I/O.** Bytes in and bytes out are the entire interface to the network. The library does not open sockets, read the network, or write the network. A stub that “sends” by writing to a real socket inside the library is not this product.
+**No I/O.** Bytes in and bytes out are the entire interface to the network. The library does not open sockets, read the network, or write the network. A stub that “sends” by writing to a real socket inside the library is not this product. During hidden-test grading, socket or subprocess use originating from product code is a failure.
 
 **Library substrate.** When the `httpwire` package is not importable, a program that does `import `httpwire``, takes `Request` from that module, and constructs `Request` with `method` `GET`, `target` `/`, and `headers` `[('Host', 'example.com')]` does not run to completion and does not yield a request event. When the package is importable, that same construction succeeds. Output-equality alone is not proof that the real package ran.
 
@@ -658,7 +658,7 @@ These names are importable as ``httpwire`.<name>` and as `from `httpwire` import
 - `SERVER`
 - `SWITCHED_PROTOCOL`
 
-`Request`, `InformationalResponse`, `Response`, `Data`, `EndOfMessage`, `ConnectionClosed`, and `Connection` are callable. `LocalProtocolError` and `RemoteProtocolError` are classes. `CLIENT` is the client-role value passed to `Connection` as the first positional argument. `SERVER` is the server-role value passed to `Connection` as the first positional argument. `Connection` is called with the role alone, or with the role then an integer incomplete-event size limit as a second positional argument. The omitted second argument is 16 kibibytes. Both arities are published. `NEED_DATA` is the pull result when more bytes must be given to `receive_data`. `PAUSED` is the pull result when no further real event is available until the next cycle is started or a protocol switch is resolved.
+`Request`, `InformationalResponse`, `Response`, `Data`, `EndOfMessage`, `ConnectionClosed`, and `Connection` are callable. `LocalProtocolError` and `RemoteProtocolError` are classes. `CLIENT` is the client-role value passed to `Connection` as the first positional argument. `SERVER` is the server-role value passed to `Connection` as the first positional argument. `Connection` is called with the role alone, or with the role then an integer incomplete-event size limit as a second positional argument. The omitted second argument has a default. Both arities are published. `NEED_DATA` is the pull result when more bytes must be given to `receive_data`. `PAUSED` is the pull result when no further real event is available until the next cycle is started or a protocol switch is resolved.
 
 The nine states a side can be in are package-root exports, not strings and not values that exist only on a `Connection`: `IDLE`, `SEND_RESPONSE`, `SEND_BODY`, `DONE`, `MUST_CLOSE`, `CLOSED`, `MIGHT_SWITCH_PROTOCOL`, `SWITCHED_PROTOCOL`, and `ERROR`. They are nine distinct objects; no two compare equal. A fresh `CLIENT` connection's `our_state` and `their_state` are the package-root `IDLE`.
 
@@ -674,7 +674,7 @@ from `httpwire` import `CLIENT`, `SERVER`, `Connection`, `ConnectionClosed`, `Da
 
 A script that only needs a subset may import that subset, for example `from `httpwire` import `Request``. Attribute access on the imported module is equivalent: ``httpwire`.`Request``, ``httpwire`.`InformationalResponse``, ``httpwire`.`Response``, ``httpwire`.`Data``, ``httpwire`.`EndOfMessage``, ``httpwire`.`ConnectionClosed``, ``httpwire`.`Connection``, ``httpwire`.`CLIENT``, ``httpwire`.`SERVER``, ``httpwire`.`NEED_DATA``, ``httpwire`.`PAUSED``, ``httpwire`.`LocalProtocolError``, ``httpwire`.`RemoteProtocolError``, ``httpwire`.`IDLE``, ``httpwire`.`SEND_RESPONSE``, ``httpwire`.`SEND_BODY``, ``httpwire`.`DONE``, ``httpwire`.`MUST_CLOSE``, ``httpwire`.`CLOSED``, ``httpwire`.`MIGHT_SWITCH_PROTOCOL``, ``httpwire`.`SWITCHED_PROTOCOL``, ``httpwire`.`ERROR``.
 
-When `httpwire` is not importable, a program that does `import `httpwire``, takes `Request` from that module, and constructs `Request` with `method` `GET`, `target` `/`, and `headers` `[('Host', 'example.com')]` does not run to completion and does not yield a request event. When the package is importable, that same construction succeeds.
+When the package is importable, a program that does `import `httpwire``, takes `Request` from that module, and constructs `Request` with `method` `GET`, `target` `/`, and `headers` `[('Host', 'example.com')]` yields a request event.
 
 ## `httpwire.NEED_DATA`
 
@@ -774,3 +774,7 @@ A sequence of text strings. Index 0 is the package-root segment and equals `http
 
 When `__name__` is exactly `httpwire`, the result is a one-element sequence whose only item is `httpwire`. When `__name__` contains a period, index 0 is still `httpwire`.
 
+
+## Runtime equivalents
+
+The product implements each scored capability itself. Delegating a capability to a runtime-provided implementation that the case denylist names as a runtime equivalent is out of scope and is a violation.

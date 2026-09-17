@@ -1,6 +1,9 @@
 {
   "schema_version": 3,
   "case_id": "case001",
+  "repo_slug": "tomli",
+  "repository_url": "https://github.com/hukkin/tomli.git",
+  "commit": "5a77b12a7a9f052ce5a20c335d2825658f6aea52",
   "sensitive_terms": [
     "A lil' TOML parser",
     "Hukkin",
@@ -66,11 +69,42 @@
     "build_command": "",
     "env_probe_command": "PYTHONPATH=src python3 -c \"import tomlparse, os; assert os.path.realpath(tomlparse.__file__).startswith(os.path.realpath('src')); d = tomlparse.loads('[player]\\nname = \\\"probe\\\"\\nnumber = 1'); assert d == {'player': {'name': 'probe', 'number': 1}}\"",
     "test_command_template": "PYTHONPATH=src python3 -m unittest {test_files}",
-    "workdir": "."
+    "workdir": ".",
+    "test_file_patterns": [
+      "tests/**/*.py"
+    ],
+    "source_file_patterns": [
+      "src/**/*.py"
+    ]
   },
   "init_metadata": {
     "suggested_neutral_name": "tomlparse",
     "tech_stack": "Pure Python TOML parser (flit_core src layout, zero runtime deps, stdlib unittest); CPU-only"
   },
-  "status": "released"
+  "hardware_requirements": {
+    "schema_version": 1,
+    "summary": "This is a pure-Python library that parses TOML documents into native mappings, sequences, and scalars. The default path has no compiled extensions, no runtime third-party dependencies, and no GPU or accelerator requirements. The documented interpreter floor is Python 3.8 or newer. Any standard x86_64 or arm64 Linux, macOS, or Windows host with a supported interpreter is sufficient to install from source and run the test suite. Optional compiled wheels exist for performance on some platforms; they are not required for the mandatory CPU profile.",
+    "profiles": [
+      {
+        "id": "cpu_baseline",
+        "label": "CPU baseline",
+        "mandatory": true,
+        "platforms": [
+          "linux",
+          "darwin",
+          "windows"
+        ],
+        "required_platforms": [
+          "linux"
+        ],
+        "description": "Standard CPU-only Python execution path. Core capability is parsing a TOML document from this repository's source tree into native Python dict, list, and scalar values.",
+        "probes": [
+          "cd /opt/codingbench/repo && PYTHONPATH=src python3 -c \"import tomlparse, os; assert os.path.realpath(tomlparse.__file__).startswith(os.path.realpath('src')); assert tomlparse.loads('k = 1') == {'k': 1}\""
+        ],
+        "setup_notes": "pyproject.toml requires-python >=3.8 and declares zero runtime dependencies. CI installs with pip install . then runs python -m unittest on ubuntu-latest, macos-latest, and windows-latest across CPython 3.8-3.15-dev and PyPy 3.11. tox env_list is 3.8-3.14 with the same unittest command. Optional TOMLPARSE_USE_MYPYC=1 plus scripts/use_setuptools.py (setuptools>=77.0.3, mypy[mypyc]>=1.15) builds binary wheels; not required for the default path. Fuzzer extra documents apt install clang. No system libraries beyond a normal Python toolchain.",
+        "build_notes": "No compiled/native build step for the default path. Packaging uses flit_core>=3.12,<4 (pyproject.toml [build-system]); the importable package lives under the src layout. Editable install: pip install -e . CI uses pip install . then python -m unittest. Pure-Python artifacts are produced with python -m build."
+      }
+    ]
+  },
+  "status": "draft"
 }

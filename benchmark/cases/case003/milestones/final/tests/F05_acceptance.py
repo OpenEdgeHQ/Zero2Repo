@@ -11,6 +11,7 @@ float spellings the PRD does not name are not pinned.
 from __future__ import annotations
 
 from _harness import JsMap, dump, load
+from F05_helpers import exponent_only_float_token, require_no_flow_square_inner_space
 from _helpers import (
     YAML11_FALSE_WORDS,
     YAML11_TRUE_WORDS,
@@ -59,7 +60,6 @@ from _helpers import (
     scalar_word_content_lines,
     undefined_value,
     unique_token,
-    unsigned_exponent_float_token,
     with_core_schema,
     with_double_quote_style,
     with_flow_bracket_padding,
@@ -289,9 +289,9 @@ def test_dump_zero_o_and_exponent_float_quoted_under_default():
     print(f"runtime_octal={runtime_octal!r}", flush=True)
     _assert_quoted_round_trip(runtime_octal, load_options=with_core_schema())
 
-    public_exp = "685.23015e03"
+    public_exp = "12e03"
     _assert_quoted_round_trip(public_exp, load_options=with_core_schema())
-    runtime_exp = unsigned_exponent_float_token()
+    runtime_exp = exponent_only_float_token()
     print(f"runtime_exp={runtime_exp!r}", flush=True)
     _assert_quoted_round_trip(runtime_exp, load_options=with_core_schema())
 
@@ -889,6 +889,14 @@ def test_dump_flow_depth_1_root_block_nested_flow():
     assert "[" in text and "]" in text, (
         f"depth 1 nested sequence must be flow; got {text!r}"
     )
+    doc = require_plain_mapping(require_document(load(text)))
+    inner = require_sequence(mapping_get(doc, "a"))
+    assert len(inner) == 2, f"depth 1 key a must hold two items; got {inner!r}"
+    assert is_number_not_string(inner[0], 1) and is_number_not_string(
+        inner[1], 2
+    ), (
+        f"depth 1 nested flow must restore numbers 1 and 2; got {inner!r}"
+    )
 
 
 def test_dump_default_never_switches_to_flow():
@@ -906,6 +914,7 @@ def test_dump_flow_bracket_padding():
     baseline = _dumped(value, with_flow_depth(0))
     print(f"pad_baseline={baseline!r}", flush=True)
     require_flow_container(baseline)
+    require_no_flow_square_inner_space(baseline)
     padded = _dumped(
         value,
         merge_dump_options(with_flow_depth(0), with_flow_bracket_padding()),
@@ -980,13 +989,37 @@ def test_dump_runtime_flow_depth():
     assert f"{key}:" in depth0, (
         f"runtime depth 0 must keep the mapping key; got {depth0!r}"
     )
-    assert "[" in depth0
+    assert "[" in depth0 and "]" in depth0, (
+        f"runtime depth 0 must write the inner sequence in flow; got {depth0!r}"
+    )
+    doc0 = require_plain_mapping(require_document(load(depth0)))
+    inner0 = require_sequence(mapping_get(doc0, key))
+    assert len(inner0) == 2, (
+        f"runtime depth 0 must keep both items; got {inner0!r}"
+    )
+    assert is_number_not_string(inner0[0], left) and is_number_not_string(
+        inner0[1], right
+    ), (
+        f"runtime depth 0 must restore [{left}, {right}]; got {inner0!r}"
+    )
     depth1 = _dumped(value, with_flow_depth(1))
     print(f"runtime_flow1={depth1!r}", flush=True)
     body = depth1.strip()
     assert not (body.startswith("{") and body.endswith("}"))
     assert f"{key}:" in depth1
-    assert "[" in depth1
+    assert "[" in depth1 and "]" in depth1, (
+        f"runtime depth 1 nested sequence must stay flow; got {depth1!r}"
+    )
+    doc1 = require_plain_mapping(require_document(load(depth1)))
+    inner1 = require_sequence(mapping_get(doc1, key))
+    assert len(inner1) == 2, (
+        f"runtime depth 1 must keep both items; got {inner1!r}"
+    )
+    assert is_number_not_string(inner1[0], left) and is_number_not_string(
+        inner1[1], right
+    ), (
+        f"runtime depth 1 must restore [{left}, {right}]; got {inner1!r}"
+    )
 
 
 def test_dump_runtime_default_never_flow():
@@ -1024,6 +1057,7 @@ def test_dump_runtime_flow_presentation_knobs():
     value = {key: [left, right]}
     baseline = _dumped(value, with_flow_depth(0))
     require_flow_container(baseline)
+    require_no_flow_square_inner_space(baseline)
     print(f"runtime_knob_baseline={baseline!r}", flush=True)
 
     padded = _dumped(
@@ -1198,6 +1232,25 @@ def test_dump_skip_omits_function_in_mapping_and_sequence():
     seq = require_sequence(require_document(load(seq_text)))
     print(f"skip_fn_seq={seq!r}", flush=True)
     assert seq == ["a"], f"skipped function item must leave only a; got {seq!r}"
+
+
+def test_dump_runtime_skip_omits_function_in_sequence():
+    word = _runtime_plain_word()
+    failing = [function_value(), word]
+    refused = dump(failing)
+    require_dump_failure(refused)
+    print(f"runtime_skip_seq_fail ok={refused.ok!r}", flush=True)
+    assert refused.ok is False, (
+        "function plus runtime word without skip must fail and produce "
+        "no YAML text"
+    )
+    seq_text = _dumped(failing, with_skip_unrepresentable())
+    seq = require_sequence(require_document(load(seq_text)))
+    print(f"runtime_skip_fn_seq={seq!r}", flush=True)
+    assert len(seq) == 1, f"skipped function must leave one item; got {seq!r}"
+    assert is_string_text(seq[0], word), (
+        f"skipped function must leave the runtime word; got {seq[0]!r}"
+    )
 
 
 def test_dump_skip_omits_regexp_in_mapping():

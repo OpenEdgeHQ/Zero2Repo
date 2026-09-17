@@ -5,9 +5,9 @@ Assertions stay at the PRD's precision: constructed types and values
 the sentences name, identity of aliases, the two parse entries on empty
 and multi-document streams, duplicate-key policy, quoted folding,
 eight-digit escapes, digit-containing tag handles, and failure reports
-that carry a supplied source-path label and identify the later line.
-Exception class names, failure wording, and zero- vs one-based line
-numbers are not pinned.
+that carry a supplied source-path label and present line-break count
+one versus zero. Exception class names, failure wording, field names,
+and zero- vs one-based numbering of that count are not pinned.
 """
 
 from __future__ import annotations
@@ -15,16 +15,13 @@ from __future__ import annotations
 import pytest
 
 from _harness import load, load_all
+from F01_helpers import require_line_break_counts
 from _helpers import (
-    NO_LINE_IDENTITY,
-    attempt_load_without_artifact,
     core_int_token,
     digit_tag_handle,
     distinct_core_ints,
     eight_hex_scalar,
     is_number_not_string,
-    is_successful_answer_42,
-    line_identity_after_strip,
     load_utf16_units,
     mapping_get,
     observer_visible_report,
@@ -45,7 +42,14 @@ TWO_EMPTY_DOCS = "--- # first document\n--- # second document\n"
 WS_COMMENT = "   \n# comment\n"
 DUP_A_1_2 = "a: 1\na: 2"
 PUBLIC_TAG_STREAM = "%TAG !a1! tag:yaml.org,2002:\n---\n!a1!str 123"
-PUBLIC_TAG_NODE = "!a1!str 123"
+PUBLIC_TAG_WITHOUT_DIRECTIVE = "---\n!a1!str 123"
+BARE_TWO_MARKERS = "---\n---\n"
+OTHER_WHITESPACE = "\t\n"
+
+_UTF16_MALFORMED = {
+    "lone_surrogate_pair": (0xDC00, 0xD800),
+    "unpaired_surrogate_other": (0xD800,),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +190,28 @@ def test_two_document_start_markers_are_two_nulls():
     assert docs[1] is None
 
 
+def test_two_document_start_markers_class_are_two_nulls():
+    empty = require_document(load_all(""))
+    print(f"empty-stream={empty!r}", flush=True)
+    assert empty == []
+    bare = require_document(load_all(BARE_TWO_MARKERS))
+    print(f"bare-two-markers={bare!r}", flush=True)
+    assert isinstance(bare, list)
+    assert len(bare) == 2
+    assert bare[0] is None
+    assert bare[1] is None
+    assert bare != empty
+    first, second = unique_token(), unique_token()
+    runtime = f"--- # {first}\n--- # {second}\n"
+    print(f"runtime-two-markers={runtime!r}", flush=True)
+    runtime_docs = require_document(load_all(runtime))
+    assert isinstance(runtime_docs, list)
+    assert len(runtime_docs) == 2
+    assert runtime_docs[0] is None
+    assert runtime_docs[1] is None
+    assert runtime_docs != empty
+
+
 def test_empty_text_load_all_empty_list():
     docs = require_document(load_all(""))
     print(f"empty-stream={docs!r}", flush=True)
@@ -200,6 +226,17 @@ def test_whitespace_and_comments_load_all_empty_list():
     print(f"ws-comment={docs!r}", flush=True)
     assert docs == []
     assert len(docs) == 0
+
+
+def test_whitespace_and_comments_class_load_all_empty_list():
+    comment = unique_token()
+    runtime_comment = f"# {comment}\n"
+    print(f"runtime-comment={runtime_comment!r}", flush=True)
+    comment_docs = require_document(load_all(runtime_comment))
+    assert comment_docs == []
+    print(f"other-whitespace={OTHER_WHITESPACE!r}", flush=True)
+    ws_docs = require_document(load_all(OTHER_WHITESPACE))
+    assert ws_docs == []
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +258,19 @@ def test_whitespace_comments_fails_single_succeeds_multi():
     require_parse_failure(load(WS_COMMENT))
 
 
+def test_whitespace_comments_class_fails_single_succeeds_multi():
+    comment = unique_token()
+    runtime_comment = f"# {comment}\n"
+    print(f"runtime-comment={runtime_comment!r}", flush=True)
+    comment_multi = require_document(load_all(runtime_comment))
+    assert comment_multi == []
+    require_parse_failure(load(runtime_comment))
+    print(f"other-whitespace={OTHER_WHITESPACE!r}", flush=True)
+    ws_multi = require_document(load_all(OTHER_WHITESPACE))
+    assert ws_multi == []
+    require_parse_failure(load(OTHER_WHITESPACE))
+
+
 def test_two_documents_fail_single_succeed_multi():
     multi = require_document(load_all(TWO_EMPTY_DOCS))
     print(f"multi two-empty={multi!r}", flush=True)
@@ -234,6 +284,15 @@ def test_one_then_two_fails_single_document():
     print(f"multi 1/2={multi!r}", flush=True)
     assert multi == [1, 2]
     require_parse_failure(load(ONE_THEN_TWO))
+
+
+def test_three_runtime_documents_fail_single_document():
+    first, second, third = distinct_core_ints(3)
+    source = f"{first}\n---\n{second}\n---\n{third}\n"
+    print(f"source={source!r}", flush=True)
+    multi = require_document(load_all(source))
+    assert multi == [first, second, third]
+    require_parse_failure(load(source))
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +331,25 @@ def test_runtime_alias_shares_identity():
     assert same_identity(copy, base)
     assert same_identity(third, base)
     assert same_identity(third, copy)
+
+
+def test_runtime_completed_sequence_alias_shares_identity():
+    items_key, copy_key, anchor = unique_token(), unique_token(), unique_token()
+    first, second = unique_token(), unique_token()
+    source = (
+        f"{items_key}: &{anchor} [{first}, {second}]\n"
+        f"{copy_key}: *{anchor}"
+    )
+    print(f"source={source!r}", flush=True)
+    doc = require_document(load(source))
+    items = mapping_get(doc, items_key)
+    copy = mapping_get(doc, copy_key)
+    print(
+        f"items={items!r} copy={copy!r} same={same_identity(copy, items)}",
+        flush=True,
+    )
+    assert same_identity(copy, items)
+    assert items == [first, second]
 
 
 def test_recursive_alias_default_sequence_is_self():
@@ -355,6 +433,20 @@ def test_nested_mapping_duplicate_key_policy():
     doc = require_document(load(source, with_json_compat()))
     nested = mapping_get(doc, outer)
     assert is_number_not_string(mapping_get(nested, inner), smaller)
+
+
+def test_json_compat_third_pair_later_wins():
+    key = unique_token()
+    first_val, second_val, last = sorted(distinct_core_ints(3), reverse=True)
+    source = f"{key}: {first_val}\n{key}: {second_val}\n{key}: {last}\n"
+    print(f"source={source!r}", flush=True)
+    doc = require_document(load(source, with_json_compat()))
+    value = mapping_get(doc, key)
+    assert is_number_not_string(value, last)
+    assert value != first_val
+    assert value != second_val
+    assert value != max(first_val, second_val, last)
+    require_parse_failure(load(source))
 
 
 def test_json_compat_applies_to_every_document():
@@ -448,6 +540,14 @@ def test_quoted_folding_runtime_words():
     assert dq_join == joined
     sq = require_document(load(f"'{first}\r\n{second}'"))
     assert sq == folded
+    sq_bs = require_document(load(f"'{first}\\\r\n{second}'"))
+    print(f"runtime sq-bs={sq_bs!r}", flush=True)
+    assert sq_bs != joined
+    assert "\r" not in sq_bs
+    assert "\n" not in sq_bs
+    assert first in sq_bs
+    assert second in sq_bs
+    assert f" {second}" in sq_bs
 
 
 def test_eight_digit_unicode_escape():
@@ -462,6 +562,14 @@ def test_eight_digit_unicode_escape_runtime_codepoints():
     print(f"source={source!r} expected={expected!r}", flush=True)
     value = require_document(load(source))
     assert value == expected
+    token = unique_token()
+    code = 0x00A1 + (int(token[1:5], 16) % 0x0C5F)
+    bmp_hex = f"{code:08X}"
+    bmp_expected = chr(code)
+    bmp_source = f'"\\U{bmp_hex}"'
+    print(f"bmp-source={bmp_source!r} expected={bmp_expected!r}", flush=True)
+    bmp_value = require_document(load(bmp_source))
+    assert bmp_value == bmp_expected
 
 
 def test_tag_handle_with_digits():
@@ -476,7 +584,8 @@ def test_tag_handle_without_directive_is_unknown():
     tagged = require_document(load(PUBLIC_TAG_STREAM))
     print(f"with directive={tagged!r}", flush=True)
     assert tagged == "123"
-    require_parse_failure(load(PUBLIC_TAG_NODE))
+    print(f"without directive={PUBLIC_TAG_WITHOUT_DIRECTIVE!r}", flush=True)
+    require_parse_failure(load(PUBLIC_TAG_WITHOUT_DIRECTIVE))
 
 
 def test_tag_handle_with_digits_non_public():
@@ -487,7 +596,9 @@ def test_tag_handle_with_digits_non_public():
     value = require_document(load(source))
     assert value == word
     assert isinstance(value, str)
-    require_parse_failure(load(f"{handle}str {word}"))
+    without = f"---\n{handle}str {word}"
+    print(f"without directive={without!r}", flush=True)
+    require_parse_failure(load(without))
 
 
 # ---------------------------------------------------------------------------
@@ -546,13 +657,16 @@ def _malformed_cases() -> list[tuple[str, str]]:
     word = unique_token()
     other = unique_token()
     alias = unique_token()
+    at_len = 2 + (int(word[1], 16) % 5)
     return [
         ("at_only", "@"),
+        ("at_only_longer", "@" * at_len),
         ("null_byte_foobar", "foo\x00bar"),
         ("null_byte_runtime", f"{word}\x00{other}"),
         ("unclosed_single", "'still-open"),
         ("unclosed_single_runtime", f"'{word}"),
         ("unclosed_double", '"still-open'),
+        ("unclosed_double_runtime", f'"{word}'),
         ("alias_never_anchored", "*no_such_anchor"),
         ("alias_never_anchored_runtime", f"*{alias}"),
         ("yaml_2_0_directive", "%YAML 2.0\n---\nx\n"),
@@ -561,8 +675,13 @@ def _malformed_cases() -> list[tuple[str, str]]:
         ("nonprintable_0x01", "\x01"),
         ("nonprintable_0x7f", "\x7f"),
         ("nonprintable_0x9f", "\x9f"),
+        ("nonprintable_0x01_midstring", f"{word}\x01{other}"),
         ("lone_surrogate_pair", ""),
-        ("control_inside_quoted", '"\x02"'),
+        ("unpaired_surrogate_other", ""),
+        ("quoted_0x03_double", '"\x03"'),
+        ("quoted_0x03_single", "'\x03'"),
+        ("quoted_0x03_interior_double", f'"{word}\x03{other}"'),
+        ("quoted_0x03_interior_single", f"'{word}\x03{other}'"),
     ]
 
 
@@ -575,10 +694,11 @@ _MALFORMED_CASES = _malformed_cases()
 )
 def test_malformed_inputs_fail_both_entries(label, source):
     print(f"case={label!r} source={source!r}", flush=True)
-    if label == "lone_surrogate_pair":
-        # Lone surrogates are not UTF-8; build the units in-process, then parse.
-        single = load_utf16_units((0xDC00, 0xD800))
-        multi = load_utf16_units((0xDC00, 0xD800), multi=True)
+    units = _UTF16_MALFORMED.get(label)
+    if units is not None:
+        # Unpaired UTF-16 units are not UTF-8; build them in-process, then parse.
+        single = load_utf16_units(units)
+        multi = load_utf16_units(units, multi=True)
     else:
         single = load(source)
         multi = load_all(source)
@@ -599,7 +719,7 @@ def test_failed_parse_not_usable_document():
 
 
 # ---------------------------------------------------------------------------
-# H. Source-path label in the failure report; later line, not the first
+# H. Source-path label in the failure report; line-break count one vs zero
 # ---------------------------------------------------------------------------
 
 
@@ -643,29 +763,19 @@ def test_failure_report_identifies_later_line_not_first():
     )
     assert report_has_label(later_err, label)
     covariates = (label, "a: 1", "@", "\r\n", "\r", "\n")
-    later_id = line_identity_after_strip(later_err, *covariates)
-    earlier_id = line_identity_after_strip(earlier_err, *covariates)
-    print(f"later_id={later_id!r} earlier_id={earlier_id!r}", flush=True)
-    assert later_id != NO_LINE_IDENTITY, (
-        "later-line arm left no sortable line clue after covariates were stripped"
+    print(
+        f"later_report={observer_visible_report(later_err)!r}",
+        flush=True,
     )
-    assert earlier_id != NO_LINE_IDENTITY, (
-        "earlier-line arm left no sortable line clue after covariates were stripped"
+    print(
+        f"earlier_report={observer_visible_report(earlier_err)!r}",
+        flush=True,
     )
-    assert later_id > earlier_id, (
-        f"later-line clue {later_id!r} is not after earlier-line clue {earlier_id!r}"
+    # L110: later presents line-break count one; swapped first-line
+    # @ presents count zero. Numbering from zero or from one is open.
+    require_line_break_counts(
+        later_err,
+        earlier_err,
+        later_source=later_src,
+        covariates=covariates,
     )
-
-
-# ---------------------------------------------------------------------------
-# I. Negative control: no successful document without the built artifact
-# ---------------------------------------------------------------------------
-
-
-def test_parse_fails_when_library_artifact_absent():
-    present = load(ANSWER_42)
-    doc = require_document(present)
-    assert is_number_not_string(mapping_get(doc, "answer"), 42)
-    hidden = attempt_load_without_artifact(ANSWER_42)
-    print(f"hidden ok={getattr(hidden, 'ok', None)!r}", flush=True)
-    assert not is_successful_answer_42(hidden)
