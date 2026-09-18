@@ -19,6 +19,9 @@ local_agents/output/
 # Dev-only case id mapping (do not publish):
 cases/_mapping.private.json
 
+# Negative-control workspaces (local oracle checks; not for public release):
+cases/*/controls/
+
 # Keep tracked templates and docs:
 !local_agents/*.env.example
 !local_agents/opencode.json.example

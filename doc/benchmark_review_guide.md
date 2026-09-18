@@ -19,7 +19,7 @@ Each `benchmark/cases/<id>/` has:
 | `source/denylist.json` | no (host + judge only; hashes in the `:agent` image) |
 | `source/env/resources.json` (optional) | no |
 | `milestones/final/` | no (hidden tests) |
-| `controls/<name>/` | no (negative-control workspaces) |
+| `controls/<name>/` | no (private; gitignored) |
 
 ### 1.1 Denylist is tracked
 
@@ -85,7 +85,7 @@ Not in this round: case003 S01/S03/S04/S05 wording, case004 codec construction o
 
 - `source/denylist.json`
 - `source/env/resources.json` and `fetch_resources.py`
-- `controls/`
+- `controls/` (private; gitignored)
 - `recipe.lock.json` install/build commands that match the manifest
 
 ## 6. How to rejudge (when a workspace exists)
