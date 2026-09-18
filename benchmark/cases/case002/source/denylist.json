@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "case002",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/theskumar/python-dotenv",
+    "python-dotenv",
+    "python3-dotenv",
+    "theskumar/python-dotenv"
+  ],
+  "import_ban": [
+    "dotenv",
+    "dotenv/"
+  ],
+  "notes": "Bans the upstream python-dotenv PyPI package, Debian/Ubuntu alias python3-dotenv, GitHub slug theskumar/python-dotenv, and the dotenv import root; allows runner-provided infra (python3, pip, pytest, setuptools, click, ipython) and does not ban org-wide or unrelated names (theskumar, django-dotenv, environs)."
+}

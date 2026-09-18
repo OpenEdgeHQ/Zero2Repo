@@ -13,6 +13,7 @@ benchmark/local_agents/*.bak*
 benchmark/.cbrun_cache/
 benchmark/cases/_mapping.private.json
 benchmark/cases/*/source/denylist.json
+!benchmark/cases/case002/source/denylist.json
 .DS_Store
 
 # Local working notes (not published). Tracked review/rejudge entries stay.
