@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "case004",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/pallets/itsdangerous",
+    "its-dangerous",
+    "its_dangerous",
+    "itsdangerous",
+    "pallets/itsdangerous",
+    "python-itsdangerous",
+    "python3-itsdangerous"
+  ],
+  "import_ban": [
+    "itsdangerous",
+    "itsdangerous/"
+  ],
+  "notes": "Bans the upstream ItsDangerous PyPI package and import root (itsdangerous), hyphen/underscore aliases, GitHub slug pallets/itsdangerous, and Debian aliases python-itsdangerous / python3-itsdangerous; allows runner-provided infra (python3, pip, pytest, freezegun, flit_core) and does not ban org-wide or docs-only names (pallets, pallets-sphinx-themes)."
+}

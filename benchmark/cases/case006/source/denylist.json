@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "case006",
+  "ecosystem": "pip",
+  "install_ban": [
+    "click",
+    "pallets/click",
+    "typer"
+  ],
+  "import_ban": [
+    "click",
+    "click/",
+    "typer",
+    "typer/"
+  ],
+  "notes": "Bans the upstream Click PyPI package and import root (click), the GitHub slug pallets/click, and Typer (typer) which wraps Click; allows runner-provided infra (pytest, apt less, Python/pip/flit_core) and does not ban org-wide or docs-only names (pallets, pallets-sphinx-themes, click-contrib)."
+}

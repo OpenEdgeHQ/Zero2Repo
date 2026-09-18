@@ -16,18 +16,19 @@ Each `benchmark/cases/<id>/` has:
 | `public/Hardware_Requirements.md` (optional) | yes |
 | `source/manifest.json` | no (runner + `sensitive_terms` + optional `judge_bans`) |
 | `source/recipe.lock.json` | no |
-| `source/denylist.json` | no (private; gitignored) |
+| `source/denylist.json` | no (host + judge only; hashes in the `:agent` image) |
 | `source/env/resources.json` (optional) | no |
 | `milestones/final/` | no (hidden tests) |
 | `controls/<name>/` | no (negative-control workspaces) |
 
-### 1.1 Public clone vs internal run
+### 1.1 Denylist is tracked
 
-`source/denylist.json` is harness metadata. A public clone does not have it.
-Default `--enforce-denylist` then fails closed. Published bundles must pass
-`--no-enforce-denylist`; `summary.json` records `denylist_enforced=false`.
-Internal distribution supplies the file out of band. There is no
-`tools/sync_denylists_from_remote.py`.
+`source/denylist.json` is tracked with every case. Isolation keeps hidden
+tests and the upstream name out of the solve container; the denylist adds
+the second gate: the agent may not install or import the upstream product.
+Without it, wrapping `pip install <upstream>` would score 1. Default
+`--enforce-denylist` fails closed when the file is missing or empty;
+`--no-enforce-denylist` records `denylist_enforced=false`.
 
 ### 1.2 Images
 
@@ -82,7 +83,7 @@ Not in this round: case003 S01/S03/S04/S05 wording, case004 codec construction o
 
 ## 5. Reviewer whitelist (may be added without being “product leakage”)
 
-- `source/denylist.json` (private)
+- `source/denylist.json`
 - `source/env/resources.json` and `fetch_resources.py`
 - `controls/`
 - `recipe.lock.json` install/build commands that match the manifest

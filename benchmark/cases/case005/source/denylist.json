@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "case_id": "case005",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/python-hyper/h11",
+    "h11",
+    "python-h11",
+    "python-hyper/h11",
+    "python3-h11"
+  ],
+  "import_ban": [
+    "h11",
+    "h11/"
+  ],
+  "runtime_equivalents": [
+    {
+      "import_root": "h11",
+      "runtime": "python3",
+      "evidence": "codingbench-env/pythonhyper-h11-001-bdirect:recipe-env digest sha256:517c6fa7180338ada66fedc2c8d5b77c7b2bde0395e5ccc1fbf2c5e10b5e1a30; /opt/conda/bin/python3 3.13.13 (PATH python3) imports /opt/conda/lib/python3.13/site-packages/h11/__init__.py — conda defaults h11 0.16.0 (Home-page github.com/python-hyper/h11, PRODUCT_ID python-h11/0.16.0, required-by httpcore). /usr/bin/python3.12 has no h11. httpcore/httpx and stdlib http.client are I/O clients, not this sans-I/O product."
+    }
+  ],
+  "notes": "Bans the upstream h11 PyPI/conda package and import root (h11), GitHub slug python-hyper/h11, and Debian aliases python-h11 / python3-h11; recipe-image python3 already ships same-origin h11 0.16.0 so it is declared in runtime_equivalents; allows runner-provided infra (python3, pip, setuptools, pytest, pytest-cov) and does not ban org-wide, sibling, or consumer names (python-hyper, wsproto, hyper-h2, h2, httpcore, httpx) or stdlib http."
+}

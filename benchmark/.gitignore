@@ -19,10 +19,6 @@ local_agents/output/
 # Dev-only case id mapping (do not publish):
 cases/_mapping.private.json
 
-# Private harness metadata (upstream denylist; not for public release):
-cases/*/source/denylist.json
-!cases/case002/source/denylist.json
-
 # Keep tracked templates and docs:
 !local_agents/*.env.example
 !local_agents/opencode.json.example

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "case009",
+  "ecosystem": "go",
+  "install_ban": [
+    "git-lfs",
+    "git-lfs/git-lfs",
+    "github.com/git-lfs/git-lfs",
+    "github.com/git-lfs/git-lfs/v3",
+    "gitlfs",
+    "packagecloud.io/github/git-lfs"
+  ],
+  "import_ban": [
+    "git-lfs/git-lfs/",
+    "github.com/git-lfs/git-lfs/",
+    "github.com/git-lfs/git-lfs/v3/"
+  ],
+  "notes": "Bans the first-party Git LFS Go module (github.com/git-lfs/git-lfs[/v3]), apt/rpm/brew name git-lfs, GitHub slug, and Packagecloud path; Go toolchain, gettext, GNU make, Git, waived same-org companion modules (gitobj, go-netrc, pktline, wildmatch), and go.mod third-party deps (cobra, klauspost/compress, golang.org/x/*, etc.) remain allowed."
+}

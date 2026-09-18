@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "case007",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/pyauth/pyotp",
+    "py-otp",
+    "py_otp",
+    "pyauth/pyotp",
+    "pyotp",
+    "python-pyotp",
+    "python3-pyotp"
+  ],
+  "import_ban": [
+    "pyotp",
+    "pyotp/"
+  ],
+  "notes": "Bans the upstream PyOTP PyPI package and import root (pyotp), hyphen/underscore aliases py-otp / py_otp, GitHub slug pyauth/pyotp, and Debian aliases python-pyotp / python3-pyotp; allows runner-provided infra (python3, pip, hatchling, hatch-vcs, stdlib unittest) and does not ban org-wide, sibling, or generic OTP names (pyauth, pywarp, hotp, totp)."
+}

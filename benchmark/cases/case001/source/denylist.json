@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "case_id": "case001",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/hukkin/tomli",
+    "hukkin/tomli",
+    "python-tomli",
+    "python3-tomli",
+    "tomli"
+  ],
+  "import_ban": [
+    "tomli",
+    "tomli/",
+    "tomllib"
+  ],
+  "notes": "Bans the upstream Tomli PyPI package and import root (tomli), GitHub slug hukkin/tomli, Debian aliases python-tomli / python3-tomli, and the standard-library tomllib root (static scan + judge-process ban; image probe skips stdlib so the Python 3.13 image still builds). Allows runner-provided infra (python3, pip, flit_core, stdlib unittest) and does not ban org-wide, generic, or sibling names (hukkin, toml, tomli-w, mdformat-toc)."
+}

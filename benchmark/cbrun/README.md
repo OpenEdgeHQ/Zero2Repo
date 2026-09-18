@@ -184,21 +184,22 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
 * During **solve**, GitHub hostnames are blocked via container `/etc/hosts`
   (`--add-host …:0.0.0.0`). Model API calls and PyPI/npm remain reachable.
   Disable with `--no-block-github`.
-* Each case should ship `source/denylist.json` (install/import bans for the
-  upstream product). The file is private harness metadata: it is gitignored
-  and is not in a public clone. Internal runs receive it by a private
-  distribution path. pip/conda install shims in the `:agent` image reject
-  those packages inline (warning only, no scoring).
+* Each case ships `source/denylist.json` (install/import bans for the
+  upstream product). It is tracked with the case. The file never enters the
+  solve container: the `:agent` image carries only name hashes plus the
+  install shims, and the plaintext is read on the host for the post-submit
+  scan and in the judge container after the agent has exited. pip/conda
+  install shims in the `:agent` image reject those packages inline (warning
+  only, no scoring).
 * After a valid submit, cbrun statically scans `/app` for real
   import/require/use of banned tokens (docstrings and string literals do not
   count). If found, the agent gets one fix retry (`--denylist-fix-retries`,
   default 1) and must write the submit file again; if violations remain, the
   trial scores `reward=0` without judging.
 * `--enforce-denylist` is on by default. Missing file or empty ban lists
-  fail before any container starts. A published bundle without a denylist
-  must pass `--no-enforce-denylist`; `summary.json` then records
-  `denylist_enforced=false` so a skipped scan is not mistaken for a clean
-  scan.
+  fail before any container starts. `--no-enforce-denylist` skips the scan
+  and `summary.json` records `denylist_enforced=false` so a skipped scan is
+  not mistaken for a clean scan.
 
 ## Step mode (architecture only)
 

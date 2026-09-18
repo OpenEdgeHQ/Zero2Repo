@@ -577,9 +577,8 @@ def require_denylist(case_dir: Path | str) -> DenylistSpec:
     if not path.is_file():
         raise MissingDenylist(
             f"source/denylist.json is missing at {path}. "
-            "Obtain the private denylist from the internal distribution "
-            "channel, or pass --no-enforce-denylist for a published bundle "
-            "without one."
+            "Every released case tracks this file; restore it from git, "
+            "or pass --no-enforce-denylist to skip the scan."
         )
     raise MissingDenylist(
         f"source/denylist.json at {path} has no install_ban or import_ban. "
@@ -1127,9 +1126,8 @@ def write_shim_assets(
         if required:
             raise MissingDenylist(
                 f"source/denylist.json is missing at {denylist_path}. "
-                "Obtain the private denylist from the internal distribution "
-                "channel, or pass --no-enforce-denylist for a published bundle "
-                "without one."
+                "Every released case tracks this file; restore it from git, "
+                "or pass --no-enforce-denylist to skip the scan."
             )
         return ""
     hashes = install_ban_hashes_from_file(denylist_path)
