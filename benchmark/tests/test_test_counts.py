@@ -8,7 +8,7 @@ from pathlib import Path
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT / "coding_bench_harbor"))
 
-from test_counts import parse_test_counts  # noqa: E402
+from test_counts import parse_pytest_outcomes, parse_test_counts  # noqa: E402
 
 
 def _check(out, *, label="", cmd="", passed, total, failed=None, framework=None):
@@ -157,3 +157,21 @@ def test_fallback_without_route():
     out = "==================== 5 passed in 0.10s ====================\n"
     c = parse_test_counts(out)
     assert c is not None and c.passed == 5 and c.framework == "pytest"
+
+
+def test_parse_pytest_outcomes_short_summary():
+    out = (
+        "=========================== short test summary info ===========================\n"
+        "FAILED tests/F01_acceptance.py::test_named - AssertionError: boom\n"
+        "ERROR tests/F02_acceptance.py - ImportError\n"
+        "======================= 1 failed, 1 error in 0.20s =======================\n"
+    )
+    got = parse_pytest_outcomes(out)
+    assert got == {
+        "failed": ["tests/F01_acceptance.py::test_named"],
+        "errors": ["tests/F02_acceptance.py"],
+    }
+
+
+def test_parse_pytest_outcomes_none_without_summary():
+    assert parse_pytest_outcomes("1 failed, 88 passed") is None

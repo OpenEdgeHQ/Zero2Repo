@@ -139,7 +139,7 @@
     "repo_warm_command": "npm ci --cache /opt/npm-cache --prefer-offline && npm run build",
     "build_command": "npm ci --cache /opt/npm-cache --prefer-offline && npm run build",
     "env_probe_command": "node --input-type=module -e \"import { load, dump } from './dist/ymlcodec.mjs'; const d = load('hello: world'); if (d.hello !== 'world') process.exit(1); if (load(dump({ n: 1 })).n !== 1) process.exit(1);\"",
-    "test_command_template": "node --test {test_files}",
+    "test_command_template": "python3 -m pytest {test_files}",
     "workdir": ".",
     "test_file_patterns": [
       "test/**/*.test.mjs",

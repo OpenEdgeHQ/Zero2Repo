@@ -24,10 +24,17 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
+from .denylist import (
+    install_ban_hashes_from_file,
+    log_probe_result,
+    probe_banned_imports,
+    render_strip_script,
+)
 from .docker_env import docker_available, image_exists
 from .images import deliverable_tag
 from .recipe import (
@@ -225,6 +232,82 @@ def _ensure_base_image(base_image: str) -> None:
         raise RecipeLockError(f"base image still missing after build: {base_image}")
 
 
+def _denylist_file(case_dir: Path) -> Path:
+    return case_dir / "source" / "denylist.json"
+
+
+def _image_probe_clean(tag: str, case_dir: Path) -> bool:
+    path = _denylist_file(case_dir)
+    if not path.is_file():
+        return True
+    probe = probe_banned_imports(tag, path)
+    log_probe_result(probe)
+    return not probe.errors
+
+
+def _strip_env_image(
+    *,
+    source_tag: str,
+    dest_tag: str,
+    case_dir: Path,
+    case_id: str,
+    gpus: str | None,
+) -> None:
+    denylist = _denylist_file(case_dir)
+    hashes = install_ban_hashes_from_file(denylist) if denylist.is_file() else []
+    strip_name = f"z2r-recipe-env-strip-{case_id}"
+    _remove_container(strip_name)
+    with tempfile.TemporaryDirectory(prefix="cbrun-strip-") as raw:
+        host = Path(raw)
+        (host / "strip_banned.py").write_text(render_strip_script(), encoding="utf-8")
+        (host / "denylist.hashes").write_text(
+            ("\n".join(hashes) + "\n") if hashes else "",
+            encoding="utf-8",
+        )
+        argv = [
+            "docker",
+            "run",
+            "--name",
+            strip_name,
+            "--network",
+            "none",
+            "-v",
+            f"{host.resolve()}:/opt/cbrun-strip:ro",
+        ]
+        if gpus:
+            argv.extend(["--gpus", gpus])
+        argv.extend(
+            [
+                source_tag,
+                "bash",
+                "-lc",
+                "CBRUN_DENYLIST_HASHES=/opt/cbrun-strip/denylist.hashes "
+                "python3 /opt/cbrun-strip/strip_banned.py",
+            ]
+        )
+        print(f"[cbrun] stripping banned artefacts from {source_tag}", flush=True)
+        proc = subprocess.run(argv)
+        if proc.returncode != 0:
+            _remove_container(strip_name)
+            raise RecipeLockError(
+                f"denylist strip failed for {source_tag} (exit {proc.returncode})"
+            )
+        commit = subprocess.run(
+            ["docker", "commit", "-c", "CMD [\"/bin/bash\"]", strip_name, dest_tag],
+            capture_output=True,
+            text=True,
+        )
+        _remove_container(strip_name)
+        if commit.returncode != 0:
+            raise RecipeLockError(f"docker commit failed: {commit.stderr.strip()}")
+    if denylist.is_file():
+        probe = probe_banned_imports(dest_tag, denylist)
+        log_probe_result(probe)
+        if probe.errors:
+            subprocess.run(["docker", "rmi", "-f", dest_tag], capture_output=True, text=True)
+            raise RecipeLockError("; ".join(probe.errors))
+
+
 def _build_env_image(
     case_dir: Path,
     lock: dict[str, Any],
@@ -238,8 +321,11 @@ def _build_env_image(
     case_id = case_dir.name
     tag = env_recipe_tag(case_id)
     if not force and image_exists(tag):
-        print(f"[cbrun] reusing env image {tag}", flush=True)
-        return tag
+        if _image_probe_clean(tag, case_dir):
+            print(f"[cbrun] reusing env image {tag}", flush=True)
+            return tag
+        print(f"[cbrun] env image {tag} failed denylist probe; rebuilding", flush=True)
+        force = True
 
     base_image = resolve_lock_base_image(lock)
     _ensure_base_image(base_image)
@@ -294,14 +380,34 @@ def _build_env_image(
             f"env-only install failed after {retries} attempts:\n{last_output}"
         )
 
+    pre_tag = f"{tag}-prestrip"
     commit = subprocess.run(
-        ["docker", "commit", container_name, tag],
+        ["docker", "commit", container_name, pre_tag],
         capture_output=True,
         text=True,
     )
     _remove_container(container_name)
     if commit.returncode != 0:
         raise RecipeLockError(f"docker commit failed: {commit.stderr.strip()}")
+    try:
+        if _denylist_file(case_dir).is_file():
+            _strip_env_image(
+                source_tag=pre_tag,
+                dest_tag=tag,
+                case_dir=case_dir,
+                case_id=case_id,
+                gpus=gpus,
+            )
+        else:
+            tag_proc = subprocess.run(
+                ["docker", "tag", pre_tag, tag],
+                capture_output=True,
+                text=True,
+            )
+            if tag_proc.returncode != 0:
+                raise RecipeLockError(f"docker tag failed: {tag_proc.stderr.strip()}")
+    finally:
+        subprocess.run(["docker", "rmi", "-f", pre_tag], capture_output=True, text=True)
     print(f"[cbrun] committed env image {tag}", flush=True)
     return tag
 
@@ -368,7 +474,14 @@ def ensure_deliverable_image(
     case_dir = Path(case_dir).resolve()
     tag = deliverable_tag(case_dir.name)
     if not force and image_exists(tag):
-        return tag
+        if _image_probe_clean(tag, case_dir):
+            print(f"[cbrun] reusing deliverable image {tag}", flush=True)
+            return tag
+        print(
+            f"[cbrun] deliverable image {tag} failed denylist probe; rebuilding",
+            flush=True,
+        )
+        force = True
 
     lock = load_lock(case_dir)
     validate_lock_env_install(lock)

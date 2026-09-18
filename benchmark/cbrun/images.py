@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import agents
-from .denylist import probe_banned_imports, write_shim_assets
+from .denylist import log_probe_result, probe_banned_imports, write_shim_assets
 from .docker_env import image_exists
 from .state import FINGERPRINT_LABEL, digest, file_manifest, image_identity, image_matches, platform_name
 
@@ -245,7 +245,26 @@ def ensure_agent_image(
             and image_matches(tag, fingerprint)
             and cached_ready
         ):
-            return AgentImage(case_id, deliverable, tag, tests_cache)
+            if case_dir is None:
+                return AgentImage(case_id, deliverable, tag, tests_cache)
+            probe = probe_banned_imports(tag, case_dir / "source" / "denylist.json")
+            log_probe_result(probe)
+            if not probe.errors:
+                return AgentImage(case_id, deliverable, tag, tests_cache)
+            print(
+                f"[cbrun] cached agent image {tag} failed denylist probe; rebuilding",
+                flush=True,
+            )
+            return ensure_agent_image(
+                case_id,
+                cache_root=cache_root,
+                case_dir=case_dir,
+                deliverable_image=deliverable_image,
+                force=True,
+                environ=environ,
+                backend=backend,
+                enforce_denylist=enforce_denylist,
+            )
 
         extract_hidden_tests(deliverable, tests_cache)
         df_path = build_ctx / "Dockerfile"
@@ -265,6 +284,7 @@ def ensure_agent_image(
             raise RuntimeError(f"docker build of {tag} failed (exit {build.returncode})")
         if case_dir is not None:
             probe = probe_banned_imports(tag, case_dir / "source" / "denylist.json")
+            log_probe_result(probe)
             if probe.errors:
                 raise RuntimeError("; ".join(probe.errors))
     return AgentImage(case_id, deliverable, tag, tests_cache)

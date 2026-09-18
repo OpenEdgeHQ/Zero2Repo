@@ -514,6 +514,26 @@ def _unique_urls(urls: Sequence[str]) -> list[str]:
     return seen
 
 
+_PUSHURL_ECHO = re.compile(
+    r"(?:^|\s)(?:git\s+config\s+)?\S*pushurl\s*=",
+    re.IGNORECASE,
+)
+
+
+def _drop_pushurl_echo_lines(report: str) -> str:
+    """Drop configuration-echo lines that only restate a *pushurl= value.
+
+    Those lines are not a dedicated would-use-server indication. Do not
+    drop ordinary ``*.url=`` lines: those may be the real endpoint.
+    """
+    kept: list[str] = []
+    for line in report.splitlines():
+        if _PUSHURL_ECHO.search(line.strip()):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _urls_on_lines_containing(report: str, needle: str) -> list[str]:
     found: list[str] = []
     for line in report.splitlines():
@@ -571,6 +591,7 @@ def dedicated_server_url(
       URL that is not on the sibling remote's named observations, and is
       not merely the origin Git remote listing.
     """
+    report = _drop_pushurl_echo_lines(report)
     if not report.strip():
         raise AssertionError(
             f"environment report is empty; no dedicated indication for "

@@ -15,14 +15,25 @@ from coding_bench_harbor._leakage import scan_leakage  # noqa: E402
 from coding_bench_harbor import pytest_launcher as launcher  # noqa: E402
 from cbrun.denylist import (  # noqa: E402
     import_root_from_ban_token,
+    is_command_like_token,
     probe_banned_imports,
+    probe_spec_from_payload,
+    render_pip_module_hook,
+    render_pip_shim,
+    render_strip_script,
 )
 from cbrun.docker_env import Container  # noqa: E402
 from cbrun.case_checks import check_case_assets  # noqa: E402
 from cbrun.judge import export_app, validate_judge_report  # noqa: E402
 from cbrun.recipe import RecipeLockError  # noqa: E402
 from cbrun.recipe_image import resource_fetch_command  # noqa: E402
-from cbrun.rejudge import iter_controls, parse_expect_reward, reward_matches  # noqa: E402
+from cbrun.infra_signals import invalid_reason, scan_log_text  # noqa: E402
+from cbrun.rejudge import (  # noqa: E402
+    check_must_fail_tests,
+    iter_controls,
+    parse_expect_reward,
+    reward_matches,
+)
 from cbrun.state import atomic_json, digest, file_manifest, platform_name  # noqa: E402
 
 
@@ -62,6 +73,204 @@ def test_probe_skips_stdlib_and_fails_on_importable(tmp_path: Path) -> None:
 
     result = probe_banned_imports("img", denylist, runner=lambda _cmd: Present())
     assert result.errors and "click" in result.errors[0] and "origin=" in result.errors[0]
+
+
+def test_probe_flags_warm_tree_and_warns_on_node_ada(tmp_path: Path) -> None:
+    denylist = tmp_path / "denylist.json"
+    denylist.write_text(
+        '{"ecosystem":"source","import_ban":["ada.h"],"install_ban":["ada"]}',
+        encoding="utf-8",
+    )
+
+    class Fake:
+        tail = "warm\t/opt/cb-warm\tPRESENT\nadaver\t2.9.0\n"
+
+    result = probe_banned_imports("img", denylist, runner=lambda _cmd: Fake())
+    assert any("cb-warm" in err for err in result.errors)
+    assert result.warnings and "process.versions.ada" in result.warnings[0]
+
+
+def test_probe_spec_skips_header_tokens_for_command_v() -> None:
+    spec = probe_spec_from_payload(
+        {"import_ban": ["ada.h", "ada::", "tomli/"], "install_ban": ["ada"]}
+    )
+    assert "ada.h" not in spec.commands
+    assert not is_command_like_token("ada.h")
+    assert "ada" in spec.commands
+    assert spec.watch_ada is True
+
+
+def test_strip_script_has_no_plaintext_product_names() -> None:
+    script = render_strip_script().lower()
+    for token in ("click", "tomli", "dotenv", "h11", "typer", "js-yaml"):
+        assert token not in script
+
+
+def test_strip_script_removes_only_hashed_layout(tmp_path: Path) -> None:
+    import hashlib
+    import subprocess
+
+    from cbrun.denylist import normalize_pkg_name
+
+    site = tmp_path / "site"
+    (site / "click").mkdir(parents=True)
+    (site / "safe_pkg").mkdir()
+    hashes = tmp_path / "denylist.hashes"
+    digest = hashlib.sha256(normalize_pkg_name("click").encode()).hexdigest()
+    hashes.write_text(digest + "\n", encoding="utf-8")
+    script = tmp_path / "strip_banned.py"
+    script.write_text(render_strip_script(), encoding="utf-8")
+    env = {
+        **dict(**__import__("os").environ),
+        "CBRUN_DENYLIST_HASHES": str(hashes),
+        "CBRUN_STRIP_SCAN_DIRS": str(site),
+    }
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert not (site / "click").exists()
+    assert (site / "safe_pkg").is_dir()
+    assert proc.returncode == 0
+
+
+def test_pip_shim_blocks_download_and_module_hook(tmp_path: Path) -> None:
+    import hashlib
+
+    from cbrun.denylist import normalize_pkg_name
+
+    shim = render_pip_shim()
+    assert "download" in shim and "wheel" in shim
+    hook = tmp_path / "cbrun_denylist_hook.py"
+    hook.write_text(render_pip_module_hook(), encoding="utf-8")
+    sys.path.insert(0, str(tmp_path))
+    try:
+        import importlib
+
+        mod = importlib.import_module("cbrun_denylist_hook")
+        hashes = tmp_path / "denylist.hashes"
+        hashes.write_text(
+            hashlib.sha256(normalize_pkg_name("click").encode()).hexdigest() + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(SystemExit):
+            mod.check_orig_argv(
+                ["python3", "-m", "pip", "install", "click"],
+                hashes_path=str(hashes),
+            )
+        mod.check_orig_argv(
+            ["python3", "-m", "pip", "install", "pytest"],
+            hashes_path=str(hashes),
+        )
+    finally:
+        sys.path.pop(0)
+        sys.modules.pop("cbrun_denylist_hook", None)
+
+
+def test_ensure_agent_image_reuses_only_when_probe_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cbrun import images
+
+    case_dir = tmp_path / "case006"
+    (case_dir / "source").mkdir(parents=True)
+    (case_dir / "source" / "denylist.json").write_text(
+        '{"install_ban":["click"],"import_ban":["click"]}',
+        encoding="utf-8",
+    )
+    calls = {"probe": 0, "rebuild": 0}
+
+    class Clean:
+        errors: list[str] = []
+        warnings: list[str] = []
+
+    class Dirty:
+        errors = ["banned import root 'click' is importable"]
+        warnings: list[str] = []
+
+    def fake_probe(tag, path, **_k):
+        calls["probe"] += 1
+        return Dirty() if calls["probe"] == 1 else Clean()
+
+    monkeypatch.setattr(images, "image_exists", lambda *_a, **_k: True)
+    monkeypatch.setattr(images, "image_matches", lambda *_a, **_k: True)
+    monkeypatch.setattr(images, "image_identity", lambda *_a, **_k: {"id": "sha256:abc"})
+    monkeypatch.setattr(images, "write_shim_assets", lambda *_a, **_k: "")
+    monkeypatch.setattr(images, "probe_banned_imports", fake_probe)
+    monkeypatch.setattr(images, "log_probe_result", lambda *_a, **_k: None)
+    monkeypatch.setattr(images, "extract_hidden_tests", lambda *_a, **_k: tmp_path)
+    monkeypatch.setattr(
+        images.subprocess,
+        "run",
+        lambda *_a, **_k: type("P", (), {"returncode": 0})(),
+    )
+
+    def fake_deliverable(case_dir, **_k):
+        return "codingbench-benchmark/case006:deliverable"
+
+    import cbrun.recipe_image as recipe_image
+
+    monkeypatch.setattr(recipe_image, "ensure_deliverable_image", fake_deliverable)
+
+    cache = tmp_path / "cache" / "case006" / "abc" / "tests" / "final"
+    cache.mkdir(parents=True)
+    (cache / "test_manifest.json").write_text("{}", encoding="utf-8")
+
+    real = images.ensure_agent_image
+
+    def wrapped(*args, **kwargs):
+        if kwargs.get("force"):
+            calls["rebuild"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(images, "ensure_agent_image", wrapped)
+    monkeypatch.setenv("CBRUN_ALLOW_UNPINNED_CLI", "1")
+    result = wrapped(
+        "case006",
+        cache_root=tmp_path / "cache",
+        case_dir=case_dir,
+        deliverable_image="codingbench-benchmark/case006:deliverable",
+        environ={"CBRUN_ALLOW_UNPINNED_CLI": "1"},
+    )
+    assert calls["probe"] >= 1
+    assert calls["rebuild"] == 1
+    assert result.agent_image.endswith(":agent")
+
+
+def test_build_env_image_reuses_only_when_probe_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cbrun import recipe_image
+
+    case_dir = tmp_path / "case006"
+    (case_dir / "source").mkdir(parents=True)
+    (case_dir / "source" / "denylist.json").write_text(
+        '{"install_ban":["click"],"import_ban":["click"]}',
+        encoding="utf-8",
+    )
+    probes = {"n": 0}
+
+    class Clean:
+        errors: list[str] = []
+        warnings: list[str] = []
+
+    def fake_probe(*_a, **_k):
+        probes["n"] += 1
+        return Clean()
+
+    monkeypatch.setattr(recipe_image, "docker_available", lambda: True)
+    monkeypatch.setattr(recipe_image, "image_exists", lambda *_a, **_k: True)
+    monkeypatch.setattr(recipe_image, "probe_banned_imports", fake_probe)
+    monkeypatch.setattr(recipe_image, "log_probe_result", lambda *_a, **_k: None)
+    monkeypatch.setattr(recipe_image, "env_recipe_tag", lambda cid: f"codingbench-env/{cid}:recipe-env")
+    tag = recipe_image._build_env_image(
+        case_dir, {}, {"install_command": "true"}, force=False
+    )
+    assert tag.endswith(":recipe-env")
+    assert probes["n"] == 1
 
 
 def test_side_effect_ban_blocks_workspace_socket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -425,3 +634,55 @@ def test_rejudge_image_and_tests_dir_must_be_paired(tmp_path: Path, capsys: pyte
     )
     assert code == 2
     assert "--image and --tests-dir must be given together" in capsys.readouterr().out
+
+
+def test_check_must_fail_tests_reward_only_warns_on_collection() -> None:
+    errors, warnings = check_must_fail_tests(
+        must_fail_tests=[],
+        failed_tests=[],
+        error_tests=["tests/F01_acceptance.py"],
+        failed_count=0,
+        error_count=19,
+    )
+    assert errors == []
+    assert warnings
+
+
+def test_check_must_fail_tests_requires_failed_not_error() -> None:
+    errors, _warnings = check_must_fail_tests(
+        must_fail_tests=["test_named"],
+        failed_tests=[],
+        error_tests=["tests/F12_acceptance.py::test_named"],
+        failed_count=0,
+        error_count=1,
+    )
+    assert errors and "ERROR" in errors[0]
+
+
+def test_check_must_fail_tests_suffix_hit() -> None:
+    errors, warnings = check_must_fail_tests(
+        must_fail_tests=["test_named"],
+        failed_tests=["tests/F12_acceptance.py::test_named"],
+        error_tests=[],
+        failed_count=1,
+        error_count=0,
+    )
+    assert errors == []
+    assert warnings == []
+
+
+def test_infra_signals_ignore_bare_401_and_recovered_filter() -> None:
+    counts = scan_log_text("===== 401 passed in 1.00s =====\ncontent_filter once\n")
+    assert "auth" not in counts
+    assert counts["content_filter"] == 1
+    assert (
+        invalid_reason(
+            submitted=True,
+            log_text="Incomplete response returned, reason: content_filter\n",
+        )
+        is None
+    )
+    assert (
+        invalid_reason(submitted=False, log_text="HTTP 401 invalid_api_key\n")
+        == "infra:auth"
+    )

@@ -13,6 +13,7 @@ only after the agent finishes.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -91,7 +92,76 @@ and where outputs must remain.
 """
 
 
-def build_contract_notes(build_command: str, workdir: str = ".") -> str:
+_LEADING_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*")
+
+
+def _is_noop_build(cmd: str) -> bool:
+    return str(cmd or "").strip() in {"", "true", ":"}
+
+
+def _test_command_env(cmd: str) -> dict[str, str]:
+    rest = str(cmd or "").lstrip()
+    env: dict[str, str] = {}
+    while True:
+        match = _LEADING_ASSIGN.match(rest)
+        if match is None:
+            break
+        env[match.group(1)] = match.group(2)
+        rest = rest[match.end() :]
+    return env
+
+
+def _judge_test_command(case: "CaseAssets") -> str:
+    """Prefer the sealed suite command over the published runner template."""
+    manifest = case.acceptance.test_manifest or {}
+    for key in ("test_command_template", "test_command"):
+        text = str(manifest.get(key) or "").strip()
+        if text:
+            return text
+    return str(case.runner.test_command or "").strip()
+
+
+def _pythonpath_import_root(value: str) -> str:
+    first = (value or "").split(":", 1)[0].strip() or "."
+    if first in {".", ""}:
+        return "/app"
+    if first.startswith("/"):
+        return first
+    return f"/app/{first}"
+
+
+def _launch_notes(test_env: dict[str, str] | None) -> str:
+    env = dict(test_env or {})
+    pythonpath = env.pop("PYTHONPATH", None)
+    lines: list[str] = []
+    if pythonpath is not None:
+        root = _pythonpath_import_root(pythonpath)
+        if pythonpath in {".", ""}:
+            lines.append(
+                "* The hidden tests run against `/app` as the working directory.\n"
+            )
+        else:
+            lines.append(
+                f"* The hidden tests are launched from `/app` with "
+                f"`PYTHONPATH={pythonpath}`; your importable package(s) must "
+                f"resolve from `{root}`.\n"
+            )
+    else:
+        lines.append(
+            "* The hidden tests run against `/app` as the working directory.\n"
+        )
+    for key, value in env.items():
+        lines.append(
+            f"* The hidden tests are launched with `{key}={value}`.\n"
+        )
+    return "".join(lines)
+
+
+def build_contract_notes(
+    build_command: str,
+    workdir: str = ".",
+    test_env: dict[str, str] | None = None,
+) -> str:
     """Tell the agent how the judge locates build outputs. Judge never builds."""
     cmd = (build_command or "").strip()
     wd = (workdir or ".").strip() or "."
@@ -101,11 +171,12 @@ def build_contract_notes(build_command: str, workdir: str = ".") -> str:
         "The hidden acceptance tests run against your final `/app` exactly as "
         "you leave it.\n"
     )
-    if not cmd:
+    launch = _launch_notes(test_env)
+    if _is_noop_build(cmd):
         return (
             header
-            + "* There is no build step for this project: the hidden tests "
-            "import / run it directly from the `/app` source root.\n"
+            + "* There is no build step for this project.\n"
+            + launch
         )
     workdir_line = ""
     if wd != ".":
@@ -121,6 +192,7 @@ def build_contract_notes(build_command: str, workdir: str = ".") -> str:
         "  Leave those outputs in place before you submit. Do not clean the "
         "build tree.\n"
         + workdir_line
+        + launch
     )
 
 
@@ -378,7 +450,11 @@ def _full_prd_text(case: "CaseAssets") -> str:
 def _build_instruction(case: CaseAssets, contract_text: str | None = None) -> str:
     parts = [_INSTRUCTION_PREAMBLE]
     parts.append(
-        build_contract_notes(case.runner.build_command, case.runner.workdir)
+        build_contract_notes(
+            case.runner.build_command,
+            case.runner.workdir,
+            _test_command_env(_judge_test_command(case)),
+        )
     )
     parts.append("\n")
     parts.append("# Product Requirements Document\n\n")
@@ -509,6 +585,11 @@ def build_task(
         require_released=require_released,
         require_gt=False,
     )
+    from cbrun.limits import case_test_timeout_sec
+
+    per_case = case_test_timeout_sec(case.acceptance.test_manifest)
+    if per_case:
+        verifier_timeout_sec = max(float(verifier_timeout_sec), per_case)
     contract_text = case.contract_path.read_text(encoding="utf-8")
 
     prd_text = _full_prd_text(case)

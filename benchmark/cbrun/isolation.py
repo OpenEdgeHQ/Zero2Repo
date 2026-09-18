@@ -17,17 +17,49 @@ synthesized ``runner`` block supplies install/build/workdir.
 
 from __future__ import annotations
 
+import re
+
 import tomli_w
 
 from .assets import CaseSpec
 from .steps import Step
 
-__all__ = ["merge_runner", "synthesize_task_toml"]
+__all__ = [
+    "is_noop_build",
+    "merge_runner",
+    "synthesize_task_toml",
+    "test_command_env",
+]
+
+_LEADING_ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*")
+_NOOP_BUILD = frozenset({"", "true", ":"})
 
 
 def _nonempty(value: object) -> str:
     text = str(value or "").strip()
     return text
+
+
+def test_command_env(cmd: str) -> dict[str, str]:
+    """Parse leading ``KEY=VALUE`` assignments from a test command.
+
+    Stops at the first token that is not an assignment. Values are taken
+    verbatim (no shell expansion).
+    """
+    rest = str(cmd or "").lstrip()
+    env: dict[str, str] = {}
+    while True:
+        match = _LEADING_ASSIGN.match(rest)
+        if match is None:
+            break
+        env[match.group(1)] = match.group(2)
+        rest = rest[match.end() :]
+    return env
+
+
+def is_noop_build(cmd: str) -> bool:
+    """True when *cmd* is empty or a no-op shell placeholder (``true`` / ``:``)."""
+    return str(cmd or "").strip() in _NOOP_BUILD
 
 
 def merge_runner(case: CaseSpec, step: Step) -> dict[str, str]:

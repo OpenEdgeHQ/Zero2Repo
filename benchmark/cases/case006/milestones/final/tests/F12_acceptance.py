@@ -1086,9 +1086,14 @@ def test_bash_file_completion_registers_and_lists_directory_candidates():
             "  echo NO_COMPLETE_REGISTRATION\n"
             "  exit 1\n"
             "fi\n"
-            f"fn=$(complete -p {exe} | awk '{{for(i=1;i<=NF;i++) if($i==\"-F\") print $(i+1)}}')\n"
-            'if [ -z "$fn" ]; then echo NO_COMPLETE_FUNCTION; exit 1; fi\n'
-            f'printf "REGISTRATION:%s\\n" "$(complete -p {exe})"\n'
+            f'reg="$(complete -p {exe})"\n'
+            'printf "REGISTRATION:%s\\n" "$reg"\n'
+            # Registration-script syntax is not pinned (Contract L35 / F12
+            # header). Accept -F, -C, or options-only such as -o default.
+            r"""fn=$(printf '%s\n' "$reg" | awk '{for(i=1;i<=NF;i++) if($i=="-F") print $(i+1)}' | sed "s/^[\"']//;s/[\"']$//")"""
+            "\n"
+            r"""cmd=$(printf '%s\n' "$reg" | awk '{for(i=1;i<=NF;i++) if($i=="-C") print $(i+1)}' | sed "s/^[\"']//;s/[\"']$//")"""
+            "\n"
             # Outside a live readline completion the ``compopt`` builtin
             # refuses to run, so record what the function asks for instead.
             # Print args one by one: the caller may have set IFS to newline.
@@ -1098,8 +1103,16 @@ def test_bash_file_completion_registers_and_lists_directory_candidates():
             f"COMP_LINE='{exe} {flag} {prefix}'\n"
             "COMP_POINT=${#COMP_LINE}\n"
             "COMPREPLY=()\n"
-            f'"$fn" {exe} {prefix} {flag}\n'
-            'printf "REPLY:%s\\n" "${COMPREPLY[@]}"\n',
+            "export COMP_WORDS COMP_CWORD COMP_LINE COMP_POINT\n"
+            'if [ -n "$fn" ]; then\n'
+            f'  "$fn" {exe} {prefix} {flag}\n'
+            '  printf "REPLY:%s\\n" "${COMPREPLY[@]}"\n'
+            'elif [ -n "$cmd" ]; then\n'
+            # bash man complete -C: command exe word prev
+            '  while IFS= read -r line; do\n'
+            '    [ -n "$line" ] && printf "REPLY:%s\\n" "$line"\n'
+            f'  done < <("$cmd" {exe} {prefix} {flag})\n'
+            "fi\n",
         )
         probe.chmod(probe.stat().st_mode | 0o111)
         result = ws.run_command(["bash", str(probe)])
@@ -1107,9 +1120,8 @@ def test_bash_file_completion_registers_and_lists_directory_candidates():
     print(f"bash_file_complete out={text!r} code={result.returncode}", flush=True)
     assert (
         "NO_COMPLETE_REGISTRATION" not in text
-        and "NO_COMPLETE_FUNCTION" not in text
         and result.returncode == 0
-    ), f"bash did not register a completion function for {exe!r}; out={text!r}"
+    ), f"bash did not register completion for {exe!r}; out={text!r}"
     listed = file_a in text or file_b in text
     # Either the function asks readline for filename completion at call time
     # (``compopt -o default``) or registration itself carries that option.

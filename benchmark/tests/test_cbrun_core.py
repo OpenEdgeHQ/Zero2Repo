@@ -13,14 +13,17 @@ sys.path.insert(0, str(BENCHMARK_ROOT))
 
 from cbrun import instruction as instr_mod  # noqa: E402
 from cbrun import isolation, results  # noqa: E402
+from coding_bench_harbor.adapter import build_contract_notes  # noqa: E402
 from cbrun.assets import CaseSpec  # noqa: E402
 from cbrun.limits import (  # noqa: E402
     DEFAULT_AGENT_TIMEOUT_SEC,
     DEFAULT_TEST_TIMEOUT_SEC,
     TerminalStatus,
+    case_test_timeout_sec,
     classify_terminal,
     resolve_limits,
 )
+from cbrun.state import host_arch, is_emulated  # noqa: E402
 from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 from cbrun.submit import (  # noqa: E402
     CONTAINER_SUBMIT_PATH,
@@ -69,7 +72,9 @@ def test_instruction_does_not_leak_hidden_test_paths() -> None:
     assert "/tests/final" not in out
     assert "test_manifest" not in out
     assert "no build step" in out
+    assert "source root" not in out
     assert "pip install -e ." not in out
+    assert "runtime- or toolchain-bundled" in out
 
 
 def test_instruction_includes_nonempty_build_command() -> None:
@@ -95,6 +100,42 @@ def test_instruction_empty_build_command_declares_no_build_step() -> None:
     out = instr_mod.build_instruction(build_command="", workdir=".")
     assert "no build step" in out
     assert "does **not** run any install or build" in out
+    assert "source root" not in out
+    assert "working directory" in out
+
+
+@pytest.mark.parametrize(
+    "test_env,needle",
+    [
+        ({"PYTHONPATH": "src"}, "PYTHONPATH=src"),
+        ({"PYTHONPATH": "."}, "run against `/app` as the working directory"),
+        ({}, "run against `/app` as the working directory"),
+    ],
+)
+def test_build_contract_notes_import_root(test_env: dict[str, str], needle: str) -> None:
+    out = build_contract_notes("", ".", test_env)
+    assert "no build step" in out
+    assert needle in out
+    assert "source root" not in out
+    assert "/app/." not in out
+
+
+def test_build_contract_notes_noop_true_is_no_build() -> None:
+    out = build_contract_notes("true", ".")
+    assert "no build step" in out
+    assert "`true`" not in out
+    assert "source root" not in out
+
+
+def test_test_command_env_reads_leading_assignments_only() -> None:
+    assert isolation.test_command_env(
+        "PYTHONPATH=src NODE_PATH=lib python3 -m pytest {test_files}"
+    ) == {"PYTHONPATH": "src", "NODE_PATH": "lib"}
+    assert isolation.test_command_env("python3 -m pytest") == {}
+    assert isolation.is_noop_build("true")
+    assert isolation.is_noop_build(":")
+    assert isolation.is_noop_build("")
+    assert not isolation.is_noop_build("make")
 
 
 @pytest.mark.parametrize("case_id", _CASE_IDS)
@@ -102,17 +143,26 @@ def test_instruction_surfaces_each_case_build_command(case_id: str) -> None:
     from cbrun.assets import load_case
 
     case = load_case(BENCHMARK_ROOT / "cases" / case_id)
+    steps = discover_steps(case)
+    merged = isolation.merge_runner(case, steps[0])
+    test_env = isolation.test_command_env(merged["test_command"])
     out = instr_mod.build_instruction(
         has_hardware=bool((case.hardware_text or "").strip()),
         build_command=case.build_command,
         workdir=case.workdir,
+        test_env=test_env,
     )
-    cmd = case.build_command.strip()
-    if cmd:
-        assert cmd in out
-        assert "no build step" not in out
-    else:
+    if isolation.is_noop_build(case.build_command):
         assert "no build step" in out
+        assert "`true`" not in out
+    else:
+        assert case.build_command.strip() in out
+        assert "no build step" not in out
+    assert "source root" not in out
+    pythonpath = test_env.get("PYTHONPATH")
+    if pythonpath and pythonpath not in {".", ""}:
+        assert f"PYTHONPATH={pythonpath}" in out
+        assert f"/app/{pythonpath}" in out
     assert "/tests/final" not in out
     assert "does **not** run any install or build" in out
     sample = (case.prd_text or "").strip()[:80]
@@ -136,6 +186,31 @@ def test_resolve_limits_applies_multiplier_to_wall_clocks_only() -> None:
     assert limits.max_agent_timeout_sec == 200
     assert limits.max_test_timeout_sec == 20
     assert limits.stall_window_sec == 50  # not multiplied
+
+
+def test_case_test_timeout_prefers_explicit_field() -> None:
+    assert case_test_timeout_sec({}) is None
+    assert case_test_timeout_sec({"judge_timeout_sec": 3600, "suite_wall_seconds": 100}) == 3600
+    assert case_test_timeout_sec({"suite_wall_seconds": 400}) == 800.0
+
+
+def test_limits_for_case_only_widens_and_multiplies_once() -> None:
+    limits = resolve_limits(test_timeout_sec=600, multiplier=2.0)
+    assert limits.max_test_timeout_sec == 1200
+    widened = limits.for_case(3600)
+    assert widened.max_test_timeout_sec == 7200
+    assert limits.for_case(100).max_test_timeout_sec == 1200
+    assert resolve_limits(test_timeout_sec=7200).for_case(3600).max_test_timeout_sec == 7200
+
+
+def test_host_arch_normalizes(monkeypatch) -> None:
+    monkeypatch.setenv("CBRUN_HOST_ARCH", "x86_64")
+    assert host_arch() == "amd64"
+    monkeypatch.setenv("CBRUN_HOST_ARCH", "aarch64")
+    assert host_arch() == "arm64"
+    monkeypatch.setenv("CBRUN_HOST_ARCH", "amd64")
+    monkeypatch.setenv("CBRUN_PLATFORM", "linux/arm64")
+    assert is_emulated() is True
 
 
 def test_resolve_limits_rejects_bad_values() -> None:
@@ -315,6 +390,8 @@ def test_write_summary_and_aggregate(tmp_path: Path) -> None:
     assert agg["passed"] == 1
     assert agg["terminal_status"]["timeout"] == 1
     assert agg["judge_errors"] == 1
+    assert agg["invalid_runs"] == 0
+    assert "reward_mean_valid" in agg
 
 
 def test_format_reward_matrix_renders_cells() -> None:
@@ -328,3 +405,19 @@ def test_format_reward_matrix_renders_cells() -> None:
     assert "opencode" in text
     assert "PASS" in text
     assert "FAIL" in text
+
+
+def test_format_reward_matrix_marks_invalid_runs() -> None:
+    trials = [
+        TrialResult(
+            "c1",
+            "codex",
+            "m",
+            reward=0.0,
+            terminal_status="error",
+            run_valid=False,
+            invalid_reason="infra:auth",
+        ),
+    ]
+    text = results.format_reward_matrix(trials)
+    assert "INFRA(auth)" in text

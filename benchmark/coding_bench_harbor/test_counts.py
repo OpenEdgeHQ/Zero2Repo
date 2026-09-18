@@ -321,6 +321,48 @@ def _route(framework_label: str, test_command: str) -> str | None:
     return None
 
 
+_SHORT_SUMMARY = re.compile(r"^=+\s*short test summary info\s*=+$", re.I)
+_OUTCOME_LINE = re.compile(r"^(FAILED|ERROR)\s+(\S+)")
+
+
+def parse_pytest_outcomes(output: str) -> dict[str, list[str]] | None:
+    """Names of failed / errored pytest items from the short summary.
+
+    Returns None when the log is not a pytest short-summary. Collection
+    errors appear as ``ERROR <path>``.
+    """
+    if not output:
+        return None
+    lines = output.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if _SHORT_SUMMARY.search(line.strip()):
+            start = index + 1
+    if start is None:
+        return None
+    failed: list[str] = []
+    errors: list[str] = []
+    seen_f: set[str] = set()
+    seen_e: set[str] = set()
+    for line in lines[start:]:
+        if line.startswith("="):
+            break
+        match = _OUTCOME_LINE.match(line.strip())
+        if match is None:
+            continue
+        kind, raw = match.group(1), match.group(2)
+        name = raw.split(" - ", 1)[0].strip()
+        if not name:
+            continue
+        if kind == "FAILED" and name not in seen_f:
+            seen_f.add(name)
+            failed.append(name)
+        elif kind == "ERROR" and name not in seen_e:
+            seen_e.add(name)
+            errors.append(name)
+    return {"failed": failed, "errors": errors}
+
+
 def parse_test_counts(
     output: str,
     framework_label: str = "",

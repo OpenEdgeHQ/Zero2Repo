@@ -96,6 +96,62 @@ ARABIC_PAIRS = (
     ("فقالوا", "قال"),
 )
 
+# Named stems for the ten Snowball languages that previously only
+# checked "returns a str". Values are the intersection of recipe-env
+# GT `lingora` and host `snowballstemmer`, with stem != original.
+SNOWBALL_NAMED_PAIRS = {
+    "danish": (
+        ("indflydelse", "indflyd"),
+        ("løbende", "løb"),
+        ("børnene", "børn"),
+    ),
+    "dutch": (
+        ("opgravingen", "opgrav"),
+        ("fietsen", "fiets"),
+        ("wandeling", "wandel"),
+    ),
+    "finnish": (
+        ("lapset", "laps"),
+        ("taloissa", "talo"),
+        ("kirjoittaa", "kirjoit"),
+    ),
+    "french": (
+        ("continuait", "continu"),
+        ("bicyclettes", "bicyclet"),
+        ("chanterait", "chant"),
+    ),
+    "hungarian": (
+        ("gyerekek", "gyerek"),
+        ("házakban", "ház"),
+        ("írni", "írn"),
+    ),
+    "italian": (
+        ("continuando", "continu"),
+        ("correndo", "corr"),
+        ("bambini", "bambin"),
+    ),
+    "norwegian": (
+        ("havnedistriktene", "havnedistrikt"),
+        ("løpende", "løp"),
+        ("husene", "hus"),
+    ),
+    "portuguese": (
+        ("continuamente", "continu"),
+        ("bicicletas", "biciclet"),
+        ("crianças", "crianc"),
+    ),
+    "romanian": (
+        ("continuare", "continu"),
+        ("alergând", "alerg"),
+        ("casele", "cas"),
+    ),
+    "swedish": (
+        ("undergått", "undergåt"),
+        ("löpande", "löp"),
+        ("barnen", "barn"),
+    ),
+}
+
 TRAILING_ING = "ing$"
 
 
@@ -455,6 +511,24 @@ def test_snowball_listed_language_without_named_stem_is_usable():
     assert isinstance(got, str)
 
 
+def test_snowball_ten_languages_named_pairs():
+    """Each previously unpinned listed language has stems != the original word."""
+    with _empty_resources():
+        observed = {
+            language: [
+                (word, stem_of(_snowball(language).stem, word))
+                for word, _expected in pairs
+            ]
+            for language, pairs in SNOWBALL_NAMED_PAIRS.items()
+        }
+    print(f"snowball named pairs={observed!r}", flush=True)
+    for language, pairs in SNOWBALL_NAMED_PAIRS.items():
+        got = observed[language]
+        assert got == list(pairs), f"{language} stems {got!r} != {list(pairs)!r}"
+        for word, stem in got:
+            assert stem != word, f"{language} identity stem {word!r}"
+
+
 # ---------------------------------------------------------------------------
 # I. ARLSTem and ARLSTem2 each stem the named verb
 # ---------------------------------------------------------------------------
@@ -467,6 +541,16 @@ def test_arlstem_and_arlstem2_each_stem_named_verb():
     print(f"ARLSTem={one!r} ARLSTem2={two!r}", flush=True)
     assert one == "عمل"
     assert two == "عمل"
+
+
+def test_arlstem_and_arlstem2_differ_on_named_arabic_word():
+    with _empty_resources():
+        one = stem_of(require_constructed(call(ARLSTem)).stem, "العربية")
+        two = stem_of(require_constructed(call(ARLSTem2)).stem, "العربية")
+    print(f"ARLSTem arabiyya={one!r} ARLSTem2={two!r}", flush=True)
+    assert one == "عربي"
+    assert two == "عرب"
+    assert one != two
 
 
 # ---------------------------------------------------------------------------

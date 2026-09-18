@@ -161,7 +161,17 @@ The Porter stemmer has exactly three modes: the original published algorithm, th
 - The Snowball stemmer for arabic applied to `العربية` yields `عرب`; applied to `الطالبات` yields `طالب`; applied to `فقالوا` yields `قال`.
 - The Snowball stemmer for spanish applied to `Visionado` yields `vision`.
 - The Snowball stemmer for russian applied to `авантненькая` yields `авантненьк`.
-- ARLSTem and ARLSTem2 applied to `يعمل` each yield `عمل`.
+- The Snowball stemmer for danish applied to `indflydelse` yields `indflyd`; applied to `løbende` yields `løb`; applied to `børnene` yields `børn`.
+- The Snowball stemmer for dutch applied to `opgravingen` yields `opgrav`; applied to `fietsen` yields `fiets`; applied to `wandeling` yields `wandel`.
+- The Snowball stemmer for finnish applied to `lapset` yields `laps`; applied to `taloissa` yields `talo`; applied to `kirjoittaa` yields `kirjoit`.
+- The Snowball stemmer for french applied to `continuait` yields `continu`; applied to `bicyclettes` yields `bicyclet`; applied to `chanterait` yields `chant`.
+- The Snowball stemmer for hungarian applied to `gyerekek` yields `gyerek`; applied to `házakban` yields `ház`; applied to `írni` yields `írn`.
+- The Snowball stemmer for italian applied to `continuando` yields `continu`; applied to `correndo` yields `corr`; applied to `bambini` yields `bambin`.
+- The Snowball stemmer for norwegian applied to `havnedistriktene` yields `havnedistrikt`; applied to `løpende` yields `løp`; applied to `husene` yields `hus`.
+- The Snowball stemmer for portuguese applied to `continuamente` yields `continu`; applied to `bicicletas` yields `biciclet`; applied to `crianças` yields `crianc`.
+- The Snowball stemmer for romanian applied to `continuare` yields `continu`; applied to `alergând` yields `alerg`; applied to `casele` yields `cas`.
+- The Snowball stemmer for swedish applied to `undergått` yields `undergåt`; applied to `löpande` yields `löp`; applied to `barnen` yields `barn`.
+- ARLSTem and ARLSTem2 applied to `يعمل` each yield `عمل`. On `العربية`, ARLSTem yields `عربي` and ARLSTem2 yields `عرب`; an observer can tell the two stemmers apart on that word.
 - A regular-expression stemmer configured to strip a trailing `ing` applied to `running` yields `runn` (it strips the suffix; it does not apply Porter’s rewriting). Applied to `run` it yields `run`.
 
 **Boundary / error behavior:**
@@ -173,7 +183,7 @@ The Porter stemmer has exactly three modes: the original published algorithm, th
 
 **Verifiable oracle:**
 
-- Success: the nineteen default-Porter pairs above hold; `oed` stems to `o`; `Running` and `running` match under default lowercasing; disabling lowercasing leaves `I` as `I` while the default yields `i`; Lancaster `maximum` is `maxim` and `multiply` is unchanged; Snowball english `running` is `run` and `generously` is `generous`; Snowball porter `generously` is `gener`; Snowball english skip-off stems `having` to `have`, and with the english stopwords list installed skip-on leaves `having` unchanged; Snowball german `Schränke` is `schrank` and skip-off stems `keinen` to `kein`, and with the german stopwords list installed skip-on leaves `keinen` unchanged; Snowball arabic `العربية` is `عرب`; an unsupported Snowball language fails; without the stopwords list, enabling skip fails and skip-off still works; a suffix-pattern stemmer strips `ing` from `running` without Porter rewriting.
+- Success: the nineteen default-Porter pairs above hold; `oed` stems to `o`; `Running` and `running` match under default lowercasing; disabling lowercasing leaves `I` as `I` while the default yields `i`; Lancaster `maximum` is `maxim` and `multiply` is unchanged; Snowball english `running` is `run` and `generously` is `generous`; Snowball porter `generously` is `gener`; Snowball english skip-off stems `having` to `have`, and with the english stopwords list installed skip-on leaves `having` unchanged; Snowball german `Schränke` is `schrank` and skip-off stems `keinen` to `kein`, and with the german stopwords list installed skip-on leaves `keinen` unchanged; Snowball arabic `العربية` is `عرب`; the named danish/dutch/finnish/french/hungarian/italian/norwegian/portuguese/romanian/swedish pairs above hold and each stem differs from the original word; ARLSTem and ARLSTem2 both stem `يعمل` to `عمل` and differ on `العربية`; an unsupported Snowball language fails; without the stopwords list, enabling skip fails and skip-off still works; a suffix-pattern stemmer strips `ing` from `running` without Porter rewriting.
 - Failure / absence: every stemmer returns the input unchanged; Porter and Snowball english disagree with the named pairs; english and porter Snowball languages produce the same stem for `generously`; stopword skipping does not change `having` or `keinen` when the list is installed; enabling skip succeeds with no stopwords list; an unknown Snowball language is silently treated as english.
 
 ---

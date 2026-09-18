@@ -24,6 +24,23 @@ def platform_name() -> str:
     return value
 
 
+def host_arch() -> str:
+    """Normalize ``uname -m`` to the arch token used by ``platform_name()``."""
+    import platform as py_platform
+
+    machine = (os.environ.get("CBRUN_HOST_ARCH") or py_platform.machine() or "").lower()
+    if machine in {"x86_64", "amd64"}:
+        return "amd64"
+    if machine in {"aarch64", "arm64"}:
+        return "arm64"
+    return machine or "unknown"
+
+
+def is_emulated(target: str | None = None) -> bool:
+    chosen = (target or platform_name()).rsplit("/", 1)[-1]
+    return bool(chosen) and chosen != host_arch()
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()

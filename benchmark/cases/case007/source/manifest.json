@@ -131,7 +131,7 @@
     "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'hatchling==1.27.0' 'hatch-vcs==0.5.0' && rm -rf /var/lib/apt/lists/*",
     "repo_warm_command": "python3 -m pip install --no-cache-dir --break-system-packages -e .",
     "build_command": "",
-    "test_command_template": "PYTHONPATH=src python3 -m unittest {test_files}",
+    "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
     "workdir": "."
   },
   "init_metadata": {

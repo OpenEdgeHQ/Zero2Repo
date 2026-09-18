@@ -31,6 +31,8 @@ __all__ = [
 ]
 
 BACKENDS = ("codex", "opencode", "claude-code", "cursor")
+CODEX_REASONING_EFFORT_ENV = "CBRUN_CODEX_REASONING_EFFORT"
+CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 AGENT_USER = "cbagent"
 AGENT_USER_HOME = "/home/cbagent"
@@ -202,6 +204,7 @@ def resolve_agent(
         )
 
     environ = os.environ if environ is None else environ
+    _validate_codex_effort(resolved_spec, environ)
     env, env_keys = _resolve_env(resolved_spec, model=model, environ=environ)
     resolved_model = _resolve_model(resolved_spec, model)
     ctx = {
@@ -236,6 +239,19 @@ def resolve_agent(
         setup_timeout_sec=resolved_spec.setup_timeout_sec,
         spec_hash=resolved_spec.spec_hash(),
     )
+
+
+def _validate_codex_effort(spec: AgentSpec, environ: dict[str, str]) -> None:
+    if spec.name != "codex":
+        return
+    raw = (environ.get(CODEX_REASONING_EFFORT_ENV) or "").strip()
+    if not raw:
+        return
+    if raw not in CODEX_REASONING_EFFORTS:
+        allowed = ", ".join(sorted(CODEX_REASONING_EFFORTS))
+        raise ValueError(
+            f"{CODEX_REASONING_EFFORT_ENV} must be one of {allowed}, got {raw!r}"
+        )
 
 
 def _home_for(spec: AgentSpec) -> str:
@@ -351,12 +367,18 @@ fi
 if [ -n "${OPENAI_BASE_URL:-}" ]; then
   printf '%s\\n' "openai_base_url = \\"${OPENAI_BASE_URL}\\"" >> "$CODEX_HOME/config.toml"
 fi
+if [ -n "${CBRUN_CODEX_REASONING_EFFORT:-}" ]; then
+  printf '%s\\n' "model_reasoning_effort = \\"${CBRUN_CODEX_REASONING_EFFORT}\\"" >> "$CODEX_HOME/config.toml"
+fi
+if [ -f "$CODEX_HOME/config.toml" ]; then
+  cat "$CODEX_HOME/config.toml"
+fi
 """
 
 _BUILTIN_SPECS: dict[str, AgentSpec] = {
     "codex": AgentSpec(
         name="codex",
-        env_passthrough=("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+        env_passthrough=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CBRUN_CODEX_REASONING_EFFORT"),
         setup_script=_CODEX_SETUP,
         run_as="root",
         model_prefix="keep",

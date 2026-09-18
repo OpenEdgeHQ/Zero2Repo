@@ -17,6 +17,7 @@ from artifact_contracts import parse_milestone_step_dir_name  # noqa: E402
 
 from coding_bench_harbor.adapter import (  # noqa: E402
     _harbor_manifest,
+    _is_noop_build,
     discover_case,
     iter_benchmark_case_dirs,
 )
@@ -94,11 +95,13 @@ def test_build_task_uses_single_prd_document(tmp_path: Path) -> None:
     assert "# Interface Contract" in instruction
     assets = discover_case(_first_case_dir(), require_gt=False)
     cmd = assets.runner.build_command.strip()
-    if cmd:
+    if _is_noop_build(cmd):
+        assert "no build step" in instruction
+        assert "\n  `true`\n" not in instruction
+    else:
         assert cmd in instruction
         assert "no build step" not in instruction
-    else:
-        assert "no build step" in instruction
+    assert "source root" not in instruction
     assert "does **not** run any install or build" in instruction
     assert "/tests/final" not in instruction
 
@@ -176,11 +179,19 @@ def test_harbor_instruction_surfaces_case_build_command(case_id: str) -> None:
     contract = assets.contract_path.read_text(encoding="utf-8")
     out = _build_instruction(assets, contract)
     cmd = assets.runner.build_command.strip()
-    if cmd:
+    if _is_noop_build(cmd):
+        assert "no build step" in out
+        assert "\n  `true`\n" not in out
+    else:
         assert cmd in out
         assert "no build step" not in out
-    else:
-        assert "no build step" in out
+    assert "source root" not in out
+    tm = assets.acceptance.test_manifest or {}
+    command = str(tm.get("test_command_template") or tm.get("test_command") or "")
+    if "PYTHONPATH=" in command:
+        prefix = command.split("PYTHONPATH=", 1)[1].split()[0]
+        if prefix not in {".", ""}:
+            assert f"PYTHONPATH={prefix}" in out
     assert "/tests/final" not in out
     assert "does **not** run any install or build" in out
 

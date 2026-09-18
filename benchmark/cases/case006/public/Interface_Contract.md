@@ -24,6 +24,8 @@ The product is an **importable Python library**, not a network service and not a
 
 **Distribution and import.** The installable distribution name and the importable top-level package are both `optlyn`. Authors write `import optlyn` or `from optlyn import …` and declare the interface from that package root. Importing the package performs no I/O, starts no processes, and opens no sockets.
 
+**Layout.** The importable package directory is `optlyn` under `src`.
+
 **Library.** Decorating a function produces a command object. Invoking that command as a command-line application is standalone mode (the default): usage failures and aborts become process exits with the documented exit codes, and the command’s return value is discarded. When standalone mode is turned off, the same invocation returns to the caller instead of exiting the process: the callback’s return value is available, and failures propagate as exceptions.
 
 A script program invokes the command by calling its `main` entry with no arguments so that the process argument list is used. The same `main` entry also accepts an explicit argument-token list, a program name, and a standalone-mode flag.

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .agent_spec import BACKENDS
+from .agent_spec import BACKENDS, CODEX_REASONING_EFFORT_ENV, CODEX_REASONING_EFFORTS
 from .agents import cli_version_spec
 from .assets import AdapterError
 from .limits import DEFAULT_AGENT_TIMEOUT_SEC, DEFAULT_TEST_TIMEOUT_SEC, resolve_limits
@@ -81,6 +81,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--agent-timeout-sec", type=float, default=DEFAULT_AGENT_TIMEOUT_SEC)
     parser.add_argument("--test-timeout-sec", type=float, default=DEFAULT_TEST_TIMEOUT_SEC)
     parser.add_argument("--timeout-multiplier", type=float, default=1.0)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=sorted(CODEX_REASONING_EFFORTS),
+        default=None,
+        help="Write CBRUN_CODEX_REASONING_EFFORT for the Codex backend.",
+    )
     parser.add_argument(
         "--force-image",
         action="store_true",
@@ -211,6 +217,25 @@ def main(argv: list[str] | None = None) -> int:
         test_timeout_sec=args.test_timeout_sec,
         multiplier=args.timeout_multiplier,
     )
+    if args.reasoning_effort:
+        os.environ[CODEX_REASONING_EFFORT_ENV] = args.reasoning_effort
+    if "codex" in [b for b in backends if b] and not (
+        os.environ.get(CODEX_REASONING_EFFORT_ENV) or ""
+    ).strip():
+        print(
+            "warning: Codex effort unset; CLI default applies "
+            "(observed low on 0.153.x). Set --reasoning-effort or "
+            f"{CODEX_REASONING_EFFORT_ENV}.",
+            file=sys.stderr,
+        )
+    from .state import is_emulated
+
+    if is_emulated():
+        print(
+            "warning: container platform differs from host arch; "
+            "results are emulated and not comparable to native runs.",
+            file=sys.stderr,
+        )
 
     results: list[TrialResult] = []
     write_summary(results, args.out)

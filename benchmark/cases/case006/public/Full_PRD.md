@@ -50,7 +50,7 @@ Feature points below group these entries by independently verifiable capability.
 
 ## Non-functional constraints
 
-- **Form factor:** A pure-Python library. Authors build CLIs with it; Optlyn is not a single end-user binary.
+- **Form factor:** A pure-Python library. Authors build CLIs with it; Optlyn is not a single end-user binary. The importable package directory is `optlyn` under `src`.
 - **Language:** Python 3.10 or newer. The package has zero declared runtime dependencies.
 - **Platforms:** Intended to work on Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported Python interpreter. No compiled extensions, native code, GPU, or accelerator are required or claimed. (On Windows, when invoked as a program, glob, home-directory, and environment tokens in the process argument list are expanded unless the author disables that; a Unix shell already expands before the process starts. That Windows expansion is not a Linux acceptance obligation.)
 - **Hardware:** CPU-only. The mandatory execution substrate is a real host able to import the installed package and run Python.

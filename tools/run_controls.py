@@ -79,12 +79,27 @@ def main(argv: list[str] | None = None) -> int:
         if args.tests_dir is not None:
             argv.extend(["--tests-dir", str(args.tests_dir)])
         code = rejudge_main(argv)
+        report_path = dest / "rejudge.json"
+        report = {}
+        if report_path.is_file():
+            try:
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                report = {}
         row["status"] = "ok" if code == 0 else "fail"
         row["exit_code"] = code
+        row["failed_tests"] = report.get("failed_tests") or []
+        row["error_tests"] = report.get("error_tests") or []
+        row["warnings"] = report.get("warnings") or []
         if code != 0:
             failed += 1
         rows.append(row)
-        print(f"{case_id}/{name}: {row['status']}")
+        extra = ""
+        if row["failed_tests"]:
+            extra = f" failed={row['failed_tests']}"
+        elif row["warnings"]:
+            extra = f" warning={row['warnings'][0]}"
+        print(f"{case_id}/{name}: {row['status']}{extra}")
 
     if not args.dry_run:
         (args.out / "controls_summary.json").write_text(

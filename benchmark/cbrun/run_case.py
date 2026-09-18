@@ -10,6 +10,7 @@ judge. Missing submit is a failed attempt and skips the hidden tests.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from coding_bench_harbor._leakage import scan_leakage
 
 from .agent_spec import (
+    CODEX_REASONING_EFFORT_ENV,
     CONTAINER_AGENT_LOG,
     CONTAINER_INSTRUCTION_PATH,
     CONTAINER_WORKDIR,
@@ -36,11 +38,26 @@ from .denylist import (
 )
 from .docker_env import Container, ExecResult
 from .images import AgentImage, ensure_agent_image
-from .state import file_manifest, image_identity, platform_name, source_identity, utc_now
+from .infra_signals import count_infra_signals, invalid_reason
+from .state import (
+    file_manifest,
+    host_arch,
+    image_identity,
+    is_emulated,
+    platform_name,
+    source_identity,
+    utc_now,
+)
 from .instruction import build_instruction
-from .isolation import synthesize_task_toml
+from .isolation import merge_runner, synthesize_task_toml, test_command_env
 from .judge import run_isolated_judge
-from .limits import Limits, TerminalStatus, classify_terminal, resolve_limits
+from .limits import (
+    Limits,
+    TerminalStatus,
+    case_test_timeout_sec,
+    classify_terminal,
+    resolve_limits,
+)
 from .results import TrialResult
 from .steps import Step, discover_steps
 from .submit import CONTAINER_SUBMIT_PATH, NO_SUBMIT_ERROR, is_valid_submit
@@ -110,6 +127,8 @@ def run_trial(
     _check_public_leakage(case, allow_leakage=allow_leakage)
     steps = discover_steps(case)
     limits = limits or resolve_limits(multiplier=timeout_multiplier)
+    per_case = case_test_timeout_sec(steps[0].test_manifest) if steps else None
+    limits = limits.for_case(per_case)
     denylist = require_denylist(case_dir) if enforce_denylist else None
 
     out_dir = Path(out_dir)
@@ -154,6 +173,11 @@ def run_trial(
         platform=platform_name(),
         provenance=source_identity(case_dir),
         test_files=file_manifest(image.tests_cache_dir / "final"),
+        reasoning_effort=(os.environ.get(CODEX_REASONING_EFFORT_ENV) or "").strip() or None,
+        judge_timeout_sec=limits.max_test_timeout_sec,
+        agent_timeout_sec=limits.max_agent_timeout_sec,
+        host_arch=host_arch(),
+        emulated=is_emulated(),
     )
     try:
         result.agent_image_id = image_identity(image.agent_image)["id"]
@@ -373,6 +397,7 @@ def _record_submit_outcome(
     *,
     solve: ExecResult,
     solve_start: float,
+    out_dir: Path,
 ) -> bool:
     """Apply terminal status from this CLI + submit file. False means stop (no judge)."""
     submitted = is_valid_submit(_read_submit_text(container))
@@ -387,6 +412,7 @@ def _record_submit_outcome(
         return True
     result.reward = 0.0
     result.error = NO_SUBMIT_ERROR
+    _record_infra_signals(out_dir, result, submitted=False)
     return False
 
 
@@ -418,10 +444,12 @@ def _run_step(
     denylist_fix_retries: int,
 ) -> bool:
     """Run the solve+judge for one step; return True iff its gate passed."""
+    merged = merge_runner(case, step)
     base_instruction = build_instruction(
         has_hardware=bool((case.hardware_text or "").strip()),
         build_command=case.build_command,
-        workdir=case.workdir,
+        workdir=merged["workdir"],
+        test_env=test_command_env(merged["test_command"]),
     )
     _inject_instruction(container, base_instruction, invocation)
 
@@ -441,7 +469,9 @@ def _run_step(
     solve = _run_solve(container, invocation, limits=limits, out_dir=out_dir, log_name="agent.log")
     result.agent_exit_code = solve.exit_code
     result.logs["agent_log"] = str(out_dir / "agent.log")
-    if not _record_submit_outcome(container, result, solve=solve, solve_start=solve_start):
+    if not _record_submit_outcome(
+        container, result, solve=solve, solve_start=solve_start, out_dir=out_dir
+    ):
         return False
 
     if denylist is not None and denylist.enabled:
@@ -495,7 +525,7 @@ def _run_step(
             result.logs["agent_fix_log"] = str(out_dir / "agent_fix.log")
             result.agent_exit_code = fix_solve.exit_code
             if not _record_submit_outcome(
-                container, result, solve=fix_solve, solve_start=solve_start
+                container, result, solve=fix_solve, solve_start=solve_start, out_dir=out_dir
             ):
                 return False
 
@@ -521,5 +551,29 @@ def _run_step(
     tests_log = out_dir / "final_tests.log"
     if tests_log.is_file():
         result.logs["final_tests_log"] = str(tests_log)
+    final = outcome.report.get("final") if isinstance(outcome.report, dict) else None
+    if isinstance(final, dict):
+        total = final.get("total_count")
+        if isinstance(total, int):
+            result.test_count = total
+        failed = final.get("failed_tests") or []
+        if isinstance(failed, list):
+            result.failed_tests = [str(item) for item in failed]
+    _record_infra_signals(out_dir, result, submitted=True)
 
     return outcome.reward >= 1.0 and not outcome.judge_error
+
+
+def _record_infra_signals(out_dir: Path, result: TrialResult, *, submitted: bool) -> None:
+    agent_log = out_dir / "agent.log"
+    fix_log = out_dir / "agent_fix.log"
+    result.infra_signals = count_infra_signals(agent_log, fix_log if fix_log.is_file() else None)
+    text = ""
+    if agent_log.is_file():
+        text += agent_log.read_text(encoding="utf-8", errors="replace")
+    if fix_log.is_file():
+        text += "\n" + fix_log.read_text(encoding="utf-8", errors="replace")
+    reason = invalid_reason(submitted=submitted, log_text=text)
+    if reason:
+        result.run_valid = False
+        result.invalid_reason = reason

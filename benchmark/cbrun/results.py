@@ -51,8 +51,17 @@ class TrialResult:
     platform: str | None = None
     test_files: dict[str, str] = field(default_factory=dict)
     test_count: int | None = None
+    failed_tests: list[str] = field(default_factory=list)
     artifact_errors: list[str] = field(default_factory=list)
     provenance: dict = field(default_factory=dict)
+    reasoning_effort: str | None = None
+    judge_timeout_sec: float | None = None
+    agent_timeout_sec: float | None = None
+    host_arch: str | None = None
+    emulated: bool | None = None
+    infra_signals: dict[str, int] = field(default_factory=dict)
+    run_valid: bool = True
+    invalid_reason: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -83,12 +92,17 @@ def _aggregate(results: list[TrialResult]) -> dict:
     for status in TerminalStatus:
         by_status[status.value] = sum(1 for r in results if r.terminal_status == status.value)
     judge_errors = sum(1 for r in results if r.judge_error)
+    invalid = [r for r in results if not r.run_valid]
+    valid = [r for r in results if r.run_valid]
     return {
         "total": total,
         "passed": passed,
         "reward_mean": (sum(r.reward for r in results) / total) if total else 0.0,
+        "reward_mean_valid": (sum(r.reward for r in valid) / len(valid)) if valid else 0.0,
         "terminal_status": by_status,
         "judge_errors": judge_errors,
+        "invalid_runs": len(invalid),
+        "emulated_trials": sum(1 for r in results if r.emulated),
     }
 
 
@@ -111,10 +125,14 @@ def format_reward_matrix(results: list[TrialResult]) -> str:
             if r is None:
                 token = "-"
             else:
-                mark = "PASS" if r.passed else "FAIL"
-                token = f"{mark}({r.terminal_status})"
-                if r.judge_error:
+                if not r.run_valid:
+                    signal = (r.invalid_reason or "infra").split(":", 1)[-1]
+                    token = f"INFRA({signal})"
+                elif r.judge_error:
                     token = "JUDGE_ERR"
+                else:
+                    mark = "PASS" if r.passed else "FAIL"
+                    token = f"{mark}({r.terminal_status})"
             row.append(token.ljust(col_w))
         lines.append("  ".join(row))
     return "\n".join(lines)

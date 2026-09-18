@@ -997,6 +997,8 @@ Construct with no arguments: `ARLSTem`(). Construction succeeds when `data.path`
 
 `يعمل` → `عمل`.
 
+`العربية` → `عربي`.
+
 ## `lingora.stem.ARLSTem2`
 
 Import `ARLSTem2` from `lingora.stem` (`from `lingora.stem` import `ARLSTem2``). Arabic light stemmer (improved `ARLSTem`). Does not require a packaged model, a stopwords list, or WordNet.
@@ -1015,6 +1017,8 @@ Construct with no arguments: `ARLSTem2`(). Construction succeeds when `data.path
 ### Observable stems
 
 `يعمل` → `عمل`.
+
+`العربية` → `عرب`. This stem differs from `ARLSTem` on the same word.
 
 ## `lingora.stem.LancasterStemmer`
 
@@ -1187,7 +1191,7 @@ The supported `language` names are exactly:
 - `spanish`
 - `swedish`
 
-Each of those names constructs a usable stemmer (callable `stem` that returns a `str`) when skipping is left off. Named stems below pin `english`, `porter`, `german`, `arabic`, `spanish`, and `russian`. `danish` is usable: `stem` returns a `str` (the exact stem of an arbitrary letter-token is not pinned).
+Each of those names constructs a usable stemmer (callable `stem` that returns a `str`) when skipping is left off. Named stems below pin every listed language. An arbitrary letter-token that is not one of those named inputs still yields a `str` (that exact stem is not pinned).
 
 ### Unsupported language
 
@@ -1216,6 +1220,26 @@ When `ignore_stopwords`=`True` and that language’s list is not installed, cons
 `spanish`: `Visionado` → `vision`.
 
 `russian`: `авантненькая` → `авантненьк`.
+
+`danish`: `indflydelse` → `indflyd`; `løbende` → `løb`; `børnene` → `børn`.
+
+`dutch`: `opgravingen` → `opgrav`; `fietsen` → `fiets`; `wandeling` → `wandel`.
+
+`finnish`: `lapset` → `laps`; `taloissa` → `talo`; `kirjoittaa` → `kirjoit`.
+
+`french`: `continuait` → `continu`; `bicyclettes` → `bicyclet`; `chanterait` → `chant`.
+
+`hungarian`: `gyerekek` → `gyerek`; `házakban` → `ház`; `írni` → `írn`.
+
+`italian`: `continuando` → `continu`; `correndo` → `corr`; `bambini` → `bambin`.
+
+`norwegian`: `havnedistriktene` → `havnedistrikt`; `løpende` → `løp`; `husene` → `hus`.
+
+`portuguese`: `continuamente` → `continu`; `bicicletas` → `biciclet`; `crianças` → `crianc`.
+
+`romanian`: `continuare` → `continu`; `alergând` → `alerg`; `casele` → `cas`.
+
+`swedish`: `undergått` → `undergåt`; `löpande` → `löp`; `barnen` → `barn`.
 
 ### Stopword skipping on, list present
 

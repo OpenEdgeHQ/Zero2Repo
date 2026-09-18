@@ -75,6 +75,37 @@ def test_env_passthrough_only_forwards_present_keys() -> None:
     assert "OPENAI_API_KEY" in inv.env_keys
 
 
+def test_codex_reasoning_effort_written_into_setup() -> None:
+    inv = agent_spec.resolve_agent(
+        backend="codex",
+        model="openai/gpt-4o-mini",
+        environ={"CBRUN_CODEX_REASONING_EFFORT": "medium"},
+    )
+    assert "CBRUN_CODEX_REASONING_EFFORT" in inv.env_keys
+    assert inv.env["CBRUN_CODEX_REASONING_EFFORT"] == "medium"
+    assert "model_reasoning_effort" in (inv.setup_script or "")
+    assert "auth.json" not in (inv.setup_script or "").split("cat")[-1]
+
+
+def test_codex_reasoning_effort_omitted_when_unset() -> None:
+    inv = agent_spec.resolve_agent(
+        backend="codex",
+        model="openai/gpt-4o-mini",
+        environ={"OPENAI_API_KEY": "secret"},
+    )
+    assert "CBRUN_CODEX_REASONING_EFFORT" not in inv.env
+    assert "model_reasoning_effort" in (inv.setup_script or "")
+
+
+def test_codex_reasoning_effort_rejects_unknown() -> None:
+    with pytest.raises(ValueError, match="CBRUN_CODEX_REASONING_EFFORT"):
+        agent_spec.resolve_agent(
+            backend="codex",
+            model="openai/gpt-4o-mini",
+            environ={"CBRUN_CODEX_REASONING_EFFORT": "turbo"},
+        )
+
+
 def test_resolve_agent_rejects_both_backend_and_spec_path(tmp_path: Path) -> None:
     path = tmp_path / "x.json"
     path.write_text('{"name":"x","command":"true"}', encoding="utf-8")

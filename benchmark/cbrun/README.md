@@ -53,10 +53,17 @@ wall-clock budgets:
 
 * `max_agent_timeout_sec` — solve phase. Final-stage cases use a uniform **2h**
   (`7200s`).
-* `max_test_timeout_sec` — judge phase. Default **10min** (`600s`), per-case
-  overridable.
+* `max_test_timeout_sec` — judge phase. Default **10min** (`600s`). A case
+  may widen this via `milestones/final/test_manifest.json` fields
+  `judge_timeout_sec` (explicit) or `suite_wall_seconds × 2` (headroom).
+  Per-case values never tighten a CLI `--test-timeout-sec`. Current cases
+  omit both fields, so the live default stays 600s.
 * `--timeout-multiplier` scales both wall clocks (mirrors Terminal-Bench's
-  `global_timeout_multiplier`).
+  `global_timeout_multiplier`) and is applied once, including to a widened
+  per-case judge budget.
+* Each trial records `host_arch` and `emulated` (container platform ≠ host).
+  Emulated trials are counted in `aggregate.emulated_trials` and are not
+  comparable to native runs.
 
 A conservative stall watchdog stops a wedged CLI when both stdout and `/app`
 stay quiet, without treating a long compile or a long model turn as a hang.
@@ -105,6 +112,13 @@ cbrun --case case001 --backend codex --model openai/gpt-4o-mini
 cbrun writes `openai_base_url` into `~/.codex/config.toml` during setup. Use
 `model_prefix: strip` in a custom spec if your Codex install expects leaf model
 names only.
+
+Codex reasoning effort is optional. Set `--reasoning-effort` or
+`CBRUN_CODEX_REASONING_EFFORT` to `minimal|low|medium|high|xhigh`. When set,
+cbrun writes `model_reasoning_effort` into the container `config.toml` (and
+cats that file into `agent_setup.log`; it never prints `auth.json`). When
+unset, Codex 0.153.x is observed to default to `low`; the CLI prints a
+warning and `summary.json` records `reasoning_effort=null`.
 
 ### Claude Code non-root contract
 
@@ -220,8 +234,29 @@ Outputs go to `--out` (default `benchmark/output/cbrun/`): per-trial `agent.log`
 printed reward matrix.
 
 Each trial records reproducibility metadata: agent spec name/hash, resolved model,
-`run_as`, `model_prefix`, setup status, forwarded env **key** list, and CLI
-version when available.
+`run_as`, `model_prefix`, setup status, forwarded env **key** list, CLI
+version when available, `reasoning_effort`, judge/agent timeouts, `host_arch`,
+`emulated`, `test_count`, `failed_tests`, and `infra_signals`.
+
+`run_valid` is false only when there is **no** valid submit **and** the tail
+of `agent.log` shows a terminating infra signal (`invalid_api_key` /
+`Unauthorized` / `HTTP 401`, `exceeded retry limit`, `ECONNREFUSED`).
+`content_filter` is counted but a recovered submit stays valid. Invalid
+trials appear as `INFRA(<signal>)` in the matrix; `aggregate.invalid_runs`
+and `reward_mean_valid` ignore them as model skill.
+
+Asset and control checks:
+
+```bash
+python -m cbrun.case_checks                 # 11 cases; errors fail, warnings do not
+python -m cbrun.rejudge --case case001 --workspace … --out …
+```
+
+`expect.json` may list `must_fail_tests` (nodeid or suffix). When that field
+is absent, `rejudge` / `run_controls` still compare **reward only**. When it
+is present, each name must appear in pytest `FAILED` (not `ERROR` / missing).
+Privilege markers in hidden tests (`mount(`, `losetup`, …) are warnings from
+`case_checks`, not errors.
 
 ## Pipeline (per trial)
 

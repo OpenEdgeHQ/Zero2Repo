@@ -68,6 +68,9 @@ def _environment_notes(*, has_hardware: bool) -> str:
   `pip install`, `npm install`, or `cargo add` for the product you are building).
   General-purpose libraries and tools are allowed; the described product behavior
   must be your own code.
+* Do not treat a runtime- or toolchain-bundled implementation of the same kind
+  of product as a dependency or an oracle. The behavior you deliver must be
+  your own code.
 * GitHub and other code-hosting sites for upstream projects are **not reachable**
   from this environment during your session.
 * You are encouraged to write and run your OWN tests and checks repeatedly to
@@ -102,6 +105,7 @@ def build_instruction(
     has_hardware: bool = False,
     build_command: str = "",
     workdir: str = ".",
+    test_env: dict[str, str] | None = None,
 ) -> str:
     """Assemble the agent prompt: preamble, environment notes, build contract.
 
@@ -112,6 +116,6 @@ def build_instruction(
     parts: list[str] = [_INSTRUCTION_PREAMBLE.rstrip(), "\n\n"]
     parts.append(_environment_notes(has_hardware=has_hardware).rstrip())
     parts.append("\n\n")
-    parts.append(build_contract_notes(build_command, workdir).rstrip())
+    parts.append(build_contract_notes(build_command, workdir, test_env).rstrip())
     parts.append("\n")
     return "".join(parts)

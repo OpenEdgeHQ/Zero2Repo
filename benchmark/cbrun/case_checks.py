@@ -6,16 +6,28 @@ not imported here so unit tests can use synthetic fixtures.
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
+import sys
 from pathlib import Path
 
 from coding_bench_harbor._leakage import scan_leakage
 
 from .denylist import ALLOWED_JUDGE_BANS, validate_denylist_artifact
 
-__all__ = ["check_case_assets"]
+__all__ = ["check_case_assets", "check_case_warnings", "main"]
 
 _OUTSIDE_CACHE = "/opt/cb-cache"
+_PRIVILEGE_MARKERS = (
+    "mount(",
+    "unshare",
+    "losetup",
+    "/dev/loop",
+    "FICLONE",
+    "CAP_SYS_ADMIN",
+    "--privileged",
+)
 
 
 def check_case_assets(case_dir: Path | str) -> list[str]:
@@ -112,4 +124,78 @@ def check_case_assets(case_dir: Path | str) -> list[str]:
                 continue
             if not target.is_file():
                 errors.append(f"{cid}: test_manifest references missing {name}")
+        runner_tmpl = " ".join(str(runner.get("test_command_template") or "").split())
+        suite_tmpl = " ".join(str(tests_manifest.get("test_command_template") or "").split())
+        if runner_tmpl and suite_tmpl and runner_tmpl != suite_tmpl:
+            errors.append(
+                f"{cid}: manifest and test_manifest disagree on test_command_template"
+            )
     return errors
+
+
+def check_case_warnings(case_dir: Path | str) -> list[str]:
+    """Return non-fatal warnings (privilege markers in hidden tests)."""
+    case_dir = Path(case_dir)
+    tests_dir = case_dir / "milestones" / "final" / "tests"
+    if not tests_dir.is_dir():
+        return []
+    warnings: list[str] = []
+    cid = case_dir.name
+    pattern = re.compile(
+        "|".join(
+            rf"(?<![A-Za-z0-9_]){re.escape(item)}"
+            for item in _PRIVILEGE_MARKERS
+        )
+    )
+    for path in sorted(tests_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if pattern.search(text):
+            rel = path.relative_to(tests_dir).as_posix()
+            warnings.append(
+                f"{cid}: tests appear to require privileges the judge "
+                f"container does not grant ({rel})"
+            )
+    return warnings
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check case assets for runner defects.")
+    parser.add_argument("--cases-root", type=Path, default=None)
+    parser.add_argument("cases", nargs="*", help="Case ids; default is every case.")
+    args = parser.parse_args(argv)
+    repo = Path(__file__).resolve().parent.parent
+    cases_root = args.cases_root or repo / "cases"
+    if args.cases:
+        dirs = [cases_root / name for name in args.cases]
+    else:
+        dirs = sorted(
+            path
+            for path in cases_root.iterdir()
+            if path.is_dir() and (path / "source" / "manifest.json").is_file()
+        )
+    errors = 0
+    for case_dir in dirs:
+        if not case_dir.is_dir():
+            print(f"error: case not found: {case_dir}", file=sys.stderr)
+            errors += 1
+            continue
+        issues = check_case_assets(case_dir)
+        notes = check_case_warnings(case_dir)
+        for item in issues:
+            print(f"error: {item}")
+        for item in notes:
+            print(f"warning: {item}")
+        if issues:
+            errors += 1
+        elif not notes:
+            print(f"ok: {case_dir.name}")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

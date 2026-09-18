@@ -13,7 +13,7 @@ from pathlib import Path
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
-from cbrun.case_checks import check_case_assets  # noqa: E402
+from cbrun.case_checks import check_case_assets, check_case_warnings  # noqa: E402
 
 
 def test_released_suite_has_required_public_assets() -> None:
@@ -33,6 +33,7 @@ def test_released_suite_has_required_public_assets() -> None:
         tests_dir = case_dir / "milestones" / "final" / "tests"
         assert tests_dir.is_dir()
         assert any(tests_dir.iterdir())
+        assert check_case_assets(case_dir) == []
 
 
 def _write_case(root: Path, **overrides: object) -> Path:
@@ -138,3 +139,58 @@ def test_check_case_assets_flags_unknown_judge_ban_and_missing_test(tmp_path: Pa
     errors = "\n".join(check_case_assets(case))
     assert "unknown judge_bans" in errors
     assert "missing tests/missing.py" in errors
+
+
+def test_check_case_assets_flags_test_command_template_drift(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        runner={
+            "install_command": "true",
+            "build_command": "",
+            "test_command_template": "python3 -m unittest {test_files}",
+        },
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "test_command_template": "python3 -m pytest {test_files}",
+        },
+    )
+    errors = "\n".join(check_case_assets(case))
+    assert "disagree on test_command_template" in errors
+
+
+def test_check_case_assets_accepts_matching_test_command_template(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        runner={
+            "install_command": "true",
+            "build_command": "",
+            "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
+        },
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "test_command_template": "PYTHONPATH=src python3 -m pytest {test_files}",
+        },
+    )
+    assert check_case_assets(case) == []
+
+
+def test_check_case_warnings_privilege_markers(tmp_path: Path) -> None:
+    case = _write_case(tmp_path)
+    helper = case / "milestones" / "final" / "tests" / "helper.py"
+    helper.write_text("def setup():\n    losetup('/dev/loop0')\n", encoding="utf-8")
+    notes = check_case_warnings(case)
+    assert notes
+    assert "privileges" in notes[0]
+    assert check_case_assets(case) == []
+
+
+def test_check_case_warnings_ignores_amount_substring(tmp_path: Path) -> None:
+    case = _write_case(tmp_path)
+    helper = case / "milestones" / "final" / "tests" / "helper.py"
+    helper.write_text(
+        "def _runtime_grouped_amount():\n    return 1\n",
+        encoding="utf-8",
+    )
+    assert check_case_warnings(case) == []

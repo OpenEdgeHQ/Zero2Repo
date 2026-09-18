@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_counts import parse_test_counts
+from test_counts import parse_pytest_outcomes, parse_test_counts
 
 WORKSPACE = Path(os.environ.get("CODING_BENCH_WORKSPACE", "/app"))
 TESTS_FINAL = Path(os.environ.get("CODING_BENCH_TESTS_FINAL", "/tests/final"))
@@ -319,6 +319,7 @@ def _result_from_proc(
         framework_label=framework_label,
         test_command=test_command,
     )
+    outcomes = parse_pytest_outcomes(output)
     result = {
         "final_step": None,
         "status": "failed",
@@ -334,6 +335,8 @@ def _result_from_proc(
         "passed": counts.passed if counts else 0,
         "failed": (counts.failed + counts.errors) if counts else (0 if proc.returncode == 0 else 1),
         "total": counts.total if counts else 0,
+        "failed_tests": list(outcomes["failed"]) if outcomes else [],
+        "error_tests": list(outcomes["errors"]) if outcomes else [],
     }
     if extra:
         result.update(extra)

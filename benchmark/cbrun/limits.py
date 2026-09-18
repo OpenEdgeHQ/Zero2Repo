@@ -15,6 +15,7 @@ from dataclasses import dataclass
 __all__ = [
     "TerminalStatus",
     "Limits",
+    "case_test_timeout_sec",
     "classify_terminal",
     "resolve_limits",
 ]
@@ -30,6 +31,7 @@ DEFAULT_TEST_TIMEOUT_SEC: float = 600.0
 # output. Set high so long compiles / long model turns are not misjudged as
 # hangs. 0 disables the stall guard (rely on the wall clock only).
 DEFAULT_STALL_WINDOW_SEC: float = 1800.0
+SUITE_WALL_HEADROOM: float = 2.0
 
 
 class TerminalStatus(str, enum.Enum):
@@ -82,6 +84,44 @@ class Limits:
     max_agent_timeout_sec: float = DEFAULT_AGENT_TIMEOUT_SEC
     max_test_timeout_sec: float = DEFAULT_TEST_TIMEOUT_SEC
     stall_window_sec: float = DEFAULT_STALL_WINDOW_SEC
+    multiplier: float = 1.0
+    base_agent_timeout_sec: float = DEFAULT_AGENT_TIMEOUT_SEC
+    base_test_timeout_sec: float = DEFAULT_TEST_TIMEOUT_SEC
+
+    def for_case(self, per_case: float | None) -> "Limits":
+        """Widen the judge budget from a per-case measurement. Never tighten."""
+        if per_case is None or per_case <= 0:
+            return self
+        test = max(self.base_test_timeout_sec, float(per_case))
+        return Limits(
+            max_agent_timeout_sec=self.max_agent_timeout_sec,
+            max_test_timeout_sec=test * self.multiplier,
+            stall_window_sec=self.stall_window_sec,
+            multiplier=self.multiplier,
+            base_agent_timeout_sec=self.base_agent_timeout_sec,
+            base_test_timeout_sec=self.base_test_timeout_sec,
+        )
+
+
+def case_test_timeout_sec(test_manifest: dict | None) -> float | None:
+    """Per-case judge budget from the sealed suite, or None to keep the default."""
+    if not isinstance(test_manifest, dict):
+        return None
+    raw = test_manifest.get("judge_timeout_sec")
+    if raw not in (None, ""):
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+    wall = test_manifest.get("suite_wall_seconds")
+    if wall not in (None, ""):
+        try:
+            value = float(wall) * SUITE_WALL_HEADROOM
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+    return None
 
 
 def resolve_limits(
@@ -115,4 +155,7 @@ def resolve_limits(
         max_agent_timeout_sec=agent * multiplier,
         max_test_timeout_sec=test * multiplier,
         stall_window_sec=stall,
+        multiplier=multiplier,
+        base_agent_timeout_sec=agent,
+        base_test_timeout_sec=test,
     )

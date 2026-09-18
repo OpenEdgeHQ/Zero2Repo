@@ -16,10 +16,16 @@ from .docker_env import Container
 from .images import ensure_agent_image
 from .isolation import synthesize_task_toml
 from .judge import import_app, run_judge
-from .limits import DEFAULT_TEST_TIMEOUT_SEC
+from .limits import DEFAULT_TEST_TIMEOUT_SEC, case_test_timeout_sec, resolve_limits
 from .steps import discover_steps
 
-__all__ = ["parse_expect_reward", "reward_matches", "iter_controls", "main"]
+__all__ = [
+    "check_must_fail_tests",
+    "parse_expect_reward",
+    "reward_matches",
+    "iter_controls",
+    "main",
+]
 
 
 def parse_expect_reward(value: str | int | float | None) -> float | None:
@@ -35,6 +41,46 @@ def reward_matches(actual: float, expect: float | None) -> bool:
     if expect is None:
         return True
     return float(actual) == float(expect)
+
+
+def _suffix_match(required: str, names: list[str]) -> bool:
+    needle = required.strip()
+    if not needle:
+        return False
+    for name in names:
+        if name == needle or name.endswith(needle) or name.endswith("::" + needle):
+            return True
+    return False
+
+
+def check_must_fail_tests(
+    *,
+    must_fail_tests: list[str] | None,
+    failed_tests: list[str],
+    error_tests: list[str],
+    failed_count: int | None,
+    error_count: int | None,
+) -> tuple[list[str], list[str]]:
+    """Return ``(errors, warnings)`` for an optional named-failure check.
+
+    Hard errors only when ``must_fail_tests`` is non-empty. Collection-only
+    failures stay warnings under the reward-only path.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    required = [str(item).strip() for item in (must_fail_tests or []) if str(item).strip()]
+    if not required:
+        if (error_count or 0) > 0 and not (failed_count or 0):
+            warnings.append("control produced collection/errors only; reward-only check")
+        return errors, warnings
+    for item in required:
+        if _suffix_match(item, failed_tests):
+            continue
+        if _suffix_match(item, error_tests):
+            errors.append(f"must_fail_tests {item!r} hit ERROR, not FAILED")
+        else:
+            errors.append(f"must_fail_tests {item!r} not in failed_tests")
+    return errors, warnings
 
 
 def iter_controls(cases_root: Path | str):
@@ -92,6 +138,10 @@ def rejudge_workspace(
         agent_image = image
         tests_final_dir = Path(tests_dir)
     step = discover_steps(case)[0]
+    limits = resolve_limits(test_timeout_sec=test_timeout_sec).for_case(
+        case_test_timeout_sec(getattr(step, "test_manifest", None))
+    )
+    test_timeout_sec = limits.max_test_timeout_sec
     task_toml = synthesize_task_toml(case, step)
     out_dir.mkdir(parents=True, exist_ok=True)
     container = Container.start(agent_image, network="none")
@@ -108,12 +158,21 @@ def rejudge_workspace(
         )
     finally:
         container.remove()
+    report = getattr(outcome, "report", None)
+    final = report.get("final") if isinstance(report, dict) else {}
+    if not isinstance(final, dict):
+        final = {}
+    payload = {
+        "reward": outcome.reward,
+        "judge_error": outcome.judge_error,
+        "failed_tests": list(final.get("failed_tests") or []),
+        "error_tests": list(final.get("error_tests") or []),
+        "failed_count": final.get("failed_count"),
+        "error_count": final.get("error_count"),
+        "total_count": final.get("total_count"),
+    }
     (out_dir / "rejudge.json").write_text(
-        json.dumps(
-            {"reward": outcome.reward, "judge_error": outcome.judge_error},
-            indent=2,
-        )
-        + "\n",
+        json.dumps(payload, indent=2) + "\n",
         encoding="utf-8",
     )
     if outcome.judge_error:
@@ -185,7 +244,48 @@ def main(argv: list[str] | None = None) -> int:
     if not reward_matches(reward, expect):
         print(f"error: expected reward {expect}, got {reward}", flush=True)
         return 1
+    expect_path = _expect_path(args.workspace)
+    must_fail: list[str] = []
+    if expect_path is not None:
+        try:
+            expect_payload = json.loads(expect_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            expect_payload = {}
+        raw = expect_payload.get("must_fail_tests") or []
+        if isinstance(raw, list):
+            must_fail = [str(item) for item in raw]
+    report_path = args.out / "rejudge.json"
+    report: dict = {}
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            report = {}
+    issues, warnings = check_must_fail_tests(
+        must_fail_tests=must_fail,
+        failed_tests=[str(x) for x in (report.get("failed_tests") or [])],
+        error_tests=[str(x) for x in (report.get("error_tests") or [])],
+        failed_count=report.get("failed_count"),
+        error_count=report.get("error_count"),
+    )
+    if report_path.is_file():
+        report["warnings"] = warnings
+        report["must_fail_ok"] = not issues
+        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    for item in warnings:
+        print(f"warning: {item}", flush=True)
+    if issues:
+        for item in issues:
+            print(f"error: {item}", flush=True)
+        return 1
     return 0
+
+
+def _expect_path(workspace: Path) -> Path | None:
+    for candidate in (workspace / "expect.json", workspace.parent / "expect.json"):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 if __name__ == "__main__":
