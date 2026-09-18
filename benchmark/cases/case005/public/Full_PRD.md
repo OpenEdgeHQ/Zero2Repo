@@ -57,6 +57,7 @@ Feature points below group these entries by independently verifiable capability.
 ## Non-functional constraints
 
 - **Form factor:** A pure-Python library with zero runtime third-party dependencies. No compiled extensions, native code, GPU, or accelerator are required or claimed.
+- **Layout.** The importable package directory is `httpwire`.
 - **Language:** Python 3.8 or newer, including the CPython and PyPy implementations the project tests.
 - **Platforms:** Intended to work on Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter.
 - **Hardware:** CPU-only. There is no accelerator profile and no removable extra device. A supported interpreter on a standard host is enough to install from this source tree and exercise the library. The package under test, the interpreter, and the standard library are not removable substrates.

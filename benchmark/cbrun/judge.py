@@ -51,6 +51,7 @@ class JudgeOutcome:
     exit_code: int
     seconds: float
     report: dict = field(default_factory=dict)
+    substrates_missing: list[str] = field(default_factory=list)
 
 
 def validate_judge_report(report: dict | None) -> tuple[float, str | None]:
@@ -245,17 +246,48 @@ def run_isolated_judge(
     ``--network none``.
     """
     host_app = export_app(solve_container, workspace_export_dir)
-    judge_container = Container.start(image, gpus=gpus, network="none")
+    from .substrates import SubstrateUnavailable, mounted_substrates
+
+    manifest = _test_manifest(tests_final_dir)
+    scratch = Path(artifacts_dir) / "substrates"
     try:
-        import_app(judge_container, host_app)
-        return run_judge(
-            judge_container,
-            tests_final_dir=tests_final_dir,
-            task_toml=task_toml,
-            test_timeout_sec=test_timeout_sec,
-            artifacts_dir=artifacts_dir,
-            denylist=denylist,
-            judge_bans=judge_bans,
+        with mounted_substrates(manifest, scratch) as mounts:
+            judge_container = Container.start(
+                image,
+                gpus=gpus,
+                network="none",
+                mounts=[(str(item.host), item.container) for item in mounts],
+            )
+            try:
+                import_app(judge_container, host_app)
+                return run_judge(
+                    judge_container,
+                    tests_final_dir=tests_final_dir,
+                    task_toml=task_toml,
+                    test_timeout_sec=test_timeout_sec,
+                    artifacts_dir=artifacts_dir,
+                    denylist=denylist,
+                    judge_bans=judge_bans,
+                )
+            finally:
+                judge_container.remove()
+    except SubstrateUnavailable as exc:
+        return JudgeOutcome(
+            reward=0.0,
+            judge_error=f"substrate {exc.name} unavailable",
+            exit_code=0,
+            seconds=0.0,
+            report={"substrates_missing": [exc.name]},
+            substrates_missing=[exc.name],
         )
-    finally:
-        judge_container.remove()
+
+
+def _test_manifest(tests_final_dir: Path) -> dict:
+    path = Path(tests_final_dir) / "test_manifest.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}

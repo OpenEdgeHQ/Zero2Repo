@@ -78,6 +78,8 @@ Calling the hook drops a loaded corpus so a later lookup honors the current `dat
 
 The installable distribution and the importable top-level package are both `lingora`. Integrators write `import `lingora`` or `from `lingora` import …`. The package uses a flat layout: one importable package directory named `lingora` at the repository root.
 
+**Layout.** The importable package directory is `lingora` at the repository root.
+
 These names are importable from the package root:
 
 - `data` — the packaged-resource finder (`from `lingora` import `data``)

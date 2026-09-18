@@ -75,6 +75,7 @@ class Container:
         env: dict[str, str] | None = None,
         name: str | None = None,
         block_hosts: tuple[str, ...] | None = None,
+        mounts: list[tuple[str, str]] | None = None,
     ) -> list[str]:
         """Build the ``docker run`` argv (pure, for testing).
 
@@ -91,6 +92,8 @@ class Container:
             argv += ["--network", network]
         for host in block_hosts or ():
             argv += ["--add-host", f"{host}:0.0.0.0"]
+        for host_path, container_path in mounts or []:
+            argv += ["-v", f"{host_path}:{container_path}"]
         for key in (env or {}):
             argv += ["-e", key]
         argv += [image, "sleep", "infinity"]
@@ -106,6 +109,7 @@ class Container:
         env: dict[str, str] | None = None,
         name: str | None = None,
         block_hosts: tuple[str, ...] | None = None,
+        mounts: list[tuple[str, str]] | None = None,
     ) -> "Container":
         """Start a detached keepalive container."""
         argv = cls.build_run_argv(
@@ -115,6 +119,7 @@ class Container:
             env=env,
             name=name,
             block_hosts=block_hosts,
+            mounts=mounts,
         )
         proc = subprocess.run(
             argv,

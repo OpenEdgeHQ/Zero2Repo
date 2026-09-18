@@ -144,20 +144,31 @@ def rejudge_workspace(
     test_timeout_sec = limits.max_test_timeout_sec
     task_toml = synthesize_task_toml(case, step)
     out_dir.mkdir(parents=True, exist_ok=True)
-    container = Container.start(agent_image, network="none")
+    from .substrates import SubstrateUnavailable, mounted_substrates
+
+    manifest = getattr(step, "test_manifest", None) or {}
     try:
-        import_app(container, _workspace_dir(workspace))
-        outcome = run_judge(
-            container,
-            tests_final_dir=tests_final_dir,
-            task_toml=task_toml,
-            test_timeout_sec=test_timeout_sec,
-            artifacts_dir=out_dir,
-            denylist=denylist,
-            judge_bans=case.judge_bans,
-        )
-    finally:
-        container.remove()
+        with mounted_substrates(manifest, out_dir / "substrates") as mounts:
+            container = Container.start(
+                agent_image,
+                network="none",
+                mounts=[(str(item.host), item.container) for item in mounts],
+            )
+            try:
+                import_app(container, _workspace_dir(workspace))
+                outcome = run_judge(
+                    container,
+                    tests_final_dir=tests_final_dir,
+                    task_toml=task_toml,
+                    test_timeout_sec=test_timeout_sec,
+                    artifacts_dir=out_dir,
+                    denylist=denylist,
+                    judge_bans=case.judge_bans,
+                )
+            finally:
+                container.remove()
+    except SubstrateUnavailable as exc:
+        raise RuntimeError(f"substrate {exc.name} unavailable") from exc
     report = getattr(outcome, "report", None)
     final = report.get("final") if isinstance(report, dict) else {}
     if not isinstance(final, dict):

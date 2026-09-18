@@ -56,8 +56,8 @@ wall-clock budgets:
 * `max_test_timeout_sec` — judge phase. Default **10min** (`600s`). A case
   may widen this via `milestones/final/test_manifest.json` fields
   `judge_timeout_sec` (explicit) or `suite_wall_seconds × 2` (headroom).
-  Per-case values never tighten a CLI `--test-timeout-sec`. Current cases
-  omit both fields, so the live default stays 600s.
+  Per-case values never tighten a CLI `--test-timeout-sec`. Cases without
+  those fields keep the 600s default.
 * `--timeout-multiplier` scales both wall clocks (mirrors Terminal-Bench's
   `global_timeout_multiplier`) and is applied once, including to a widened
   per-case judge budget.
@@ -74,7 +74,9 @@ The agent submits by writing `/logs/agent/submit` with the single line
 `CODINGBENCH_SUBMIT`. Ending the CLI session is **not** a submission. The
 isolated judge runs only after that file is valid **and** the denylist scan
 is clean. Missing submit or an unfixed denylist hit scores `reward=0` and
-does not run hidden tests.
+does not run hidden tests. A declared judge substrate that cannot be
+prepared on the host is `judge_error` / `substrates_missing` and does not
+count as a scored fail.
 
 The solve terminal status is recorded as one of:
 
@@ -256,8 +258,50 @@ python -m cbrun.rejudge --case case001 --workspace … --out …
 `expect.json` may list `must_fail_tests` (nodeid or suffix). When that field
 is absent, `rejudge` / `run_controls` still compare **reward only**. When it
 is present, each name must appear in pytest `FAILED` (not `ERROR` / missing).
-Privilege markers in hidden tests (`mount(`, `losetup`, …) are warnings from
-`case_checks`, not errors.
+Collection / import-ban / judge_bans controls stay reward-only; do not
+promote those reds into `must_fail_tests`. `controls/` is a maintainer-local
+asset (gitignored, not published). A public clone without it is complete:
+`run_controls` / `iter_controls` are empty and unit tests do not need it.
+
+Privilege markers in hidden tests (`mount(`, `losetup`, …) are **errors**
+unless `test_manifest.json` declares a known `judge_substrates` provider.
+
+### Agent CLI runtime (default PATH)
+
+Node used only to run Codex / Claude / OpenCode is installed under
+`/opt/cbrun/runtime/node`. The CLI script shebang is rewritten to that
+absolute `node`. The private prefix is **not** added to `ENV PATH`,
+`/etc/profile.d`, or the CLI process PATH (Codex / Claude Bash inherit that
+environment). `command -v node` in a login shell therefore fails unless the
+case deliverable itself shipped Node.
+
+This is **default-PATH invisibility**, not a root-proof hide. Codex
+`run_as=root` can still walk `/opt/cbrun/runtime/`. The guarantee is that
+`node -p process.versions.*` is not a zero-cost default-PATH oracle.
+Install-ban npm shims remain on `PATH` at `/opt/cbrun/bin`; they block
+installs, they do not expose `node`.
+
+`source/denylist.json` may declare `runtime_equivalents`
+(`import_root`, `runtime` ∈ `python3|node|system`, `evidence`). A
+`runtime=="node"` row is what probes `typeof` / `process.versions.<name>`.
+The runner does not special-case product names.
+
+### Judge substrates
+
+A case that needs a host filesystem the default `--network none` /
+no-cap judge profile cannot provide lists names in
+`test_manifest.json` `judge_substrates` (today: `cow_fs`). cbrun prepares
+the provider on the host (reuse a writable FICLONE directory whose
+`/proc/mounts` fstype is xfs/btrfs/bcachefs/ocfs2, otherwise
+`loop` + `mkfs.xfs -m reflink=1`) and bind-mounts it at
+`/mnt/cb-substrate/<name>`. The judge container is not given extra
+capabilities. Solve containers do not receive the mount.
+
+Preparation failure is `judge_error` with `substrates_missing` (and
+`run_valid=false`), not a scored reward 0. Official 009 CoW scoring is
+**cbrun only**. Harbor starts its own verifier and this adapter only
+copies `final_judge.py` into that image; it cannot attach substrates. A
+bare Harbor run of a substrate case reports `substrates_missing`.
 
 ## Pipeline (per trial)
 

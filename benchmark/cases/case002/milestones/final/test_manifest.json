@@ -102,5 +102,12 @@
       "python3",
       "pytest"
     ]
+  },
+  "suite_wall_seconds": 9.56,
+  "judge_timeout_sec": 20,
+  "suite_wall_measured_on": {
+    "arch": "x86_64",
+    "os": "linux",
+    "date": "2026-09-18"
   }
 }

@@ -29,6 +29,9 @@
   "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F05_acceptance.py tests/F06_acceptance.py tests/F07_acceptance.py tests/F08_acceptance.py tests/F09_acceptance.py tests/F10_acceptance.py tests/F11_acceptance.py tests/F12_acceptance.py tests/F13_acceptance.py tests/F14_acceptance.py tests/F15_acceptance.py tests/F15_helpers.py tests/F16_acceptance.py tests/F17_acceptance.py tests/F18_acceptance.py",
   "test_command_template": "python3 -m pytest {test_files}",
   "workdir": ".",
+  "judge_substrates": [
+    "cow_fs"
+  ],
   "execution_groups": [
     {
       "feature_ids": [
@@ -204,5 +207,12 @@
       "python3",
       "pytest"
     ]
+  },
+  "suite_wall_seconds": 318.91,
+  "judge_timeout_sec": 638,
+  "suite_wall_measured_on": {
+    "arch": "x86_64",
+    "os": "linux",
+    "date": "2026-09-18"
   }
 }

@@ -544,6 +544,10 @@ def _run_step(
     )
     result.reward = outcome.reward
     result.judge_error = outcome.judge_error
+    result.substrates_missing = list(outcome.substrates_missing)
+    if outcome.substrates_missing:
+        result.run_valid = False
+        result.invalid_reason = outcome.judge_error
     result.judge_exit_code = outcome.exit_code
     result.judge_seconds = round(outcome.seconds, 2)
     result.logs["judge_report"] = str(out_dir / "final_report.json")

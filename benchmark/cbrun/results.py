@@ -62,6 +62,7 @@ class TrialResult:
     infra_signals: dict[str, int] = field(default_factory=dict)
     run_valid: bool = True
     invalid_reason: str | None = None
+    substrates_missing: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

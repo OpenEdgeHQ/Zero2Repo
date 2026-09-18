@@ -68,6 +68,7 @@ class AgentSpec:
     home: str | None = None
     setup_timeout_sec: float = 120.0
     python_hook: str | None = None
+    runtime: str | None = None
 
     def spec_hash(self) -> str:
         payload = json.dumps(self.to_dict(), sort_keys=True)
@@ -85,6 +86,7 @@ class AgentSpec:
             "home": self.home,
             "setup_timeout_sec": self.setup_timeout_sec,
             "python_hook": self.python_hook,
+            "runtime": self.runtime,
         }
 
     @classmethod
@@ -115,6 +117,7 @@ class AgentSpec:
             home=_optional_str(data.get("home")),
             setup_timeout_sec=float(data.get("setup_timeout_sec") or 120.0),
             python_hook=_optional_str(data.get("python_hook")),
+            runtime=_optional_str(data.get("runtime")),
         )
 
 
@@ -383,6 +386,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         run_as="root",
         model_prefix="keep",
         home="/root/.codex",
+        runtime="node",
         command=(
             "codex exec "
             "--dangerously-bypass-approvals-and-sandbox "
@@ -401,6 +405,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         python_hook="cbrun.agent_hooks:opencode_env",
         run_as="root",
         model_prefix="keep",
+        runtime="node",
         command=(
             "opencode --model={model_quoted} run "
             "--format=json --thinking --auto "
@@ -415,6 +420,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         run_as="nonroot",
         model_prefix="keep",
         home=AGENT_USER_HOME,
+        runtime="node",
         command=(
             "cat {instruction_quoted} | claude --print --verbose --output-format stream-json "
             "--permission-mode bypassPermissions "

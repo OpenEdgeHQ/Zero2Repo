@@ -34,6 +34,7 @@ The product exposes a fixed, finite set of subcommands. Porcelain commands: chec
 ## Non-functional constraints
 
 - **Form factor:** One command-line binary that Git can locate and invoke; not a stable embeddable library API or ABI.
+- **Layout.** The default make goal emits `git-orbulk` under the built tree’s `bin` directory.
 - **Platforms:** Builds and runs on Linux, macOS, Windows, and FreeBSD-class systems. This case’s acceptance targets Linux with a recent Go toolchain, GNU make, and a working Git installation (Git 2.0.0 or newer; recent Git recommended).
 - **Hardware:** CPU-only. No GPU or accelerator substrate is required or claimed. The mandatory execution substrate is a real host able to build the binary and run Git plus the Git Orbulk CLI.
 - **Storage model:** Large content is never required to live as ordinary Git blobs for tracked paths; Git history holds pointers, and the local object store plus remotes hold objects.

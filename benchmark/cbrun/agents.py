@@ -105,6 +105,11 @@ def _cursor_install_command(environ: dict[str, str] | None) -> str:
     )
 
 
+# Private prefix used when the deliverable image has no Node. Must not land
+# on the default PATH (Codex/Claude Bash inherits the CLI process env).
+NODE_RUNTIME_PREFIX = "/opt/cbrun/runtime/node"
+
+
 def cli_install_command(backend: str, environ: dict[str, str] | None = None) -> str:
     """Idempotent in-container install command for a backend's CLI."""
     _require_backend(backend)
@@ -115,30 +120,37 @@ def cli_install_command(backend: str, environ: dict[str, str] | None = None) -> 
     bin_name = _CLI_BINS[backend]
     verify = shlex.quote(f"command -v {bin_name} && {bin_name} --version")
     dest_bin = f"/usr/local/bin/{bin_name}"
+    prefix = NODE_RUNTIME_PREFIX
     return (
         "set -eu; "
         f"if [ -x {dest_bin} ]; then bash -lc {verify}; exit 0; fi; "
-        "command -v npm >/dev/null 2>&1 || { "
-        "echo 'cbrun: npm not found in agent image' >&2; exit 1; }; "
-        f"npm install -g {shlex.quote(pkg + spec)}; "
-        'prefix="$(npm prefix -g)"; '
-        f'CBRUN_CLI_PATH="$prefix/bin/{bin_name}"; '
+        f'if [ -x {prefix}/bin/npm ]; then '
+        f'  NPM={prefix}/bin/npm; NODE={prefix}/bin/node; NPM_PREFIX={prefix}; '
+        "elif command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then "
+        '  NPM="$(command -v npm)"; NODE="$(command -v node)"; '
+        '  NPM_PREFIX="$("$NPM" prefix -g)"; '
+        "else "
+        "  echo 'cbrun: npm/node not found in agent image' >&2; exit 1; "
+        "fi; "
+        # npm's shebang is `#!/usr/bin/env node`. The private prefix is not
+        # on PATH, so invoke the script with the absolute node binary.
+        f'"$NODE" "$NPM" install -g --prefix "$NPM_PREFIX" {shlex.quote(pkg + spec)}; '
+        f'CBRUN_CLI_PATH="$NPM_PREFIX/bin/{bin_name}"; '
         '[ -x "$CBRUN_CLI_PATH" ] || { '
-        f'echo "cbrun: {pkg} installed but $CBRUN_CLI_PATH missing (PATH=$PATH)" >&2; '
+        f'echo "cbrun: {pkg} installed but $CBRUN_CLI_PATH missing" >&2; '
         "exit 1; }; "
+        'if [ -n "$NODE" ] && [ -x "$NODE" ]; then '
+        '  tmp="$(mktemp)"; '
+        '  if head -n 1 "$CBRUN_CLI_PATH" | grep -q "/usr/bin/env node"; then '
+        '    { printf "#!%s\\n" "$NODE"; tail -n +2 "$CBRUN_CLI_PATH"; } > "$tmp"; '
+        '    cat "$tmp" > "$CBRUN_CLI_PATH"; '
+        '    chmod +x "$CBRUN_CLI_PATH"; '
+        "  fi; "
+        '  rm -f "$tmp"; '
+        "fi; "
         "mkdir -p /usr/local/bin; "
         f'if [ "$CBRUN_CLI_PATH" != {dest_bin} ]; then '
         f'ln -sfn "$CBRUN_CLI_PATH" {dest_bin}; '
-        "fi; "
-        'NODE_SRC="$(command -v node)"; '
-        '[ -n "$NODE_SRC" ] || { '
-        'echo "cbrun: node not found after npm install (PATH=$PATH)" >&2; exit 1; }; '
-        'if [ "$NODE_SRC" != /usr/local/bin/node ]; then '
-        'ln -sfn "$NODE_SRC" /usr/local/bin/node; '
-        "fi; "
-        'NPM_SRC="$(command -v npm)"; '
-        'if [ -n "$NPM_SRC" ] && [ "$NPM_SRC" != /usr/local/bin/npm ]; then '
-        'ln -sfn "$NPM_SRC" /usr/local/bin/npm; '
         "fi; "
         f"bash -lc {verify}"
     )

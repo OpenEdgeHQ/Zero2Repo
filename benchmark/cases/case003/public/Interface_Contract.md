@@ -22,6 +22,8 @@ The public surface is a **JavaScript library** published as an ESM module, plus 
 
 The package manifest is `package.json` at the built repository root. The ESM library artifact is the file named by `exports``["."].``import`, or, if that field is absent, by `module`. That file must exist and must be importable as an ES module. A CommonJS build and a browser export may ship alongside; they are not required for this surface. The convenience CLI, when published, is the file named by `bin` (the ymlcodec key, or the sole / first `bin` path).
 
+**Layout.** The package manifest is `package.json` at the built repository root.
+
 Importing the module performs no I/O against caller files, starts no processes, and opens no sockets. Each call is self-contained: schema objects and custom tags constructed for one call do not leak into another unless the caller passes them again.
 
 **Library entries.** The three published call entries are:
@@ -82,7 +84,7 @@ Exact signatures, option defaults, and raised conditions for individual symbols 
 
 **Anchors and aliases.** An `&name` label and a later `*name` refer to the same constructed value (same identity, not a copy). A recursive alias is allowed for the default sequence and mapping tags.
 
-**Limits.** A default for `maxDepth` exists when the key is omitted: the omitted limit is finite and does not count aliases. A collection nest of 100000 opening brackets fails under that omitted default as a parse failure, not an uncaught host overflow. The omitted numeric collection-count pair is not part of this surface. Default alias budget (`maxAliases`) is unlimited (`-1`; `0` rejects every alias). Default merge-key budget (`maxTotalMergeKeys`) is 10000 keys processed by `<<` across one `load` / `loadAll` call (`-1` disables). Crossing a limit fails the parse and yields no document. The alias budget is per document; the merge-key budget is per call. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
+**Limits.** A default for `maxDepth` exists when the key is omitted: the omitted limit is finite and does not count aliases. The exact integer of that omitted default is not part of this surface. Under the omitted default, a flow sequence of ten nested empty sequences succeeds, a closed flow sequence of two hundred nested empty sequences fails as a parse failure (not an uncaught host overflow), and a collection nest of 100000 opening brackets fails as a parse failure. Default alias budget (`maxAliases`) is unlimited (`-1`; `0` rejects every alias). Default merge-key budget (`maxTotalMergeKeys`) is 10000 keys processed by `<<` across one `load` / `loadAll` call (`-1` disables). Crossing a limit fails the parse and yields no document. The alias budget is per document; the merge-key budget is per call. These limits do not, by themselves, cap the cost of walking a constructed graph after a successful parse.
 
 **Untrusted input.** The YAML design allows a tiny document to expand into a huge object graph. Walking a constructed value after a successful parse (for example by converting it to JSON) is the caller’s responsibility.
 
@@ -110,7 +112,7 @@ The options object accepted by `load` and `loadAll` uses these keys:
 
 ### Limits
 
-A default for `maxDepth` exists when the key is omitted: the omitted limit is finite. A collection nest of 100000 opening brackets fails under that omitted default as a parse failure, not an uncaught host overflow. The omitted numeric collection-count pair is not part of this surface. A flow sequence of ten nested empty sequences succeeds when `maxDepth` is 20 and fails when it is 5. At `maxDepth` 5, a sequence of ten aliases to one empty sequence succeeds, and a recursive self-alias into the default sequence still succeeds.
+A default for `maxDepth` exists when the key is omitted: the omitted limit is finite. The exact integer of that omitted default is not part of this surface. Under the omitted default, a flow sequence of ten nested empty sequences succeeds, a closed flow sequence of two hundred nested empty sequences fails as a parse failure (not an uncaught host overflow), and a collection nest of 100000 opening brackets fails as a parse failure. A flow sequence of ten nested empty sequences succeeds when `maxDepth` is 20 and fails when it is 5. At `maxDepth` 5, a sequence of ten aliases to one empty sequence succeeds, and a recursive self-alias into the default sequence still succeeds.
 
 Default `maxAliases` is unlimited. Passing `-1` requests that unlimited budget explicitly. Passing `0` rejects every alias. A document with one anchored mapping and two aliases to it succeeds under the omitted default, under an explicit `-1`, and under a budget of 2, and fails under a budget of 1 or `0`. The budget is applied per document: a two-document stream in which each document has one alias succeeds when the budget is 1, and fails when the budget is 0.
 

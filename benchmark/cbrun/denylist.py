@@ -42,6 +42,7 @@ __all__ = [
     "render_pip_module_hook",
     "probe_spec_from_payload",
     "probe_banned_imports",
+    "probe_agent_runtime_leak",
     "log_probe_result",
     "ALLOWED_JUDGE_BANS",
 ]
@@ -229,6 +230,48 @@ def validate_denylist_artifact(
             f"{cid}: no denylist token overlaps case identity metadata "
             "(sensitive_terms / repo identity)"
         )
+    errors.extend(_validate_runtime_equivalents(payload, imports, cid))
+    return errors
+
+
+_RUNTIME_FAMILIES = frozenset({"python3", "node", "system"})
+
+
+def _validate_runtime_equivalents(
+    payload: dict, import_ban: list[str], case_id: str
+) -> list[str]:
+    raw = payload.get("runtime_equivalents")
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        return [f"{case_id}: runtime_equivalents must be a list"]
+    ban_roots = {
+        (import_root_from_ban_token(tok) or "").strip()
+        for tok in import_ban
+        if str(tok).strip()
+    }
+    ban_roots.discard("")
+    errors: list[str] = []
+    for index, row in enumerate(raw):
+        prefix = f"{case_id}: runtime_equivalents[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        root = str(row.get("import_root") or "").strip()
+        runtime = str(row.get("runtime") or "").strip()
+        evidence = str(row.get("evidence") or "").strip()
+        if not root:
+            errors.append(f"{prefix}.import_root is required")
+        if runtime not in _RUNTIME_FAMILIES:
+            errors.append(
+                f"{prefix}.runtime must be one of {sorted(_RUNTIME_FAMILIES)}"
+            )
+        if not evidence:
+            errors.append(f"{prefix}.evidence is required")
+        if root and root not in ban_roots and root not in import_ban:
+            errors.append(
+                f"{prefix}.import_root {root!r} must also appear in import_ban"
+            )
     return errors
 
 
@@ -1229,12 +1272,19 @@ def _parse_probe_rows(output: str, roots: list[str]) -> dict[str, str]:
 
 
 @dataclass
+class RuntimeEquivalent:
+    import_root: str
+    runtime: str
+    evidence: str = ""
+
+
+@dataclass
 class ProbeSpec:
     python_roots: list[str] = field(default_factory=list)
     node_roots: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     headers: list[str] = field(default_factory=list)
-    watch_ada: bool = False
+    runtime_equivalents: list[RuntimeEquivalent] = field(default_factory=list)
 
 
 def probe_spec_from_payload(payload: dict) -> ProbeSpec:
@@ -1259,16 +1309,27 @@ def probe_spec_from_payload(payload: dict) -> ProbeSpec:
         if any(base.endswith(suf) for suf in (".h", ".hh", ".hpp", ".hxx")) and base not in seen_hdr:
             seen_hdr.add(base)
             headers.append(base)
-    watch_ada = any(
-        (import_root_from_ban_token(tok) or "").lower() == "ada" or tok.strip().lower() == "ada"
-        for tok in tokens + install
-    )
+    equivalents: list[RuntimeEquivalent] = []
+    for row in payload.get("runtime_equivalents") or []:
+        if not isinstance(row, dict):
+            continue
+        root = str(row.get("import_root") or "").strip()
+        runtime = str(row.get("runtime") or "").strip()
+        if not root or runtime not in _RUNTIME_FAMILIES:
+            continue
+        equivalents.append(
+            RuntimeEquivalent(
+                import_root=root,
+                runtime=runtime,
+                evidence=str(row.get("evidence") or "").strip(),
+            )
+        )
     return ProbeSpec(
         python_roots=python_roots,
         node_roots=node_roots,
         commands=commands,
         headers=headers,
-        watch_ada=watch_ada,
+        runtime_equivalents=equivalents,
     )
 
 
@@ -1279,7 +1340,11 @@ def _unified_probe_command(spec: ProbeSpec) -> str:
             "node_roots": spec.node_roots,
             "commands": spec.commands,
             "headers": spec.headers,
-            "watch_ada": spec.watch_ada,
+            "node_equiv": [
+                row.import_root
+                for row in spec.runtime_equivalents
+                if row.runtime == "node"
+            ],
         }
     )
     return (
@@ -1351,12 +1416,20 @@ def _unified_probe_command(spec: ProbeSpec) -> str:
         "    print('lib\\t' + stem + '\\t' + (libhits[0] if libhits else '__ABSENT__'))\n"
         "print('warm\\t/opt/cb-warm\\t' + ('PRESENT' if os.path.exists('/opt/cb-warm') else 'ABSENT'))\n"
         "print('repo\\t/opt/codingbench/repo\\t' + ('PRESENT' if os.path.exists('/opt/codingbench/repo') else 'ABSENT'))\n"
-        "if spec['watch_ada'] and shutil.which('node'):\n"
-        "    try:\n"
-        "        ver = subprocess.check_output(['node', '-p', 'process.versions.ada||\"\"'], text=True).strip()\n"
-        "    except Exception:\n"
-        "        ver = ''\n"
-        "    print('adaver\\t' + (ver or 'ABSENT'))\n"
+        "nodes = []\n"
+        "for p in ('/opt/cbrun/runtime/node/bin/node', shutil.which('node') or ''):\n"
+        "    if p and os.path.isfile(p) and p not in nodes:\n"
+        "        nodes.append(p)\n"
+        "for name in spec.get('node_equiv') or []:\n"
+        "    for node in nodes:\n"
+        "        try:\n"
+        "            ver = subprocess.check_output(\n"
+        "                [node, '-p', 'process.versions[' + json.dumps(name) + ']||\"\"'],\n"
+        "                text=True,\n"
+        "            ).strip()\n"
+        "        except Exception:\n"
+        "            ver = ''\n"
+        "        print('rtver\\t' + name + '\\t' + (ver or 'ABSENT') + '\\t' + node)\n"
         "PY"
     )
 
@@ -1433,9 +1506,57 @@ def probe_banned_imports(
             result.errors.append(f"upstream leftover /opt/cb-warm is present in {tag}")
         elif kind == "repo" and len(parts) >= 3 and parts[2] == "PRESENT":
             result.errors.append(f"upstream leftover /opt/codingbench/repo is present in {tag}")
-        elif kind == "adaver" and len(parts) >= 2 and parts[1] not in {"", "ABSENT"}:
+        elif kind == "rtver" and len(parts) >= 3 and parts[2] not in {"", "ABSENT"}:
+            origin = parts[3] if len(parts) >= 4 else "node"
             result.warnings.append(
-                f"Node runtime reports process.versions.ada={parts[1]!r} in {tag}"
+                f"Node runtime reports process.versions.{parts[1]}={parts[2]!r} "
+                f"in {tag} ({origin})"
+            )
+    return result
+
+
+def _login_which(tag: str, command: str, *, runner=None) -> str:
+    script = (
+        "bash -lc "
+        + json.dumps(f"command -v {command} 2>/dev/null || true")
+    )
+    if runner is None:
+        from .docker_env import Container
+
+        container = Container.start(tag, network="none")
+        try:
+            outcome = container.exec(script, timeout_sec=30.0)
+        finally:
+            container.remove()
+    else:
+        outcome = runner(script)
+    text = (getattr(outcome, "tail", "") or "").strip().splitlines()
+    for line in reversed(text):
+        value = line.strip()
+        if value:
+            return value
+    return ""
+
+
+def probe_agent_runtime_leak(
+    agent_tag: str,
+    deliverable_tag: str,
+    commands: list[str],
+    *,
+    runner=None,
+) -> ImportProbeResult:
+    """Error when the agent image added a login-PATH command the deliverable lacked."""
+    result = ImportProbeResult()
+    for command in commands:
+        name = str(command or "").strip()
+        if not name:
+            continue
+        deliverable = _login_which(deliverable_tag, name, runner=runner)
+        agent = _login_which(agent_tag, name, runner=runner)
+        if agent and not deliverable:
+            result.errors.append(
+                f"agent image {agent_tag} exposes {name!r} on the login PATH "
+                f"({agent}); deliverable {deliverable_tag} does not"
             )
     return result
 

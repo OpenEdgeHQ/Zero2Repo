@@ -185,7 +185,7 @@ def test_ten_nested_under_mapping_ok_at_20_fail_at_5():
     require_parse_failure(load(source, with_nesting_limit(5)))
 
 
-def test_default_nesting_allows_100_rejects_101():
+def test_default_nesting_rejects_hostile_open_brackets():
     source = opening_brackets(100000)
     print(
         f"default omitted-knob hostile brackets chars={len(source)}",
@@ -201,7 +201,7 @@ def test_default_nesting_allows_100_rejects_101():
     assert result.ok is False
 
 
-def test_default_nesting_allows_100_rejects_101_mappings():
+def test_explicit_nesting_limit_bounds_flow_mappings():
     source = nested_empty_flow_mappings(10)
     value = require_document(load(source, with_nesting_limit(20)))
     got = nested_mapping_depth(value)
@@ -227,7 +227,7 @@ def test_default_nesting_on_multi_document_entry():
     assert result.ok is False
 
 
-def test_default_nesting_rejects_101_block_sequences():
+def test_explicit_nesting_limit_bounds_block_sequences():
     source = nested_empty_block_sequences(10)
     ten = require_document(load(source, with_nesting_limit(20)))
     depth = nested_sequence_depth(ten)
@@ -237,7 +237,7 @@ def test_default_nesting_rejects_101_block_sequences():
 
 
 def test_ten_nested_succeeds_under_default():
-    _assert_ten_nested(require_document(load(TEN_NESTED, with_nesting_limit(20))))
+    _assert_ten_nested(require_document(load(TEN_NESTED)))
 
 
 def test_hundred_thousand_brackets_fail_as_parse_not_overflow():
@@ -254,11 +254,7 @@ def test_hundred_thousand_brackets_fail_as_parse_not_overflow():
 
 
 def test_default_nesting_rejects_closed_deep_flow_sequence():
-    """Omitted maxDepth must refuse a closed nest past the finite default.
-
-    js-yaml's omitted default is 100. A closed 200-deep flow sequence
-    succeeds or overflows if the implementation has no finite default.
-    """
+    """Omitted maxDepth must refuse a closed nest of two hundred sequences."""
     source = nested_empty_flow_sequences(200)
     print(f"closed deep flow chars={len(source)} depth=200", flush=True)
     result = load(source)

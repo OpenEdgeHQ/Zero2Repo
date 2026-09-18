@@ -20,6 +20,8 @@ The product is an **importable Python library** plus an optional **command-line 
 
 **Distribution and import.** The installable distribution name is `python-envfile`. The importable top-level package is `envfile`. Callers write `import `envfile`` or `from `envfile` import …` and obtain the published entries from that package root. The importable package is a single top-level directory named `envfile` under `src`. Importing the package performs no I/O against caller files, starts no processes, and opens no sockets.
 
+**Layout.** The importable package directory is `envfile` under `src`.
+
 **Library.** The independently verifiable library entries, grouped by role, are:
 
 - Parse a `.env` source into a mapping without mutating the process environment: `envfile_values`.

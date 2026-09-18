@@ -36,6 +36,17 @@ def test_run_argv_uses_host_network_and_never_mounts_docker_socket() -> None:
     assert "-v" not in argv and "--volume" not in argv
 
 
+def test_run_argv_bind_mounts_judge_substrates() -> None:
+    argv = Container.build_run_argv(
+        "img",
+        network="none",
+        mounts=[("/tmp/cow", "/mnt/cb-substrate/cow_fs")],
+    )
+    assert "-v" in argv
+    assert argv[argv.index("-v") + 1] == "/tmp/cow:/mnt/cb-substrate/cow_fs"
+    assert "docker.sock" not in " ".join(argv)
+
+
 def test_run_argv_blocks_github_hosts() -> None:
     argv = Container.build_run_argv("img", block_hosts=("github.com", "api.github.com"))
     assert "--add-host" in argv
@@ -61,7 +72,7 @@ def test_agent_dockerfile_all_backends_uses_per_cli_install() -> None:
     from cbrun.images import _build_dockerfile  # noqa: WPS433
 
     df = _build_dockerfile("codingbench-benchmark/sample:deliverable", _UNPINNED)
-    assert "npm prefix -g" in df
+    assert '"$NODE" "$NPM" install -g --prefix' in df
     assert "@openai/codex" in df
     assert "opencode-ai" in df
     assert "@anthropic-ai/claude-code" in df
@@ -69,6 +80,9 @@ def test_agent_dockerfile_all_backends_uses_per_cli_install() -> None:
     # Each npm CLI is installed on its own; the old concatenated line is gone.
     assert "codex@latest opencode-ai" not in df
     assert "opencode-ai@latest @anthropic" not in df
+    assert "/opt/cbrun/runtime/node" in df
+    assert "deb.nodesource.com" not in df
+    assert "/usr/local/bin/node" not in df
 
 
 def test_agent_dockerfile_cursor_installs_only_cursor_cli() -> None:
@@ -246,7 +260,12 @@ def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) 
         gpus=None,
     )
     assert outcome.reward == 1.0
-    assert started == [("codingbench-benchmark/demo:agent", {"gpus": None, "network": "none"})]
+    assert started == [
+        (
+            "codingbench-benchmark/demo:agent",
+            {"gpus": None, "network": "none", "mounts": []},
+        )
+    ]
 
 
 def test_probe_cli_version_fails_fast_with_path() -> None:

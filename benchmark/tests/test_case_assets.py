@@ -176,21 +176,66 @@ def test_check_case_assets_accepts_matching_test_command_template(tmp_path: Path
     assert check_case_assets(case) == []
 
 
-def test_check_case_warnings_privilege_markers(tmp_path: Path) -> None:
+def test_privilege_markers_require_judge_substrates(tmp_path: Path) -> None:
     case = _write_case(tmp_path)
     helper = case / "milestones" / "final" / "tests" / "helper.py"
     helper.write_text("def setup():\n    losetup('/dev/loop0')\n", encoding="utf-8")
-    notes = check_case_warnings(case)
-    assert notes
-    assert "privileges" in notes[0]
+    issues = check_case_assets(case)
+    assert issues and "judge substrate" in issues[0]
+    assert check_case_warnings(case) == []
+
+
+def test_privilege_markers_ok_with_declared_substrate(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "judge_substrates": ["cow_fs"],
+        },
+    )
+    helper = case / "milestones" / "final" / "tests" / "helper.py"
+    helper.write_text("def setup():\n    losetup('/dev/loop0')\n", encoding="utf-8")
     assert check_case_assets(case) == []
 
 
-def test_check_case_warnings_ignores_amount_substring(tmp_path: Path) -> None:
+def test_unknown_judge_substrate_is_error(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "judge_substrates": ["not-a-provider"],
+        },
+    )
+    issues = check_case_assets(case)
+    assert issues and "unknown judge_substrates" in issues[0]
+
+
+def test_suite_wall_fields_must_be_numbers(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "suite_wall_seconds": "fast",
+            "judge_timeout_sec": -1,
+            "suite_wall_measured_on": "remote",
+        },
+    )
+    issues = check_case_assets(case)
+    joined = " ".join(issues)
+    assert "suite_wall_seconds must be a non-negative number" in joined
+    assert "judge_timeout_sec must be a non-negative number" in joined
+    assert "suite_wall_measured_on must be an object" in joined
+
+
+def test_privilege_markers_ignore_amount_substring(tmp_path: Path) -> None:
     case = _write_case(tmp_path)
     helper = case / "milestones" / "final" / "tests" / "helper.py"
     helper.write_text(
         "def _runtime_grouped_amount():\n    return 1\n",
         encoding="utf-8",
     )
+    assert check_case_assets(case) == []
     assert check_case_warnings(case) == []

@@ -236,7 +236,27 @@ def test_c_parse_agrees_on_named_hrefs() -> None:
     assert nfc.ok and nfc.hostname == NFC_ACE_HOSTNAME
     require_parse_href("file:c:/..", "file:///c:/", language=language)
     require_parse_href("file:c:x/..", "file:///", language=language)
+    require_parse_href("http://.", "http://./", language=language)
+    require_parse_href("a:/..", "a:/", language=language)
     print(f"named href table ok language={language}")
+
+
+@pytest.mark.parametrize("language", BOTH_LANGS)
+def test_dot_only_special_scheme_hostname(language: str) -> None:
+    """WHATWG: a host that is only `.` stays a host, not a path."""
+    outcome = require_parse_href("http://.", "http://./", language=language)
+    assert outcome.hostname == "."
+    require_parse_href("https://.", "https://./", language=language)
+    require_parse_href("http://./path", "http://./path", language=language)
+    print(f"dot-only host ok language={language} href={outcome.href!r}")
+
+
+@pytest.mark.parametrize("language", BOTH_LANGS)
+def test_nonspecial_scheme_path_dotdot_is_not_file_drive(language: str) -> None:
+    """WHATWG: `a:` is not special; `a:/..` collapses the path, not a drive."""
+    require_parse_href("a:/..", "a:/", language=language)
+    require_parse_href("a:/../x", "a:/x", language=language)
+    print(f"nonspecial a:/.. ok language={language}")
 
 
 # ---------------------------------------------------------------------------

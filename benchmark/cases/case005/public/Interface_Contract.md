@@ -52,6 +52,8 @@ The surfaces group as:
 
 **Product and package.** The product identity is httpwire. The installable distribution name and the importable top-level package are spelled `httpwire`. The importable package directory is `httpwire`.
 
+**Layout.** The importable package directory is `httpwire`.
+
 **Event types.** Published event types use PascalCase: `Request`, `InformationalResponse`, `Response`, `Data`, `EndOfMessage`, `ConnectionClosed`. Each is a callable class. Callers construct instances by calling the class.
 
 **Roles and connection.** The client-role token is `CLIENT`. The server-role token is `SERVER`. The connection type is `Connection`.

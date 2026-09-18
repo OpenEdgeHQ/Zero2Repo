@@ -15,6 +15,7 @@ from pathlib import Path
 from coding_bench_harbor._leakage import scan_leakage
 
 from .denylist import ALLOWED_JUDGE_BANS, validate_denylist_artifact
+from .substrates import KNOWN_PROVIDERS
 
 __all__ = ["check_case_assets", "check_case_warnings", "main"]
 
@@ -130,23 +131,21 @@ def check_case_assets(case_dir: Path | str) -> list[str]:
             errors.append(
                 f"{cid}: manifest and test_manifest disagree on test_command_template"
             )
+        errors.extend(_check_substrates(cid, tests_manifest, final_dir / "tests"))
+        errors.extend(_check_suite_wall_fields(cid, tests_manifest))
     return errors
 
 
-def check_case_warnings(case_dir: Path | str) -> list[str]:
-    """Return non-fatal warnings (privilege markers in hidden tests)."""
-    case_dir = Path(case_dir)
-    tests_dir = case_dir / "milestones" / "final" / "tests"
+def _privilege_hits(tests_dir: Path) -> list[str]:
     if not tests_dir.is_dir():
         return []
-    warnings: list[str] = []
-    cid = case_dir.name
     pattern = re.compile(
         "|".join(
             rf"(?<![A-Za-z0-9_]){re.escape(item)}"
             for item in _PRIVILEGE_MARKERS
         )
     )
+    hits: list[str] = []
     for path in sorted(tests_dir.rglob("*")):
         if not path.is_file():
             continue
@@ -155,12 +154,54 @@ def check_case_warnings(case_dir: Path | str) -> list[str]:
         except OSError:
             continue
         if pattern.search(text):
-            rel = path.relative_to(tests_dir).as_posix()
-            warnings.append(
-                f"{cid}: tests appear to require privileges the judge "
-                f"container does not grant ({rel})"
-            )
-    return warnings
+            hits.append(path.relative_to(tests_dir).as_posix())
+    return hits
+
+
+def _check_substrates(cid: str, tests_manifest: dict, tests_dir: Path) -> list[str]:
+    raw = tests_manifest.get("judge_substrates")
+    names: list[str] = []
+    if raw is not None:
+        if not isinstance(raw, list):
+            return [f"{cid}: judge_substrates must be a list"]
+        for item in raw:
+            name = str(item or "").strip()
+            if not name:
+                continue
+            if name not in KNOWN_PROVIDERS:
+                return [f"{cid}: unknown judge_substrates provider {name!r}"]
+            names.append(name)
+    hits = _privilege_hits(tests_dir)
+    if hits and not names:
+        return [
+            f"{cid}: hidden tests need a judge substrate "
+            f"(declare judge_substrates); first hit {hits[0]}"
+        ]
+    return []
+
+
+def _check_suite_wall_fields(cid: str, tests_manifest: dict) -> list[str]:
+    errors: list[str] = []
+    for key in ("suite_wall_seconds", "judge_timeout_sec"):
+        if key not in tests_manifest:
+            continue
+        try:
+            value = float(tests_manifest[key])
+        except (TypeError, ValueError):
+            errors.append(f"{cid}: {key} must be a non-negative number")
+            continue
+        if value < 0:
+            errors.append(f"{cid}: {key} must be a non-negative number")
+    measured = tests_manifest.get("suite_wall_measured_on")
+    if measured is not None and not isinstance(measured, dict):
+        errors.append(f"{cid}: suite_wall_measured_on must be an object")
+    return errors
+
+
+def check_case_warnings(case_dir: Path | str) -> list[str]:
+    """Return non-fatal warnings. Privilege markers are errors (see substrates)."""
+    del case_dir
+    return []
 
 
 def main(argv: list[str] | None = None) -> int:

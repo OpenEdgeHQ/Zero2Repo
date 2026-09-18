@@ -249,6 +249,40 @@ def test_validate_denylist_artifact_requires_ban_token() -> None:
     assert any("at least one" in err for err in errors)
 
 
+def test_validate_runtime_equivalents_requires_import_ban_root() -> None:
+    manifest = {"case_id": "case008", "sensitive_terms": ["ada", "hrefparse"]}
+    errors = validate_denylist_artifact(
+        {
+            "schema_version": 1,
+            "case_id": "case008",
+            "ecosystem": "source",
+            "install_ban": ["ada"],
+            "import_ban": ["ada/", "ada.h"],
+            "runtime_equivalents": [
+                {"import_root": "other", "runtime": "node", "evidence": "x"}
+            ],
+        },
+        manifest,
+        case_id="case008",
+    )
+    assert any("import_root" in err for err in errors)
+    ok = validate_denylist_artifact(
+        {
+            "schema_version": 1,
+            "case_id": "case008",
+            "ecosystem": "source",
+            "install_ban": ["ada"],
+            "import_ban": ["ada/", "ada.h"],
+            "runtime_equivalents": [
+                {"import_root": "ada", "runtime": "node", "evidence": "builtin"}
+            ],
+        },
+        manifest,
+        case_id="case008",
+    )
+    assert ok == []
+
+
 def test_validate_denylist_artifact_accepts_empty_import_ban_for_source_case() -> None:
     manifest = {
         "case_id": "case030",

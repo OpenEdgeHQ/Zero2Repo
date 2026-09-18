@@ -263,20 +263,22 @@ def test_provider_env_opencode_anthropic_forwards_base_url() -> None:
 def test_cli_install_command_is_idempotent_and_uses_pin() -> None:
     cmd = agents.cli_install_command("opencode", environ={"CBRUN_OPENCODE_VERSION": "9.9.9"})
     assert "[ -x /usr/local/bin/opencode ]" in cmd
-    assert "npm install -g" in cmd
+    assert '"$NODE" "$NPM" install -g --prefix' in cmd
     assert "opencode-ai@9.9.9" in cmd
-    assert "npm prefix -g" in cmd
     assert 'ln -sfn "$CBRUN_CLI_PATH" /usr/local/bin/opencode' in cmd
-    assert 'ln -sfn "$NODE_SRC" /usr/local/bin/node' in cmd
+    assert "/usr/local/bin/node" not in cmd
+    assert "/opt/cbrun/runtime/node" in cmd
     assert "bash -lc" in cmd
     assert "command -v opencode" in cmd
 
 
 def test_cli_install_command_exposes_npm_prefix_binary_on_path() -> None:
     cmd = agents.cli_install_command("codex", environ={"CBRUN_CODEX_VERSION": "0.1.0"})
-    assert 'CBRUN_CLI_PATH="$prefix/bin/codex"' in cmd
+    assert 'CBRUN_CLI_PATH="$NPM_PREFIX/bin/codex"' in cmd
+    assert '"$NODE" "$NPM" install -g --prefix' in cmd
     assert 'ln -sfn "$CBRUN_CLI_PATH" /usr/local/bin/codex' in cmd
-    assert 'ln -sfn "$NODE_SRC" /usr/local/bin/node' in cmd
+    assert "/usr/local/bin/node" not in cmd
+    assert "/usr/bin/env node" in cmd
     assert "bash -lc" in cmd
 
 

@@ -75,15 +75,28 @@ def test_probe_skips_stdlib_and_fails_on_importable(tmp_path: Path) -> None:
     assert result.errors and "click" in result.errors[0] and "origin=" in result.errors[0]
 
 
-def test_probe_flags_warm_tree_and_warns_on_node_ada(tmp_path: Path) -> None:
+def test_probe_flags_warm_tree_and_warns_on_runtime_equivalent(tmp_path: Path) -> None:
     denylist = tmp_path / "denylist.json"
     denylist.write_text(
-        '{"ecosystem":"source","import_ban":["ada.h"],"install_ban":["ada"]}',
+        json.dumps(
+            {
+                "ecosystem": "source",
+                "import_ban": ["ada.h", "ada/"],
+                "install_ban": ["ada"],
+                "runtime_equivalents": [
+                    {
+                        "import_root": "ada",
+                        "runtime": "node",
+                        "evidence": "builtin",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
     class Fake:
-        tail = "warm\t/opt/cb-warm\tPRESENT\nadaver\t2.9.0\n"
+        tail = "warm\t/opt/cb-warm\tPRESENT\nrtver\tada\t2.9.0\t/opt/cbrun/runtime/node/bin/node\n"
 
     result = probe_banned_imports("img", denylist, runner=lambda _cmd: Fake())
     assert any("cb-warm" in err for err in result.errors)
@@ -92,12 +105,19 @@ def test_probe_flags_warm_tree_and_warns_on_node_ada(tmp_path: Path) -> None:
 
 def test_probe_spec_skips_header_tokens_for_command_v() -> None:
     spec = probe_spec_from_payload(
-        {"import_ban": ["ada.h", "ada::", "tomli/"], "install_ban": ["ada"]}
+        {
+            "import_ban": ["ada.h", "ada::", "tomli/"],
+            "install_ban": ["ada"],
+            "runtime_equivalents": [
+                {"import_root": "ada", "runtime": "node", "evidence": "builtin"}
+            ],
+        }
     )
     assert "ada.h" not in spec.commands
     assert not is_command_like_token("ada.h")
     assert "ada" in spec.commands
-    assert spec.watch_ada is True
+    assert [row.import_root for row in spec.runtime_equivalents] == ["ada"]
+    assert not hasattr(spec, "watch_ada")
 
 
 def test_strip_script_has_no_plaintext_product_names() -> None:
@@ -200,6 +220,11 @@ def test_ensure_agent_image_reuses_only_when_probe_clean(
     monkeypatch.setattr(images, "image_identity", lambda *_a, **_k: {"id": "sha256:abc"})
     monkeypatch.setattr(images, "write_shim_assets", lambda *_a, **_k: "")
     monkeypatch.setattr(images, "probe_banned_imports", fake_probe)
+    monkeypatch.setattr(
+        images,
+        "probe_agent_runtime_leak",
+        lambda *_a, **_k: Clean(),
+    )
     monkeypatch.setattr(images, "log_probe_result", lambda *_a, **_k: None)
     monkeypatch.setattr(images, "extract_hidden_tests", lambda *_a, **_k: tmp_path)
     monkeypatch.setattr(
@@ -686,3 +711,54 @@ def test_infra_signals_ignore_bare_401_and_recovered_filter() -> None:
         invalid_reason(submitted=False, log_text="HTTP 401 invalid_api_key\n")
         == "infra:auth"
     )
+
+
+def test_denylist_module_has_no_product_ada_special_case() -> None:
+    text = (BENCHMARK_ROOT / "cbrun" / "denylist.py").read_text(encoding="utf-8")
+    assert "watch_ada" not in text
+    assert "adaver" not in text
+
+
+def test_probe_agent_runtime_leak_flags_new_login_path() -> None:
+    from cbrun.denylist import probe_agent_runtime_leak
+
+    class Box:
+        def __init__(self, tail: str):
+            self.tail = tail
+
+    seen = {"n": 0}
+
+    def runner(_cmd: str):
+        seen["n"] += 1
+        return Box("/usr/bin/node" if seen["n"] == 2 else "")
+
+    result = probe_agent_runtime_leak("agent", "deliv", ["node"], runner=runner)
+    assert result.errors and "node" in result.errors[0]
+
+
+def test_cow_fstype_covering_matches_helper_visible_mounts() -> None:
+    from cbrun.substrates import cow_fstype_covering, helper_visible_cow_mounts
+
+    text = (
+        "overlay / overlay rw 0 0\n"
+        "/dev/loop0 /mnt/cb-substrate/cow_fs xfs rw,relatime 0 0\n"
+        "/dev/sda1 /var/tmp ext4 rw 0 0\n"
+    )
+    assert helper_visible_cow_mounts(text) == ["/mnt/cb-substrate/cow_fs"]
+    assert cow_fstype_covering(Path("/mnt/cb-substrate/cow_fs"), text) == "xfs"
+    assert cow_fstype_covering(Path("/var/tmp"), text) is None
+
+
+def test_substrate_unknown_provider_raises() -> None:
+    from cbrun.substrates import SubstrateUnavailable, mounted_substrates
+
+    with pytest.raises(SubstrateUnavailable, match="unknown provider"):
+        with mounted_substrates({"judge_substrates": ["nope"]}, Path("/tmp")):
+            pass
+
+
+def test_builtin_codex_spec_declares_node_runtime() -> None:
+    from cbrun.agent_spec import builtin_spec
+
+    assert builtin_spec("codex").runtime == "node"
+    assert builtin_spec("cursor").runtime is None

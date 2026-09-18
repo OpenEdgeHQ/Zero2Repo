@@ -49,6 +49,7 @@ Feature points below group these entries by independently verifiable capability.
 ## Non-functional constraints
 
 - **Form factor:** A pure-Python library. No compiled extensions, native code, GPU, or accelerator are required or claimed.
+- **Layout.** The importable package directory is `envfile` under `src`.
 - **Language:** Python 3.10 or newer, including the CPython and PyPy implementations the project tests.
 - **Platforms:** Intended to work on Linux, macOS, and Windows. This case’s acceptance targets Linux with a supported interpreter. Unix FIFOs are a Unix-only source; they are not a Windows acceptance obligation.
 - **Hardware:** CPU-only. The mandatory execution substrate is a real host able to import python-envfile from this repository’s source tree and apply a short in-memory `NAME=value` stream onto the process environment.

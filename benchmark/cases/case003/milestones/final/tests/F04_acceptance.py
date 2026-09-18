@@ -1088,6 +1088,9 @@ def test_yaml11_pairs_dump_is_not_pairs_node():
         require_document(load(text, with_yaml11_schema()))
     )
     print(f"pairs dump-then-load={restored!r}", flush=True)
+    assert _looks_like_named_pairs(restored), (
+        f"pairs dump-then-load must restore the pairs structure; got {restored!r}"
+    )
 
     key, value = unique_token(), unique_token()
     runtime_src = f"!!pairs [ {key}: {value} ]\n"
@@ -1113,6 +1116,15 @@ def test_yaml11_pairs_dump_is_not_pairs_node():
         require_document(load(runtime_text, with_yaml11_schema()))
     )
     print(f"runtime pairs dump-then-load={runtime_restored!r}", flush=True)
+    assert len(runtime_restored) == 1
+    restored_pair = require_sequence(runtime_restored[0])
+    assert len(restored_pair) == 2
+    assert is_string_text(restored_pair[0], key) and is_string_text(
+        restored_pair[1], value
+    ), (
+        f"runtime pairs dump-then-load must restore {key!r}/{value!r}; "
+        f"got {runtime_restored!r}"
+    )
 
 
 def test_core_pairs_is_not_yaml11_pairs():

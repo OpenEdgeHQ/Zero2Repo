@@ -53,6 +53,7 @@ from _helpers import (
     require_flow_mapping,
     require_plain_mapping,
     require_quoted_scalar_dump,
+    require_real_map,
     require_sequence,
     require_single_quoted_scalar,
     require_yaml_text,
@@ -1139,13 +1140,47 @@ def test_dump_runtime_sort_vs_insertion():
     )
 
 
+def _inner_mapping_key(value):
+    """Sole string key of a one-entry mapping used as a Map key."""
+    if isinstance(value, JsMap):
+        assert len(value.entries) == 1, f"complex key Map must have one entry: {value!r}"
+        key = value.entries[0][0]
+        assert isinstance(key, str), f"inner Map key is not a string: {key!r}"
+        return key
+    mapping = require_plain_mapping(value)
+    keys = list(mapping.keys())
+    assert len(keys) == 1, f"complex key object must have one property: {keys!r}"
+    key = keys[0]
+    assert isinstance(key, str), f"inner object key is not a string: {key!r}"
+    return key
+
+
+def _assert_complex_key_order(mapping, first_inner: str, second_inner: str, dump_opts) -> None:
+    restored = require_real_map(
+        require_document(
+            dump_then_parse(
+                mapping,
+                dump_options=dump_opts,
+                load_options=with_real_map_schema(),
+            )
+        )
+    )
+    assert len(restored.entries) == 2, f"restored Map size: {restored!r}"
+    got_first = _inner_mapping_key(restored.entries[0][0])
+    got_second = _inner_mapping_key(restored.entries[1][0])
+    print(
+        f"complex_key_order first={got_first!r} second={got_second!r} "
+        f"dump_opts={dump_opts!r}",
+        flush=True,
+    )
+    assert got_first == first_inner and got_second == second_inner, (
+        f"complex key order must stay {first_inner!r} then {second_inner!r}; "
+        f"got {got_first!r} then {got_second!r}"
+    )
+
+
 def test_dump_complex_keys_not_reordered():
     mapping = JsMap(entries=[({"b": 2}, "y"), ({"a": 1}, "x")], object_id=-1)
-    unsorted = _dumped(mapping, with_real_map_schema())
-    print(f"complex_unsorted={unsorted!r}", flush=True)
-    assert mapping_key_position(unsorted, "b") < mapping_key_position(
-        unsorted, "a"
-    )
     simple_sorted = _dumped({"b": 1, "a": 2}, with_sort_keys())
     print(f"simple_sorted_live={simple_sorted!r}", flush=True)
     assert mapping_key_position(simple_sorted, "a") < mapping_key_position(
@@ -1154,15 +1189,12 @@ def test_dump_complex_keys_not_reordered():
         f"live baseline: comparator-less sort must reorder simple keys; "
         f"got {simple_sorted!r}"
     )
-    sorted_text = _dumped(
+    _assert_complex_key_order(mapping, "b", "a", with_real_map_schema())
+    _assert_complex_key_order(
         mapping,
+        "b",
+        "a",
         merge_dump_options(with_real_map_schema(), with_sort_keys()),
-    )
-    print(f"complex_sorted={sorted_text!r}", flush=True)
-    assert mapping_key_position(sorted_text, "b") < mapping_key_position(
-        sorted_text, "a"
-    ), (
-        f"sort must not reorder complex keys; got {sorted_text!r}"
     )
 
 
@@ -1176,16 +1208,11 @@ def test_dump_runtime_complex_keys_not_reordered():
         f"live baseline: sort must reorder simple keys; got {simple_sorted!r}"
     )
     mapping = complex_key_map(first, "y", second, "x")
-    sorted_text = _dumped(
+    _assert_complex_key_order(
         mapping,
+        first,
+        second,
         merge_dump_options(with_real_map_schema(), with_sort_keys()),
-    )
-    print(f"runtime_complex={sorted_text!r}", flush=True)
-    assert mapping_key_position(sorted_text, first) < mapping_key_position(
-        sorted_text, second
-    ), (
-        f"runtime complex keys must keep insertion order under sort; "
-        f"got {sorted_text!r}"
     )
 
 
