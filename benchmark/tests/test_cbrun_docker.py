@@ -159,6 +159,9 @@ def test_codex_setup_writes_config_without_secrets_in_command(tmp_path: Path) ->
         cfg = container.exec("cat /root/.codex/config.toml")
         assert cfg.exit_code == 0
         assert "http://example/v1" in (cfg.tail or "")
+        assert "[model_providers.gateway]" in (cfg.tail or "")
+        assert "supports_websockets = false" in (cfg.tail or "")
+        assert "openai_base_url" not in (cfg.tail or "")
         # Setup script itself must not echo secrets when logged.
         assert "set -x" not in (inv.setup_script or "")
     finally:

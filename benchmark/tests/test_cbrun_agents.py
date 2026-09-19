@@ -247,6 +247,11 @@ def test_codex_has_setup_script() -> None:
     assert "config.toml" in inv.setup_script
     assert inv.env["OPENAI_API_KEY"] == "sk-x"
     assert inv.env["CODEX_HOME"] == "/root/.codex"
+    # A gateway is reached through a named HTTPS-only provider, never by
+    # re-pointing the built-in ``openai`` provider (which insists on WSS first).
+    assert "openai_base_url" not in inv.setup_script
+    assert "[model_providers.gateway]" in inv.setup_script
+    assert 'model_provider = "gateway"' in inv.setup_script
 
 
 def test_provider_env_opencode_anthropic_forwards_base_url() -> None:

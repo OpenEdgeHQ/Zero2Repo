@@ -111,9 +111,18 @@ export OPENAI_BASE_URL=https://your-gateway.example/v1
 cbrun --case case001 --backend codex --model openai/gpt-4o-mini
 ```
 
-cbrun writes `openai_base_url` into `~/.codex/config.toml` during setup. Use
-`model_prefix: strip` in a custom spec if your Codex install expects leaf model
-names only.
+When `OPENAI_BASE_URL` is set, cbrun writes a named `gateway` provider into
+`~/.codex/config.toml` (`base_url`, `env_key = "OPENAI_API_KEY"`,
+`wire_api = "responses"`, `supports_websockets = false`) and selects it with
+`model_provider = "gateway"`. It does **not** write `openai_base_url`: that only
+re-points Codex's built-in `openai` provider, which tries the Responses
+WebSocket transport first and cannot be overridden, so behind an HTTPS-only
+gateway every turn burns the full `Reconnecting... 1/5 … 5/5` budget (about
+75–120s) before falling back to HTTPS. Set
+`CBRUN_CODEX_GATEWAY_WEBSOCKETS=1` only for a gateway known to carry WSS.
+Without `OPENAI_BASE_URL` the built-in provider and `auth.json` are used
+unchanged. Use `model_prefix: strip` in a custom spec if your Codex install
+expects leaf model names only.
 
 Codex reasoning effort is optional. Set `--reasoning-effort` or
 `CBRUN_CODEX_REASONING_EFFORT` to `minimal|low|medium|high|xhigh`. When set,

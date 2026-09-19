@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .agent_hooks import claude_code_env, opencode_env
+from .codex_config import (
+    CODEX_GATEWAY_WEBSOCKETS_ENV,
+    GATEWAY_MODEL_PROVIDER_LINE,
+    GATEWAY_PROVIDER_TABLE,
+)
 
 __all__ = [
     "AGENT_USER",
@@ -362,16 +367,30 @@ def _claude_config_dir(spec: AgentSpec) -> str:
     return f"{home}/{AGENT_CLAUDE_CONFIG_DIRNAME}"
 
 
-_CODEX_SETUP = """set -eu
+_CODEX_GATEWAY_TABLE = GATEWAY_PROVIDER_TABLE.format(
+    base_url="${OPENAI_BASE_URL}", websockets="${CBRUN_GATEWAY_WS}"
+)
+
+# Top-level keys first, the provider table last: TOML attaches every key after
+# a ``[table]`` header to that table.
+_CODEX_SETUP = f"""set -eu
 mkdir -p "$CODEX_HOME"
-if [ -n "${OPENAI_API_KEY:-}" ]; then
-  printf '%s\\n' "{\\"OPENAI_API_KEY\\": \\"${OPENAI_API_KEY}\\"}" > "$CODEX_HOME/auth.json"
+if [ -n "${{OPENAI_API_KEY:-}}" ]; then
+  printf '%s\\n' "{{\\"OPENAI_API_KEY\\": \\"${{OPENAI_API_KEY}}\\"}}" > "$CODEX_HOME/auth.json"
 fi
-if [ -n "${OPENAI_BASE_URL:-}" ]; then
-  printf '%s\\n' "openai_base_url = \\"${OPENAI_BASE_URL}\\"" >> "$CODEX_HOME/config.toml"
+if [ -n "${{OPENAI_BASE_URL:-}}" ]; then
+  printf '%s' '{GATEWAY_MODEL_PROVIDER_LINE}' >> "$CODEX_HOME/config.toml"
 fi
-if [ -n "${CBRUN_CODEX_REASONING_EFFORT:-}" ]; then
-  printf '%s\\n' "model_reasoning_effort = \\"${CBRUN_CODEX_REASONING_EFFORT}\\"" >> "$CODEX_HOME/config.toml"
+if [ -n "${{CBRUN_CODEX_REASONING_EFFORT:-}}" ]; then
+  printf '%s\\n' "model_reasoning_effort = \\"${{CBRUN_CODEX_REASONING_EFFORT}}\\"" >> "$CODEX_HOME/config.toml"
+fi
+if [ -n "${{OPENAI_BASE_URL:-}}" ]; then
+  case "${{{CODEX_GATEWAY_WEBSOCKETS_ENV}:-}}" in
+    1|true|yes|TRUE|YES) CBRUN_GATEWAY_WS=true ;;
+    *) CBRUN_GATEWAY_WS=false ;;
+  esac
+  cat >> "$CODEX_HOME/config.toml" <<TOML
+{_CODEX_GATEWAY_TABLE}TOML
 fi
 if [ -f "$CODEX_HOME/config.toml" ]; then
   cat "$CODEX_HOME/config.toml"
@@ -381,7 +400,12 @@ fi
 _BUILTIN_SPECS: dict[str, AgentSpec] = {
     "codex": AgentSpec(
         name="codex",
-        env_passthrough=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CBRUN_CODEX_REASONING_EFFORT"),
+        env_passthrough=(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "CBRUN_CODEX_REASONING_EFFORT",
+            CODEX_GATEWAY_WEBSOCKETS_ENV,
+        ),
         setup_script=_CODEX_SETUP,
         run_as="root",
         model_prefix="keep",

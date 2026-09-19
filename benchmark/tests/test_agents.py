@@ -79,6 +79,37 @@ def test_codex_shim_preserves_provider_prefix_when_requested(tmp_path: Path) -> 
     assert "--model openai/gpt-5.5" in agent._build_codex_exec_command("x", "")
 
 
+def test_codex_shim_gateway_provider_matches_cbrun(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+    import tomllib
+
+    monkeypatch.delenv("CBRUN_CODEX_GATEWAY_WEBSOCKETS", raising=False)
+    agent = CodingBenchCodex(logs_dir=tmp_path, model_name="openai/gpt-5.5")
+    command = agent._gateway_provider_command()
+    assert "openai_base_url" not in command
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    proc = subprocess.run(
+        ["bash", "-c", command],
+        env={"CODEX_HOME": str(codex_home), "OPENAI_BASE_URL": "https://gw.example/v1"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    cfg = tomllib.loads((codex_home / "config.toml").read_text())
+    assert cfg["model_provider"] == "gateway"
+    provider = cfg["model_providers"]["gateway"]
+    assert provider["base_url"] == "https://gw.example/v1"
+    assert provider["env_key"] == "OPENAI_API_KEY"
+    assert provider["wire_api"] == "responses"
+    assert provider["supports_websockets"] is False
+
+    monkeypatch.setenv("CBRUN_CODEX_GATEWAY_WEBSOCKETS", "true")
+    assert "supports_websockets = true" in agent._gateway_provider_command()
+
+
 def test_codex_shim_allows_explicit_profile(tmp_path: Path) -> None:
     agent = CodingBenchCodex(
         logs_dir=tmp_path,

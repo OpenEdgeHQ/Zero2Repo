@@ -18,6 +18,13 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 
+from cbrun.codex_config import (
+    CODEX_GATEWAY_WEBSOCKETS_ENV,
+    GATEWAY_MODEL_PROVIDER_LINE,
+    GATEWAY_PROVIDER_TABLE,
+    gateway_websockets_enabled,
+)
+
 
 class CodingBenchCodex(Codex):
     """Use image-baked or npm-global Codex CLI with ``codex --profile lb``."""
@@ -112,6 +119,21 @@ class CodingBenchCodex(Codex):
             f"{EnvironmentPaths.agent_dir / self._OUTPUT_FILENAME}"
         )
 
+    def _gateway_provider_command(self) -> str:
+        websockets = gateway_websockets_enabled(
+            self._get_env(CODEX_GATEWAY_WEBSOCKETS_ENV)
+        )
+        table = GATEWAY_PROVIDER_TABLE.format(
+            base_url="${OPENAI_BASE_URL}",
+            websockets="true" if websockets else "false",
+        )
+        return (
+            '\ncat >>"$CODEX_HOME/config.toml" <<TOML\n'
+            + GATEWAY_MODEL_PROVIDER_LINE
+            + table
+            + "TOML\n"
+        )
+
     def _build_profile_config(self) -> str:
         if not self.model_name:
             raise ValueError("Model name is required")
@@ -173,11 +195,10 @@ class CodingBenchCodex(Codex):
 
         if openai_base_url := self._get_env("OPENAI_BASE_URL"):
             env["OPENAI_BASE_URL"] = openai_base_url
-            setup_command += (
-                '\ncat >>"$CODEX_HOME/config.toml" <<TOML\n'
-                'openai_base_url = "${OPENAI_BASE_URL}"\n'
-                "TOML\n"
-            )
+            # The gateway provider authenticates through ``env_key``, so the
+            # key must be in the process env even on the auth.json path.
+            env.setdefault("OPENAI_API_KEY", self._get_env("OPENAI_API_KEY") or "")
+            setup_command += self._gateway_provider_command()
 
         if self.codex_profile:
             profile_file = shlex.quote(f"{remote_codex_home}/{self.codex_profile}.config.toml")

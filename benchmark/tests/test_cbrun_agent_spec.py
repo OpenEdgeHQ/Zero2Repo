@@ -97,6 +97,62 @@ def test_codex_reasoning_effort_omitted_when_unset() -> None:
     assert "model_reasoning_effort" in (inv.setup_script or "")
 
 
+def _run_codex_setup(inv: agent_spec.AgentInvocation, codex_home: Path, **extra: str) -> dict:
+    import subprocess
+    import tomllib
+
+    env = dict(inv.env, CODEX_HOME=str(codex_home), **extra)
+    proc = subprocess.run(
+        ["bash", "-c", inv.setup_script or "true"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "sk-secret" not in proc.stdout, "setup must not echo auth.json"
+    cfg_path = codex_home / "config.toml"
+    return tomllib.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+
+
+def test_codex_gateway_writes_https_only_named_provider(tmp_path: Path) -> None:
+    inv = agent_spec.resolve_agent(
+        backend="codex",
+        model="openai/gpt-4o-mini",
+        environ={
+            "OPENAI_API_KEY": "sk-secret",
+            "OPENAI_BASE_URL": "https://gw.example/v1",
+            "CBRUN_CODEX_REASONING_EFFORT": "medium",
+        },
+    )
+    cfg = _run_codex_setup(inv, tmp_path / "a")
+    assert "openai_base_url" not in cfg
+    assert cfg["model_provider"] == "gateway"
+    # Top-level keys must not be swallowed by the provider table.
+    assert cfg["model_reasoning_effort"] == "medium"
+    provider = cfg["model_providers"]["gateway"]
+    assert provider["base_url"] == "https://gw.example/v1"
+    assert provider["env_key"] == "OPENAI_API_KEY"
+    assert provider["wire_api"] == "responses"
+    assert provider["supports_websockets"] is False
+
+    ws = _run_codex_setup(inv, tmp_path / "b", CBRUN_CODEX_GATEWAY_WEBSOCKETS="1")
+    assert ws["model_providers"]["gateway"]["supports_websockets"] is True
+    assert "CBRUN_CODEX_GATEWAY_WEBSOCKETS" in agent_spec.builtin_spec("codex").env_passthrough
+
+
+def test_codex_without_gateway_keeps_builtin_provider(tmp_path: Path) -> None:
+    inv = agent_spec.resolve_agent(
+        backend="codex",
+        model="openai/gpt-4o-mini",
+        environ={"OPENAI_API_KEY": "sk-secret"},
+    )
+    cfg = _run_codex_setup(inv, tmp_path)
+    assert "model_provider" not in cfg
+    assert "model_providers" not in cfg
+    assert (tmp_path / "auth.json").exists()
+
+
 def test_codex_reasoning_effort_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="CBRUN_CODEX_REASONING_EFFORT"):
         agent_spec.resolve_agent(
