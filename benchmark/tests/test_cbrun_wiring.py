@@ -112,10 +112,17 @@ class _FakeContainer:
         self._exec_result = exec_result
         self.injected: list[str] = []
         self.written: list[str] = []
+        self.commands: list[str] = []
+        self.contents: dict[str, bytes] = {}
+        self.judge_env: dict[str, str] = {}
 
     def exec(self, command, *, env=None, timeout_sec=None, workdir=None, user=None):
+        self.commands.append(command)
         if "final_judge.py" in command:
+            self.judge_env = dict(env or {})
             return self._exec_result
+        if "command -v node" in command and "readlink" in command:
+            return ExecResult(exit_code=0, tail="/opt/nodejs/bin/node\n")
         return ExecResult(exit_code=0)
 
     def cp_to(self, src, dst):
@@ -123,6 +130,7 @@ class _FakeContainer:
 
     def write_file(self, path, content):
         self.written.append(path)
+        self.contents[path] = content
 
     def cp_from(self, src, dst):
         if self._report is None:
@@ -266,6 +274,132 @@ def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) 
             {"gpus": None, "network": "none", "mounts": []},
         )
     ]
+
+
+_OK_REPORT = {
+    "reward": 1.0,
+    "judge_error": None,
+    "final": {
+        "counts_parsed": True,
+        "total_count": 1,
+        "passed_count": 1,
+        "failed_count": 0,
+        "error_count": 0,
+    },
+}
+
+
+def _run_judge_with_denylist(tmp_path: Path, denylist, judge_bans=()) -> _FakeContainer:
+    from types import SimpleNamespace
+
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(report=_OK_REPORT, exec_result=ExecResult(exit_code=0))
+    judge.run_judge(
+        fake,  # type: ignore[arg-type]
+        tests_final_dir=final_dir,
+        task_toml=b"x = 1\n",
+        test_timeout_sec=60.0,
+        artifacts_dir=tmp_path / "art",
+        denylist=SimpleNamespace(**denylist) if denylist else None,
+        judge_bans=judge_bans,
+    )
+    return fake
+
+
+def test_npm_import_ban_installs_node_shim_and_probes_it(tmp_path: Path) -> None:
+    """The Node gate must not depend on the hidden harness keeping NODE_OPTIONS:
+    a ``node`` wrapper with the ban baked in goes first on PATH via the launcher."""
+    fake = _run_judge_with_denylist(
+        tmp_path, {"ecosystem": "npm", "import_ban": ("js-yaml", "js-yaml/")}, judge_bans=("socket",)
+    )
+    # Both CJS and ESM preloads plus the hooks module are injected.
+    assert judge.CONTAINER_NODE_BLOCK_PATH in fake.injected
+    assert judge.CONTAINER_NODE_BLOCK_ESM_PATH in fake.injected
+    assert judge.CONTAINER_NODE_BLOCK_HOOKS_PATH in fake.injected
+    shim = fake.contents[judge.CONTAINER_NODE_SHIM_PATH].decode()
+    assert shim.startswith("#!/bin/sh")
+    exports = [line for line in shim.splitlines() if line.startswith("export ")]
+    assert exports == [
+        "export CODING_BENCH_WORKSPACE=/app",
+        "export CODING_BENCH_IMPORT_BAN=js-yaml,js-yaml/",
+        "export CODING_BENCH_JUDGE_BANS=socket",
+    ]
+    assert shim.rstrip().endswith(
+        f"exec /opt/nodejs/bin/node --require {judge.CONTAINER_NODE_BLOCK_PATH} "
+        f"--import {judge.CONTAINER_NODE_BLOCK_ESM_PATH} \"$@\""
+    )
+    env = fake.judge_env
+    assert env["NODE_OPTIONS"] == (
+        f"--require {judge.CONTAINER_NODE_BLOCK_PATH} --import {judge.CONTAINER_NODE_BLOCK_ESM_PATH}"
+    )
+    assert env[judge.NODE_SHIM_DIR_ENV] == judge.CONTAINER_NODE_SHIM_DIR
+    # A canary ran before the judge: both hooks refuse a banned import, shim first on PATH.
+    probes = [c for c in fake.commands if "esm hook inactive" in c]
+    assert probes and "cjs hook inactive" in probes[0] and "node shim not first on PATH" in probes[0]
+    assert fake.commands.index(probes[0]) < fake.commands.index(
+        next(c for c in fake.commands if "final_judge.py" in c)
+    )
+
+
+def test_npm_gate_probe_failure_is_a_hard_error(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(report=_OK_REPORT, exec_result=ExecResult(exit_code=0))
+    real_exec = fake.exec
+
+    def failing_probe(command, **kwargs):
+        if "esm hook inactive" in command:
+            return ExecResult(exit_code=3, tail="esm hook inactive")
+        return real_exec(command, **kwargs)
+
+    fake.exec = failing_probe  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="gate probe failed"):
+        judge.run_judge(
+            fake,  # type: ignore[arg-type]
+            tests_final_dir=final_dir,
+            task_toml=b"x = 1\n",
+            test_timeout_sec=60.0,
+            artifacts_dir=tmp_path / "art",
+            denylist=SimpleNamespace(ecosystem="npm", import_ban=("js-yaml",)),
+        )
+
+
+def test_npm_gate_requires_node_in_judge_image(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(report=_OK_REPORT, exec_result=ExecResult(exit_code=0))
+    real_exec = fake.exec
+
+    def no_node(command, **kwargs):
+        if "command -v node" in command:
+            return ExecResult(exit_code=0, tail="")
+        return real_exec(command, **kwargs)
+
+    fake.exec = no_node  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="no `node` is on PATH"):
+        judge.run_judge(
+            fake,  # type: ignore[arg-type]
+            tests_final_dir=final_dir,
+            task_toml=b"x = 1\n",
+            test_timeout_sec=60.0,
+            artifacts_dir=tmp_path / "art",
+            denylist=SimpleNamespace(ecosystem="npm", import_ban=("js-yaml",)),
+        )
+
+
+def test_pip_import_ban_does_not_touch_node(tmp_path: Path) -> None:
+    fake = _run_judge_with_denylist(tmp_path, {"ecosystem": "pip", "import_ban": ("yaml",)})
+    assert judge.CONTAINER_NODE_SHIM_PATH not in fake.contents
+    assert judge.CONTAINER_NODE_BLOCK_PATH not in fake.injected
+    assert "NODE_OPTIONS" not in fake.judge_env
+    assert judge.NODE_SHIM_DIR_ENV not in fake.judge_env
+    assert fake.judge_env["CODING_BENCH_IMPORT_BAN"] == "yaml"
 
 
 def test_probe_cli_version_fails_fast_with_path() -> None:

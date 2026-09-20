@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .assets import load_case
-from .denylist import require_denylist
+from .denylist import require_denylist, scan_workspace_imports
 from .docker_env import Container
 from .images import ensure_agent_image
 from .isolation import synthesize_task_toml
@@ -24,8 +24,11 @@ __all__ = [
     "parse_expect_reward",
     "reward_matches",
     "iter_controls",
+    "static_scan_violation",
     "main",
 ]
+
+DENYLIST_SCAN_REPORT = "denylist_scan.json"
 
 
 def parse_expect_reward(value: str | int | float | None) -> float | None:
@@ -108,6 +111,28 @@ def _workspace_dir(control_or_app: Path) -> Path:
     return app if app.is_dir() else control_or_app
 
 
+def static_scan_violation(workspace: Path, denylist, out_dir: Path) -> str | None:
+    """Run the same post-submit source scan a trial applies before judging.
+
+    Writes ``denylist_scan.json`` next to the judge artifacts. Returns the
+    violation summary when a banned import is present, else ``None``. A
+    trial scores such a workspace 0 without judging; rejudge must not be
+    more lenient than that.
+    """
+    if denylist is None:
+        return None
+    hits = scan_workspace_imports(workspace, denylist)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / DENYLIST_SCAN_REPORT).write_text(
+        json.dumps({"import_hits": [hit.__dict__ for hit in hits]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if not hits:
+        return None
+    summary = "; ".join(f"{hit.token}@{hit.path}:{hit.line}" for hit in hits[:5])
+    return f"upstream import/symbol present in workspace: {summary}"
+
+
 def rejudge_workspace(
     *,
     case_dir: Path,
@@ -144,6 +169,26 @@ def rejudge_workspace(
     test_timeout_sec = limits.max_test_timeout_sec
     task_toml = synthesize_task_toml(case, step)
     out_dir.mkdir(parents=True, exist_ok=True)
+    violation = static_scan_violation(_workspace_dir(workspace), denylist, out_dir)
+    if violation is not None:
+        (out_dir / "rejudge.json").write_text(
+            json.dumps(
+                {
+                    "reward": 0.0,
+                    "judge_error": None,
+                    "denylist_violation": violation,
+                    "failed_tests": [],
+                    "error_tests": [],
+                    "failed_count": None,
+                    "error_count": None,
+                    "total_count": None,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return 0.0
     from .substrates import SubstrateUnavailable, mounted_substrates
 
     manifest = getattr(step, "test_manifest", None) or {}
@@ -272,13 +317,21 @@ def main(argv: list[str] | None = None) -> int:
             report = json.loads(report_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             report = {}
-    issues, warnings = check_must_fail_tests(
-        must_fail_tests=must_fail,
-        failed_tests=[str(x) for x in (report.get("failed_tests") or [])],
-        error_tests=[str(x) for x in (report.get("error_tests") or [])],
-        failed_count=report.get("failed_count"),
-        error_count=report.get("error_count"),
-    )
+    violation = report.get("denylist_violation")
+    if violation:
+        print(f"denylist_violation: {violation}", flush=True)
+    if violation and must_fail:
+        # The judge never ran, so a named-failure expectation cannot be met.
+        issues = ["must_fail_tests set but the static denylist scan preempted the judge"]
+        warnings = []
+    else:
+        issues, warnings = check_must_fail_tests(
+            must_fail_tests=must_fail,
+            failed_tests=[str(x) for x in (report.get("failed_tests") or [])],
+            error_tests=[str(x) for x in (report.get("error_tests") or [])],
+            failed_count=report.get("failed_count"),
+            error_count=report.get("error_count"),
+        )
     if report_path.is_file():
         report["warnings"] = warnings
         report["must_fail_ok"] = not issues

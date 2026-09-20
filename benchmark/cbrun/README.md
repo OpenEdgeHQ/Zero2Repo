@@ -206,7 +206,26 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
   import/require/use of banned tokens (docstrings and string literals do not
   count). If found, the agent gets one fix retry (`--denylist-fix-retries`,
   default 1) and must write the submit file again; if violations remain, the
-  trial scores `reward=0` without judging.
+  trial scores `reward=0` without judging. `rejudge` (and therefore
+  `run_controls`) applies the same scan to the host workspace before it
+  starts a judge container and writes `denylist_scan.json` next to the judge
+  artifacts, so a control or a re-scored trial is never judged more leniently
+  than a live trial. The scan skips `dist/` / `build/` / `node_modules/`;
+  what actually executes is covered by the judge-time import ban below.
+* Judge-time import ban. The hidden tests run with a process-level ban on
+  importing the upstream root from code under `/app`. For `pip` cases this is
+  a `sys.meta_path` finder in the pytest launcher. For `npm` cases cbrun
+  copies a CommonJS `--require` hook and an ESM `--import` hook into
+  `/tests/`, writes `/tests/bin/node` (a wrapper that bakes the ban variables
+  and both preload flags in front of the image's real `node`), and the
+  launcher puts that directory first on `PATH`. Hidden harnesses routinely
+  rebuild the child environment from a keep-list (`PATH` survives,
+  `NODE_OPTIONS` does not), so the ban rides on the executable, not on an
+  inherited variable. Before the judge starts, a canary asserts that both
+  hooks refuse the first banned root on this image's Node and that the shim
+  wins `PATH`; a failed canary is a hard `RuntimeError`, never a silent pass.
+  Hidden harnesses must resolve `node` through `PATH`; a hardcoded
+  interpreter path bypasses the gate.
 * `--enforce-denylist` is on by default. Missing file or empty ban lists
   fail before any container starts. `--no-enforce-denylist` skips the scan
   and `summary.json` records `denylist_enforced=false` so a skipped scan is
@@ -268,7 +287,9 @@ python -m cbrun.rejudge --case case001 --workspace … --out …
 is absent, `rejudge` / `run_controls` still compare **reward only**. When it
 is present, each name must appear in pytest `FAILED` (not `ERROR` / missing).
 Collection / import-ban / judge_bans controls stay reward-only; do not
-promote those reds into `must_fail_tests`. `controls/` is a maintainer-local
+promote those reds into `must_fail_tests`. A control caught by the static
+scan never reaches the judge, so `must_fail_tests` on it is reported as an
+error rather than quietly satisfied. `controls/` is a maintainer-local
 asset (gitignored, not published). A public clone without it is complete:
 `run_controls` / `iter_controls` are empty and unit tests do not need it.
 

@@ -602,7 +602,7 @@ def test_rejudge_passes_denylist_to_judge(tmp_path: Path, monkeypatch: pytest.Mo
 
     seen: dict[str, object] = {}
     case = SimpleNamespace(case_id="caseX", judge_bans=("socket",))
-    spec = object()
+    spec = SimpleNamespace(ecosystem="pip", import_ban=("yaml",))
 
     class _Ctr:
         def remove(self) -> None:
@@ -632,6 +632,138 @@ def test_rejudge_passes_denylist_to_judge(tmp_path: Path, monkeypatch: pytest.Mo
     assert seen["denylist"] is spec
     assert seen["judge_bans"] == ("socket",)
     assert seen["removed"] is True
+
+
+def _rejudge_stubs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spec) -> dict[str, object]:
+    from types import SimpleNamespace
+
+    from cbrun import rejudge
+
+    seen: dict[str, object] = {"judged": False}
+    case = SimpleNamespace(case_id="caseX", judge_bans=())
+    monkeypatch.setattr(rejudge, "load_case", lambda d: case)
+    monkeypatch.setattr(rejudge, "require_denylist", lambda d: spec)
+    monkeypatch.setattr(
+        rejudge,
+        "ensure_agent_image",
+        lambda *a, **k: SimpleNamespace(agent_image="img", tests_cache_dir=tmp_path),
+    )
+    monkeypatch.setattr(rejudge, "discover_steps", lambda c: [object()])
+    monkeypatch.setattr(rejudge, "synthesize_task_toml", lambda c, s: b"")
+
+    def _start(*a, **k):
+        seen["judged"] = True
+        raise AssertionError("judge container must not start")
+
+    monkeypatch.setattr(rejudge.Container, "start", staticmethod(_start))
+    return seen
+
+
+def test_rejudge_static_scan_preempts_judge_like_a_trial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trial scores a workspace that still imports a banned root 0 without
+    judging; rejudge must apply the same gate, not judge it more leniently."""
+    from types import SimpleNamespace
+
+    from cbrun import rejudge
+
+    spec = SimpleNamespace(ecosystem="npm", import_ban=("js-yaml", "js-yaml/"))
+    seen = _rejudge_stubs(monkeypatch, tmp_path, spec)
+    workspace = tmp_path / "control" / "app" / "src"
+    workspace.mkdir(parents=True)
+    (workspace / "index.ts").write_text('import yaml from "js-yaml";\nexport const load = yaml.load;\n')
+
+    out = tmp_path / "out"
+    reward = rejudge.rejudge_workspace(
+        case_dir=tmp_path, workspace=tmp_path / "control", out_dir=out, cache_root=tmp_path
+    )
+    assert reward == 0.0
+    assert seen["judged"] is False
+    payload = json.loads((out / "rejudge.json").read_text())
+    assert "js-yaml@" in payload["denylist_violation"]
+    scan = json.loads((out / rejudge.DENYLIST_SCAN_REPORT).read_text())
+    assert scan["import_hits"][0]["token"] == "js-yaml"
+    assert scan["import_hits"][0]["line"] == 1
+
+
+def test_rejudge_static_scan_skipped_when_denylist_not_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from cbrun import rejudge
+
+    spec = SimpleNamespace(ecosystem="npm", import_ban=("js-yaml",))
+    _rejudge_stubs(monkeypatch, tmp_path, spec)
+    (tmp_path / "ws").mkdir()
+    (tmp_path / "ws" / "a.js").write_text('require("js-yaml")\n')
+
+    class _Ctr:
+        def remove(self) -> None:
+            pass
+
+    monkeypatch.setattr(rejudge.Container, "start", staticmethod(lambda *a, **k: _Ctr()))
+    monkeypatch.setattr(rejudge, "import_app", lambda c, w: None)
+    monkeypatch.setattr(
+        rejudge, "run_judge", lambda c, **k: SimpleNamespace(reward=1.0, judge_error=None, report={})
+    )
+    reward = rejudge.rejudge_workspace(
+        case_dir=tmp_path,
+        workspace=tmp_path / "ws",
+        out_dir=tmp_path / "out",
+        cache_root=tmp_path,
+        enforce_denylist=False,
+    )
+    assert reward == 1.0
+    assert not (tmp_path / "out" / rejudge.DENYLIST_SCAN_REPORT).exists()
+
+
+def test_rejudge_main_rejects_must_fail_tests_when_scan_preempted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from types import SimpleNamespace
+
+    from cbrun import rejudge
+
+    spec = SimpleNamespace(ecosystem="pip", import_ban=("tomllib",))
+    _rejudge_stubs(monkeypatch, tmp_path, spec)
+    cases_root = tmp_path / "cases"
+    (cases_root / "caseX" / "source").mkdir(parents=True)
+    (cases_root / "caseX" / "source" / "manifest.json").write_text("{}", encoding="utf-8")
+    control = tmp_path / "ctl"
+    (control / "app").mkdir(parents=True)
+    (control / "app" / "p.py").write_text("import tomllib\n", encoding="utf-8")
+    (control / "expect.json").write_text(
+        json.dumps({"reward": 0, "must_fail_tests": ["test_named"]}), encoding="utf-8"
+    )
+    code = rejudge.main(
+        [
+            "--case", "caseX",
+            "--workspace", str(control),
+            "--cases-root", str(cases_root),
+            "--cache-root", str(tmp_path / "cache"),
+            "--out", str(tmp_path / "out"),
+            "--expect-reward", "0",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "denylist_violation: upstream import/symbol present" in out
+    assert "static denylist scan preempted the judge" in out
+    # Reward-only controls (no must_fail_tests) are satisfied by the gate alone.
+    (control / "expect.json").write_text(json.dumps({"reward": 0}), encoding="utf-8")
+    code = rejudge.main(
+        [
+            "--case", "caseX",
+            "--workspace", str(control),
+            "--cases-root", str(cases_root),
+            "--cache-root", str(tmp_path / "cache"),
+            "--out", str(tmp_path / "out2"),
+            "--expect-reward", "0",
+        ]
+    )
+    assert code == 0
 
 
 def test_rejudge_image_and_tests_dir_must_be_paired(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

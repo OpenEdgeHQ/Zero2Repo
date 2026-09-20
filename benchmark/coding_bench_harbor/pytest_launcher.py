@@ -150,6 +150,14 @@ def main(argv: list[str] | None = None) -> int:
         if raw:
             sys.path.insert(0, raw)
 
+    # `runuser` resets PATH from login.defs, so the judge's node shim dir is
+    # re-applied here, inside the process that spawns the hidden tests.
+    shim_dir = os.environ.get("CODING_BENCH_NODE_SHIM_DIR", "").strip()
+    if shim_dir:
+        current = os.environ.get("PATH", "")
+        parts = [p for p in current.split(os.pathsep) if p and p != shim_dir]
+        os.environ["PATH"] = os.pathsep.join([shim_dir, *parts])
+
     _install_import_ban(workspace)
     _install_side_effect_ban(workspace)
 

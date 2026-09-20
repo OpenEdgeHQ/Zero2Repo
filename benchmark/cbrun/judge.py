@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .docker_env import Container
+from .docker_env import Container, _shq
 
 __all__ = [
     "JudgeOutcome",
@@ -37,11 +37,24 @@ CONTAINER_TASK_TOML = "/task.toml"
 CONTAINER_JUDGE_PATH = "/tests/final_judge.py"
 CONTAINER_LAUNCHER_PATH = "/tests/pytest_launcher.py"
 CONTAINER_NODE_BLOCK_PATH = "/tests/_cb_import_block.cjs"
+NODE_BLOCK_ESM_SRC = _HARBOR / "_cb_import_block_esm.mjs"
+NODE_BLOCK_HOOKS_SRC = _HARBOR / "_cb_import_block_hooks.mjs"
+CONTAINER_NODE_BLOCK_ESM_PATH = "/tests/_cb_import_block_esm.mjs"
+CONTAINER_NODE_BLOCK_HOOKS_PATH = "/tests/_cb_import_block_hooks.mjs"
+# A `node` wrapper first on PATH. Hidden-test harnesses commonly rebuild the
+# child environment from a keep-list (PATH survives, NODE_OPTIONS does not),
+# so the ban must ride on the executable, not on inherited variables.
+CONTAINER_NODE_SHIM_DIR = "/tests/bin"
+CONTAINER_NODE_SHIM_PATH = f"{CONTAINER_NODE_SHIM_DIR}/node"
+NODE_SHIM_DIR_ENV = "CODING_BENCH_NODE_SHIM_DIR"
 CONTAINER_VERIFIER_DIR = "/logs/verifier"
 CONTAINER_APP = "/app"
 
 _PYTHON_BAN_ECOSYSTEMS = frozenset({"pip", "conda", "source"})
 _NODE_BAN_ECOSYSTEMS = frozenset({"npm"})
+_NODE_PRELOAD_FLAGS = (
+    f"--require {CONTAINER_NODE_BLOCK_PATH} --import {CONTAINER_NODE_BLOCK_ESM_PATH}"
+)
 
 
 @dataclass
@@ -109,6 +122,10 @@ def import_app(container: Container, host_app: Path) -> None:
     container.exec(f"chmod -R a+rX {CONTAINER_APP}")
 
 
+def _denylist_ecosystem(denylist) -> str:
+    return str(getattr(denylist, "ecosystem", "") or "").strip().lower()
+
+
 def _import_ban_env(denylist) -> dict[str, str]:
     """Process-level import ban, routed by ecosystem. Never enable both blindly."""
     if denylist is None:
@@ -116,14 +133,105 @@ def _import_ban_env(denylist) -> dict[str, str]:
     tokens = [str(x).strip() for x in getattr(denylist, "import_ban", ()) if str(x).strip()]
     if not tokens:
         return {}
-    eco = str(getattr(denylist, "ecosystem", "") or "").strip().lower()
+    eco = _denylist_ecosystem(denylist)
     env = {"CODING_BENCH_IMPORT_BAN": ",".join(tokens)}
     if eco in _PYTHON_BAN_ECOSYSTEMS:
         return env
     if eco in _NODE_BAN_ECOSYSTEMS:
-        env["NODE_OPTIONS"] = f"--require {CONTAINER_NODE_BLOCK_PATH}"
+        env["NODE_OPTIONS"] = _NODE_PRELOAD_FLAGS
         return env
     return env
+
+
+def _node_gate_files() -> tuple[tuple[Path, str], ...]:
+    files = (
+        (NODE_BLOCK_SRC, CONTAINER_NODE_BLOCK_PATH),
+        (NODE_BLOCK_ESM_SRC, CONTAINER_NODE_BLOCK_ESM_PATH),
+        (NODE_BLOCK_HOOKS_SRC, CONTAINER_NODE_BLOCK_HOOKS_PATH),
+    )
+    for src, _dst in files:
+        if not src.is_file():
+            raise RuntimeError(f"Node import-ban preload not found at {src}")
+    return files
+
+
+def _shell_export(name: str, value: str) -> str:
+    return f"export {name}={_shq(value)}"
+
+
+def _install_node_gate(container: Container, env: dict[str, str]) -> None:
+    """Install the Node import ban so it survives a harness that scrubs env.
+
+    Copies the preload scripts, writes ``/tests/bin/node`` (a wrapper that
+    bakes the ban variables and the preload flags in front of the real
+    interpreter), points ``CODING_BENCH_NODE_SHIM_DIR`` at it for the pytest
+    launcher to prepend to ``PATH``, and probes that both the CJS and the
+    ESM hook actually refuse a banned import on this image's Node. A probe
+    failure raises: the gate must never be silently absent.
+    """
+    for src, dst in _node_gate_files():
+        container.cp_to(src, dst)
+    real = container.exec('readlink -f "$(command -v node)" 2>/dev/null || true')
+    found = (real.tail or "").strip().splitlines()
+    real_node = found[-1].strip() if found else ""
+    if real.exit_code != 0 or not real_node.startswith("/"):
+        raise RuntimeError(
+            "denylist ecosystem needs a Node import ban but no `node` is on PATH "
+            "in the judge image"
+        )
+    if real_node == CONTAINER_NODE_SHIM_PATH:
+        raise RuntimeError("judge image already carries the cbrun node shim on PATH")
+    lines = ["#!/bin/sh", "# cbrun judge gate: baked ban env + preload hooks."]
+    for key in ("CODING_BENCH_WORKSPACE", "CODING_BENCH_IMPORT_BAN", "CODING_BENCH_JUDGE_BANS"):
+        if env.get(key):
+            lines.append(_shell_export(key, env[key]))
+    lines.append(f'exec {_shq(real_node)} {_NODE_PRELOAD_FLAGS} "$@"')
+    container.write_file(CONTAINER_NODE_SHIM_PATH, ("\n".join(lines) + "\n").encode())
+    container.exec(f"chmod 755 {CONTAINER_NODE_SHIM_PATH} && chmod a+rX {CONTAINER_NODE_SHIM_DIR}")
+    env[NODE_SHIM_DIR_ENV] = CONTAINER_NODE_SHIM_DIR
+    _probe_node_gate(container, env, real_node)
+
+
+def _node_gate_probe_script(token: str | None, real_node: str) -> str:
+    """Shell that exits non-zero unless both hooks refuse *token* and the shim wins PATH.
+
+    The banned import is expected to make node exit 1, so the probe captures
+    output instead of relying on pipeline status (the exec shell runs with
+    ``pipefail``).
+    """
+    lines = [
+        "set -u",
+        'D="$(mktemp -d)"',
+        "trap 'rm -rf \"$D\"' EXIT",
+        'mkdir -p "$D/app"',
+    ]
+    if token is not None:
+        node = f"{_shq(real_node)} {_NODE_PRELOAD_FLAGS}"
+        lines += [
+            f'printf \'import "%s";\\n\' {_shq(token)} > "$D/app/p.mjs"',
+            f'printf \'require("%s");\\n\' {_shq(token)} > "$D/app/p.cjs"',
+            f'export CODING_BENCH_WORKSPACE="$D/app" CODING_BENCH_IMPORT_BAN={_shq(token)}',
+            f'out="$({node} "$D/app/p.mjs" 2>&1 || true)"',
+            'case "$out" in *CODING_BENCH_IMPORT_BAN*) ;; *) echo "esm hook inactive: $out"; exit 3;; esac',
+            f'out="$({node} "$D/app/p.cjs" 2>&1 || true)"',
+            'case "$out" in *CODING_BENCH_IMPORT_BAN*) ;; *) echo "cjs hook inactive: $out"; exit 4;; esac',
+        ]
+    lines += [
+        f'found="$(PATH={CONTAINER_NODE_SHIM_DIR}:$PATH command -v node)"',
+        f'[ "$found" = {_shq(CONTAINER_NODE_SHIM_PATH)} ] || {{ echo "node shim not first on PATH: $found"; exit 5; }}',
+        f'{_shq(CONTAINER_NODE_SHIM_PATH)} -e "process.exit(0)" || {{ echo "node shim not executable"; exit 6; }}',
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _probe_node_gate(container: Container, env: dict[str, str], real_node: str) -> None:
+    banned = [x for x in env.get("CODING_BENCH_IMPORT_BAN", "").split(",") if x and not x.endswith("/")]
+    token = banned[0] if banned else None
+    res = container.exec(_node_gate_probe_script(token, real_node), timeout_sec=120.0)
+    if res.exit_code != 0:
+        raise RuntimeError(
+            f"Node import-ban gate probe failed (exit {res.exit_code}): {(res.tail or '').strip()[-400:]}"
+        )
 
 
 def run_judge(
@@ -153,10 +261,6 @@ def run_judge(
     container.cp_to(TEST_COUNTS_SRC, "/tests/test_counts.py")
     container.cp_to(LAUNCHER_SRC, CONTAINER_LAUNCHER_PATH)
     ban_env = _import_ban_env(denylist)
-    if "NODE_OPTIONS" in ban_env:
-        if not NODE_BLOCK_SRC.is_file():
-            raise RuntimeError(f"_cb_import_block.cjs not found at {NODE_BLOCK_SRC}")
-        container.cp_to(NODE_BLOCK_SRC, CONTAINER_NODE_BLOCK_PATH)
     container.exec(f"mkdir -p {CONTAINER_VERIFIER_DIR}")
 
     env = {
@@ -170,13 +274,10 @@ def run_judge(
     bans = [str(x).strip() for x in judge_bans if str(x).strip()]
     if bans:
         env["CODING_BENCH_JUDGE_BANS"] = ",".join(bans)
-        if "NODE_OPTIONS" not in env:
-            eco = str(getattr(denylist, "ecosystem", "") or "").strip().lower()
-            if eco in _NODE_BAN_ECOSYSTEMS:
-                if not NODE_BLOCK_SRC.is_file():
-                    raise RuntimeError(f"_cb_import_block.cjs not found at {NODE_BLOCK_SRC}")
-                container.cp_to(NODE_BLOCK_SRC, CONTAINER_NODE_BLOCK_PATH)
-                env["NODE_OPTIONS"] = f"--require {CONTAINER_NODE_BLOCK_PATH}"
+        if "NODE_OPTIONS" not in env and _denylist_ecosystem(denylist) in _NODE_BAN_ECOSYSTEMS:
+            env["NODE_OPTIONS"] = _NODE_PRELOAD_FLAGS
+    if "NODE_OPTIONS" in env:
+        _install_node_gate(container, env)
     res = container.exec(
         f"PYTHONPATH=/tests python3 {CONTAINER_JUDGE_PATH}",
         env=env,

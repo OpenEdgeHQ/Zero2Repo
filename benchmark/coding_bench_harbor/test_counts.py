@@ -61,16 +61,26 @@ class Counts:
 # Each returns (passed, failed, errors, skipped) or None. ``total`` is derived.
 
 
+# A pytest summary line is short; a failing test's repr line is not. The
+# summary pattern below backtracks quadratically on lines dense in ``=``, so
+# anything longer than this cannot be a summary and is skipped.
+_MAX_SUMMARY_LINE = 4000
+_PYTEST_SUMMARY = re.compile(r"^=+\s[^=\n]*\bin\s+[\d.]+s(?:\s\([\d:]+\))?\s=+$")
+_PYTEST_OUTCOME_WORD = re.compile(r"\b(passed|failed|error|errors|skipped)\b")
+
+
 def _parse_pytest(out: str) -> tuple[int, int, int, int] | None:
     # Final summary line, e.g.
     #   ===== 1 failed, 88 passed, 2 skipped, 1 error in 5.00s =====
     #   ===== 89 passed in 3.40s =====
+    #   ===== 243 failed, 264 passed in 98.33s (0:01:38) =====
     summary = None
     for line in out.splitlines():
-        if re.search(r"=+.*\bin\s+[\d.]+s", line) and re.search(
-            r"\b(passed|failed|error|errors|skipped)\b", line
-        ):
-            summary = line
+        if len(line) > _MAX_SUMMARY_LINE:
+            continue
+        stripped = line.strip()
+        if _PYTEST_SUMMARY.match(stripped) and _PYTEST_OUTCOME_WORD.search(stripped):
+            summary = stripped
     if summary is None:
         return None
 

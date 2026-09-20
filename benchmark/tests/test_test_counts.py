@@ -175,3 +175,22 @@ def test_parse_pytest_outcomes_short_summary():
 
 def test_parse_pytest_outcomes_none_without_summary():
     assert parse_pytest_outcomes("1 failed, 88 passed") is None
+
+
+def test_pytest_summary_with_elapsed_clock_suffix():
+    out = "================== 243 failed, 264 passed in 98.33s (0:01:38) ==================\n"
+    _check(out, cmd="pytest", passed=264, total=507, failed=243, framework="pytest")
+
+
+def test_pytest_parse_is_linear_on_huge_equals_dense_assertion_line():
+    """A failing test can print a multi-MB repr full of ``=``; the summary scan
+    must not backtrack on it (the old pattern took minutes and got the judge
+    OOM-killed)."""
+    import time
+
+    huge = "E   AssertionError: value=" + ("JsObject(props={'k': 1}) in 1s" + "=" * 30) * 50_000
+    out = huge + "\n" + "=" * 20 + " 1 failed, 2 passed in 0.50s " + "=" * 20 + "\n"
+    start = time.monotonic()
+    c = _check(out, cmd="pytest", passed=2, total=3, failed=1, framework="pytest")
+    assert time.monotonic() - start < 2.0
+    assert c.errors == 0
