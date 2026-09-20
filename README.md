@@ -9,6 +9,10 @@ The agent receives a product spec and an empty workspace, implements the project
 in a real shell environment, and is scored by **hidden, deterministic acceptance
 tests** (binary reward: `1.0` / `0.0`). No LLM-as-judge.
 
+<p align="center">
+  <img src="fig_overview.png" alt="Zero2Repo evaluation architecture">
+</p>
+
 This repository ships:
 
 - **11 released cases** under `benchmark/cases/`: Tomlparse, python-envfile, ymlcodec (TypeScript), Signtoken, httpwire, Optlyn, Otpkit, Hrefparse (C++), Git Orbulk (Go), Lingora, and PathSel (Python)
