@@ -123,7 +123,7 @@ def check_case_assets(case_dir: Path | str) -> list[str]:
             except ValueError:
                 errors.append(f"{cid}: test file escapes milestones/final: {name}")
                 continue
-            if not target.is_file():
+            if not target.is_file() and not target.is_dir():
                 errors.append(f"{cid}: test_manifest references missing {name}")
         runner_tmpl = " ".join(str(runner.get("test_command_template") or "").split())
         suite_tmpl = " ".join(str(tests_manifest.get("test_command_template") or "").split())
@@ -131,8 +131,35 @@ def check_case_assets(case_dir: Path | str) -> list[str]:
             errors.append(
                 f"{cid}: manifest and test_manifest disagree on test_command_template"
             )
+        errors.extend(_check_undeclared_tests(cid, names, final_dir / "tests"))
         errors.extend(_check_substrates(cid, tests_manifest, final_dir / "tests"))
         errors.extend(_check_suite_wall_fields(cid, tests_manifest))
+    return errors
+
+
+def _declared_test_names(names: list) -> set[str]:
+    declared: set[str] = set()
+    for name in names:
+        parts = Path(str(name)).parts
+        if parts and parts[0] == "tests":
+            parts = parts[1:]
+        if parts:
+            declared.add(parts[0])
+    return declared
+
+
+def _check_undeclared_tests(cid: str, names: list, tests_dir: Path) -> list[str]:
+    if not tests_dir.is_dir():
+        return []
+    declared = _declared_test_names(names)
+    errors: list[str] = []
+    for child in sorted(tests_dir.iterdir()):
+        if child.name == "__pycache__" or child.suffix == ".pyc":
+            continue
+        if child.name not in declared:
+            errors.append(
+                f"{cid}: tests/{child.name} is not declared in test_files or support_files"
+            )
     return errors
 
 
@@ -193,14 +220,33 @@ def _check_suite_wall_fields(cid: str, tests_manifest: dict) -> list[str]:
         if value < 0:
             errors.append(f"{cid}: {key} must be a non-negative number")
     measured = tests_manifest.get("suite_wall_measured_on")
-    if measured is not None and not isinstance(measured, dict):
+    needs_measured = any(
+        key in tests_manifest for key in ("suite_wall_seconds", "judge_timeout_sec")
+    )
+    if measured is None:
+        if needs_measured:
+            errors.append(
+                f"{cid}: suite_wall_measured_on is required when "
+                "suite_wall_seconds or judge_timeout_sec is set"
+            )
+        return errors
+    if not isinstance(measured, dict):
         errors.append(f"{cid}: suite_wall_measured_on must be an object")
+        return errors
+    for field in ("arch", "os"):
+        if not str(measured.get(field) or "").strip():
+            errors.append(f"{cid}: suite_wall_measured_on.{field} is required")
     return errors
 
 
 def check_case_warnings(case_dir: Path | str) -> list[str]:
     """Return non-fatal warnings. Privilege markers are errors (see substrates)."""
-    del case_dir
+    case_dir = Path(case_dir)
+    tests_dir = case_dir / "milestones" / "final" / "tests"
+    if not tests_dir.is_dir():
+        return []
+    if any(path.name == "__pycache__" for path in tests_dir.rglob("__pycache__")):
+        return [f"{case_dir.name}: tests/ contains __pycache__; delete it before sealing"]
     return []
 
 

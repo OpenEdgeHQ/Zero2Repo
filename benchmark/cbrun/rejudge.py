@@ -221,6 +221,8 @@ def rejudge_workspace(
     payload = {
         "reward": outcome.reward,
         "judge_error": outcome.judge_error,
+        "completed": getattr(outcome, "completed", True),
+        "incomplete_reason": getattr(outcome, "incomplete_reason", None),
         "failed_tests": list(final.get("failed_tests") or []),
         "error_tests": list(final.get("error_tests") or []),
         "failed_count": final.get("failed_count"),

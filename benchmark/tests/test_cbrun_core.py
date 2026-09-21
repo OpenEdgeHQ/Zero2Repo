@@ -23,7 +23,7 @@ from cbrun.limits import (  # noqa: E402
     classify_terminal,
     resolve_limits,
 )
-from cbrun.state import host_arch, is_emulated  # noqa: E402
+from cbrun.state import host_arch, is_emulated, normalize_arch  # noqa: E402
 from coding_bench_harbor.adapter import iter_benchmark_case_dirs  # noqa: E402
 from cbrun.submit import (  # noqa: E402
     CONTAINER_SUBMIT_PATH,
@@ -213,6 +213,37 @@ def test_host_arch_normalizes(monkeypatch) -> None:
     assert is_emulated() is True
 
 
+def test_require_native_or_allowed_refuses_silent_emulation() -> None:
+    from cbrun.run_case import require_native_or_allowed
+
+    with pytest.raises(RuntimeError, match="--allow-emulated"):
+        require_native_or_allowed(
+            allow_emulated=False,
+            test_manifest={},
+            emulated=True,
+            target_platform="linux/amd64",
+        )
+    require_native_or_allowed(
+        allow_emulated=True,
+        test_manifest={"suite_wall_measured_on": {"arch": "x86_64", "os": "linux"}},
+        emulated=True,
+        target_platform="linux/amd64",
+    )
+
+
+def test_require_native_or_allowed_rejects_unmeasured_platform() -> None:
+    from cbrun.run_case import require_native_or_allowed
+
+    with pytest.raises(RuntimeError, match="measured on amd64"):
+        require_native_or_allowed(
+            allow_emulated=True,
+            test_manifest={"suite_wall_measured_on": {"arch": "x86_64"}},
+            emulated=True,
+            target_platform="linux/arm64",
+        )
+    assert normalize_arch("x86_64") == "amd64"
+
+
 def test_resolve_limits_rejects_bad_values() -> None:
     with pytest.raises(ValueError):
         resolve_limits(multiplier=0)
@@ -391,7 +422,20 @@ def test_write_summary_and_aggregate(tmp_path: Path) -> None:
     assert agg["terminal_status"]["timeout"] == 1
     assert agg["judge_errors"] == 1
     assert agg["invalid_runs"] == 0
+    assert agg["judge_incomplete"] == 0
     assert "reward_mean_valid" in agg
+    assert "reward_mean_all_valid" in agg
+
+
+def test_aggregate_excludes_emulated_from_reward_mean_valid() -> None:
+    trials = [
+        TrialResult("c1", "codex", "m", reward=1.0, terminal_status="completed", emulated=False),
+        TrialResult("c2", "codex", "m", reward=0.0, terminal_status="completed", emulated=True),
+    ]
+    agg = results._aggregate(trials)
+    assert agg["reward_mean_valid"] == 1.0
+    assert agg["reward_mean_all_valid"] == 0.5
+    assert agg["emulated_trials"] == 1
 
 
 def test_format_reward_matrix_renders_cells() -> None:

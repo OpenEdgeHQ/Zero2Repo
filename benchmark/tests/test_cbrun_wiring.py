@@ -195,6 +195,8 @@ def test_run_judge_reports_judge_error_when_no_report(tmp_path: Path) -> None:
     assert outcome.reward == 0.0
     assert outcome.judge_error is not None
     assert "no report" in outcome.judge_error
+    assert outcome.completed is False
+    assert outcome.incomplete_reason == "judge:no_report"
 
 
 def test_run_judge_classifies_timeout(tmp_path: Path) -> None:
@@ -212,6 +214,67 @@ def test_run_judge_classifies_timeout(tmp_path: Path) -> None:
     )
     assert outcome.judge_error is not None
     assert "timed out" in outcome.judge_error
+    assert outcome.completed is False
+    assert outcome.incomplete_reason == "judge:timeout"
+
+
+def test_run_judge_classifies_137_near_budget_as_timeout(tmp_path: Path) -> None:
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(
+        report=None,
+        exec_result=ExecResult(exit_code=137, timed_out=True, seconds=60.0),
+    )
+    outcome = judge.run_judge(
+        fake,  # type: ignore[arg-type]
+        tests_final_dir=final_dir,
+        task_toml=b"x = 1\n",
+        test_timeout_sec=60.0,
+        artifacts_dir=tmp_path / "art",
+    )
+    assert outcome.completed is False
+    assert outcome.incomplete_reason == "judge:timeout"
+    assert "timed out" in (outcome.judge_error or "")
+
+
+def test_run_judge_classifies_137_far_below_budget_as_killed(tmp_path: Path) -> None:
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(
+        report=None,
+        exec_result=ExecResult(exit_code=137, timed_out=False, seconds=4.0),
+    )
+    outcome = judge.run_judge(
+        fake,  # type: ignore[arg-type]
+        tests_final_dir=final_dir,
+        task_toml=b"x = 1\n",
+        test_timeout_sec=60.0,
+        artifacts_dir=tmp_path / "art",
+    )
+    assert outcome.completed is False
+    assert outcome.incomplete_reason == "judge:killed"
+    assert "no report" in (outcome.judge_error or "")
+
+
+def test_run_judge_report_internal_error_stays_completed(tmp_path: Path) -> None:
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(
+        report={
+            "reward": 0.0,
+            "judge_error": "shadowed pytest",
+            "final": {"counts_parsed": True, "total_count": 1},
+        },
+        exec_result=ExecResult(exit_code=0),
+    )
+    outcome = judge.run_judge(
+        fake,  # type: ignore[arg-type]
+        tests_final_dir=final_dir,
+        task_toml=b"x = 1\n",
+        test_timeout_sec=60.0,
+        artifacts_dir=tmp_path / "art",
+    )
+    assert outcome.completed is True
+    assert outcome.incomplete_reason is None
+    assert outcome.judge_error == "shadowed pytest"
+    assert outcome.reward == 0.0
 
 
 def test_run_isolated_judge_starts_clean_container(tmp_path: Path, monkeypatch) -> None:
@@ -400,6 +463,59 @@ def test_pip_import_ban_does_not_touch_node(tmp_path: Path) -> None:
     assert "NODE_OPTIONS" not in fake.judge_env
     assert judge.NODE_SHIM_DIR_ENV not in fake.judge_env
     assert fake.judge_env["CODING_BENCH_IMPORT_BAN"] == "yaml"
+    assert any("cbrun_denylist_hook" in c and "sys.modules" in c for c in fake.commands)
+
+
+def test_pip_gate_probe_failure_is_a_hard_error(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(report=_OK_REPORT, exec_result=ExecResult(exit_code=0))
+    real_exec = fake.exec
+
+    def failing_probe(command, **kwargs):
+        if "cbrun_denylist_hook" in command and "sys.modules" in command:
+            return ExecResult(exit_code=7, tail="hook missing")
+        return real_exec(command, **kwargs)
+
+    fake.exec = failing_probe  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="pip denylist hook not loaded"):
+        judge.run_judge(
+            fake,  # type: ignore[arg-type]
+            tests_final_dir=final_dir,
+            task_toml=b"x = 1\n",
+            test_timeout_sec=60.0,
+            artifacts_dir=tmp_path / "art",
+            denylist=SimpleNamespace(ecosystem="pip", import_ban=("yaml",)),
+        )
+
+
+def test_pip_gate_probe_rejects_pth_processing_error(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    final_dir = _seed_tests_dir(tmp_path)
+    fake = _FakeContainer(report=_OK_REPORT, exec_result=ExecResult(exit_code=0))
+    real_exec = fake.exec
+
+    def noisy_probe(command, **kwargs):
+        if "cbrun_denylist_hook" in command and "sys.modules" in command:
+            return ExecResult(exit_code=0, tail="Error processing line 1 of zz_cbrun_denylist.pth")
+        return real_exec(command, **kwargs)
+
+    fake.exec = noisy_probe  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="pip denylist hook not loaded"):
+        judge.run_judge(
+            fake,  # type: ignore[arg-type]
+            tests_final_dir=final_dir,
+            task_toml=b"x = 1\n",
+            test_timeout_sec=60.0,
+            artifacts_dir=tmp_path / "art",
+            denylist=SimpleNamespace(ecosystem="pip", import_ban=("yaml",)),
+        )
 
 
 def test_probe_cli_version_fails_fast_with_path() -> None:

@@ -94,15 +94,26 @@ def _aggregate(results: list[TrialResult]) -> dict:
         by_status[status.value] = sum(1 for r in results if r.terminal_status == status.value)
     judge_errors = sum(1 for r in results if r.judge_error)
     invalid = [r for r in results if not r.run_valid]
-    valid = [r for r in results if r.run_valid]
+    all_valid = [r for r in results if r.run_valid]
+    native_valid = [r for r in all_valid if not r.emulated]
     return {
         "total": total,
         "passed": passed,
         "reward_mean": (sum(r.reward for r in results) / total) if total else 0.0,
-        "reward_mean_valid": (sum(r.reward for r in valid) / len(valid)) if valid else 0.0,
+        "reward_mean_valid": (
+            (sum(r.reward for r in native_valid) / len(native_valid)) if native_valid else 0.0
+        ),
+        "reward_mean_all_valid": (
+            (sum(r.reward for r in all_valid) / len(all_valid)) if all_valid else 0.0
+        ),
         "terminal_status": by_status,
         "judge_errors": judge_errors,
         "invalid_runs": len(invalid),
+        "judge_incomplete": sum(
+            1
+            for r in results
+            if r.invalid_reason and str(r.invalid_reason).startswith("judge:")
+        ),
         "emulated_trials": sum(1 for r in results if r.emulated),
     }
 

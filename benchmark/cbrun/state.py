@@ -24,16 +24,22 @@ def platform_name() -> str:
     return value
 
 
+def normalize_arch(machine: str) -> str:
+    """Map ``uname -m`` / measurement labels onto ``platform_name()`` tokens."""
+    token = (machine or "").strip().lower()
+    if token in {"x86_64", "amd64"}:
+        return "amd64"
+    if token in {"aarch64", "arm64"}:
+        return "arm64"
+    return token or "unknown"
+
+
 def host_arch() -> str:
     """Normalize ``uname -m`` to the arch token used by ``platform_name()``."""
     import platform as py_platform
 
-    machine = (os.environ.get("CBRUN_HOST_ARCH") or py_platform.machine() or "").lower()
-    if machine in {"x86_64", "amd64"}:
-        return "amd64"
-    if machine in {"aarch64", "arm64"}:
-        return "arm64"
-    return machine or "unknown"
+    machine = os.environ.get("CBRUN_HOST_ARCH") or py_platform.machine() or ""
+    return normalize_arch(machine)
 
 
 def is_emulated(target: str | None = None) -> bool:

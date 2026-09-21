@@ -44,13 +44,14 @@ from .state import (
     host_arch,
     image_identity,
     is_emulated,
+    normalize_arch,
     platform_name,
     source_identity,
     utc_now,
 )
 from .instruction import build_instruction
 from .isolation import merge_runner, synthesize_task_toml, test_command_env
-from .judge import run_isolated_judge
+from .judge import JudgeOutcome, run_isolated_judge
 from .limits import (
     Limits,
     TerminalStatus,
@@ -92,6 +93,36 @@ def _probe_cli_version(container: Container, spec_name: str) -> str | None:
     return (probe.tail or "").strip() or None
 
 
+def require_native_or_allowed(
+    *,
+    allow_emulated: bool,
+    test_manifest: dict | None,
+    emulated: bool | None = None,
+    target_platform: str | None = None,
+) -> None:
+    """Refuse silent emulation and a judge budget measured on another arch."""
+    platform = target_platform or platform_name()
+    target_arch = platform.rsplit("/", 1)[-1]
+    if (is_emulated(platform) if emulated is None else emulated) and not allow_emulated:
+        raise RuntimeError(
+            f"cbrun: container platform {platform} differs from host arch "
+            f"{host_arch()}; pass --allow-emulated (emulated results are not "
+            "comparable to native runs)."
+        )
+    measured = (test_manifest or {}).get("suite_wall_measured_on")
+    if not isinstance(measured, dict):
+        return
+    raw = str(measured.get("arch") or "").strip()
+    if not raw:
+        return
+    measured_arch = normalize_arch(raw)
+    if measured_arch != target_arch:
+        raise RuntimeError(
+            f"cbrun: suite wall was measured on {measured_arch} but the "
+            f"container platform is {platform}."
+        )
+
+
 def _check_public_leakage(case: CaseSpec, *, allow_leakage: bool) -> None:
     """Fail fast when public PRD/Contract/build_command contain sensitive terms."""
     full_text = f"{case.prd_text}\n{case.contract_text}\n{case.build_command}"
@@ -120,12 +151,17 @@ def run_trial(
     enforce_denylist: bool = True,
     denylist_fix_retries: int = DEFAULT_FIX_RETRIES,
     block_github: bool = True,
+    allow_emulated: bool = False,
 ) -> TrialResult:
     """Run one (case, backend/spec, model) trial and return its result."""
     case_dir = Path(case_dir)
     case = load_case(case_dir)
     _check_public_leakage(case, allow_leakage=allow_leakage)
     steps = discover_steps(case)
+    require_native_or_allowed(
+        allow_emulated=allow_emulated,
+        test_manifest=steps[0].test_manifest if steps else None,
+    )
     limits = limits or resolve_limits(multiplier=timeout_multiplier)
     per_case = case_test_timeout_sec(steps[0].test_manifest) if steps else None
     limits = limits.for_case(per_case)
@@ -542,12 +578,7 @@ def _run_step(
         denylist=denylist,
         judge_bans=case.judge_bans,
     )
-    result.reward = outcome.reward
-    result.judge_error = outcome.judge_error
-    result.substrates_missing = list(outcome.substrates_missing)
-    if outcome.substrates_missing:
-        result.run_valid = False
-        result.invalid_reason = outcome.judge_error
+    _apply_judge_outcome(result, outcome)
     result.judge_exit_code = outcome.exit_code
     result.judge_seconds = round(outcome.seconds, 2)
     result.logs["judge_report"] = str(out_dir / "final_report.json")
@@ -566,6 +597,19 @@ def _run_step(
     _record_infra_signals(out_dir, result, submitted=True)
 
     return outcome.reward >= 1.0 and not outcome.judge_error
+
+
+def _apply_judge_outcome(result: TrialResult, outcome: JudgeOutcome) -> None:
+    """Copy judge fields. An incomplete judge is not a valid model score."""
+    result.reward = outcome.reward
+    result.judge_error = outcome.judge_error
+    result.substrates_missing = list(outcome.substrates_missing)
+    if outcome.substrates_missing:
+        result.run_valid = False
+        result.invalid_reason = outcome.judge_error
+    elif not outcome.completed:
+        result.run_valid = False
+        result.invalid_reason = outcome.incomplete_reason
 
 
 def _record_infra_signals(out_dir: Path, result: TrialResult, *, submitted: bool) -> None:

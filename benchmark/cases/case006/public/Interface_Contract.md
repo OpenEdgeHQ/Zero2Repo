@@ -1315,7 +1315,7 @@ Returns a decorator. That decorator attaches the flag and returns the same funct
 
 ## `optlyn.launch`
 
-Import `launch` from the package root (`from `optlyn` import `launch``). Opens a URL or filename with the default associated application, and can open a file manager with the file selected.
+Import `launch` from the package root (`from `optlyn` import `launch``). Opens a URL or filename with the default associated application.
 
 ### Signature
 
@@ -1326,15 +1326,11 @@ Import `launch` from the package root (`from `optlyn` import `launch``). Opens a
 
 - `url` — a URL or a filesystem path, passed positionally.
 - `wait` — `wait=True` waits until the launched program has been given the URL or path.
-- `locate` — `locate=True` opens a file manager with the file selected instead of opening the file with the default associated application.
+- `locate` — accepted; whether a file manager is actually opened depends on the desktop session and is not part of acceptance.
 
 ### Default application
 
 With `wait=True` and `locate` omitted, the default associated application is launched and receives the URL or the filename. That value appears in the launched program’s argument list.
-
-### File-manager select
-
-With `wait=True` and `locate=True`, a file manager is launched with the file selected. After the filename is removed from the launched argument text, the remainder is distinguishable from opening the same path with the default associated application.
 
 Opener executable names are not pinned.
 

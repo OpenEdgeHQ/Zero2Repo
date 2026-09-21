@@ -20,8 +20,20 @@ __all__ = [
 _COUNT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("content_filter", re.compile(r"content_filter", re.I)),
     ("incomplete_response", re.compile(r"Incomplete response returned", re.I)),
-    ("rate_limit", re.compile(r"rate limit|HTTP\s+429|status\s+429", re.I)),
-    ("auth", re.compile(r"invalid_api_key|HTTP\s+401|status\s+401|Unauthorized", re.I)),
+    (
+        "rate_limit",
+        re.compile(
+            r"rate_limit_exceeded|RateLimitError|Too Many Requests|HTTP\s+429|status\s+429",
+            re.I,
+        ),
+    ),
+    (
+        "auth",
+        re.compile(
+            r"invalid_api_key|AuthenticationError|HTTP\s+401|status\s+401",
+            re.I,
+        ),
+    ),
     ("retry_exhausted", re.compile(r"exceeded retry limit", re.I)),
     ("conn_refused", re.compile(r"ECONNREFUSED", re.I)),
 )

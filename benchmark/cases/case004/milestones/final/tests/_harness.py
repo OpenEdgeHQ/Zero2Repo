@@ -43,6 +43,7 @@ A failure this module cannot classify raises :class:`HarnessError`.
 
 from __future__ import annotations
 
+import inspect
 import io
 import os
 import shutil
@@ -1419,6 +1420,8 @@ def _run_captured(
                 simplefilter("always")
                 try:
                     value = body()
+                    if inspect.isgenerator(value):
+                        value = list(value)
                 except (KeyboardInterrupt, GeneratorExit):
                     raise
                 except BaseException as exc:

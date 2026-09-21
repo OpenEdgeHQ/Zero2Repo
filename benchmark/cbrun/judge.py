@@ -9,6 +9,7 @@ Reward is binary; a harness failure is reported as ``judge_error``.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,6 +66,8 @@ class JudgeOutcome:
     seconds: float
     report: dict = field(default_factory=dict)
     substrates_missing: list[str] = field(default_factory=list)
+    completed: bool = True
+    incomplete_reason: str | None = None
 
 
 def validate_judge_report(report: dict | None) -> tuple[float, str | None]:
@@ -171,6 +174,7 @@ def _install_node_gate(container: Container, env: dict[str, str]) -> None:
     """
     for src, dst in _node_gate_files():
         container.cp_to(src, dst)
+        container.exec(f"chmod 644 {_shq(dst)}")
     real = container.exec('readlink -f "$(command -v node)" 2>/dev/null || true')
     found = (real.tail or "").strip().splitlines()
     real_node = found[-1].strip() if found else ""
@@ -222,6 +226,31 @@ def _node_gate_probe_script(token: str | None, real_node: str) -> str:
         f'{_shq(CONTAINER_NODE_SHIM_PATH)} -e "process.exit(0)" || {{ echo "node shim not executable"; exit 6; }}',
     ]
     return "\n".join(lines) + "\n"
+
+
+def _pytest_user() -> str:
+    return (os.environ.get("CODING_BENCH_PYTEST_USER") or "cbagent").strip() or "cbagent"
+
+
+def _probe_pip_gate(container: Container) -> None:
+    """Refuse to judge when the site .pth hook is unread for the pytest user."""
+    user = _pytest_user()
+    check = container.exec(f"id -u {_shq(user)}")
+    kwargs: dict = {"timeout_sec": 30.0}
+    if check.exit_code == 0:
+        kwargs["user"] = user
+    res = container.exec(
+        "python3 -I -c "
+        "'import sys; sys.exit(0 if \"cbrun_denylist_hook\" in sys.modules else 7)'",
+        **kwargs,
+    )
+    tail = res.tail or ""
+    if res.exit_code != 0 or "Error processing line" in tail:
+        who = user if check.exit_code == 0 else "default"
+        raise RuntimeError(
+            f"pip denylist hook not loaded for judge user {who} "
+            f"(exit {res.exit_code}): {tail.strip()[-400:]}"
+        )
 
 
 def _probe_node_gate(container: Container, env: dict[str, str], real_node: str) -> None:
@@ -278,6 +307,11 @@ def run_judge(
             env["NODE_OPTIONS"] = _NODE_PRELOAD_FLAGS
     if "NODE_OPTIONS" in env:
         _install_node_gate(container, env)
+    elif (
+        _denylist_ecosystem(denylist) in _PYTHON_BAN_ECOSYSTEMS
+        and env.get("CODING_BENCH_IMPORT_BAN")
+    ):
+        _probe_pip_gate(container)
     res = container.exec(
         f"PYTHONPATH=/tests python3 {CONTAINER_JUDGE_PATH}",
         env=env,
@@ -305,15 +339,22 @@ def run_judge(
     if not isinstance(report, dict):
         report = {}
     reward, judge_error = validate_judge_report(report)
+    completed = bool(report)
+    incomplete_reason: str | None = None
     if res.timed_out:
         judge_error = f"judge timed out after {test_timeout_sec}s"
         reward = 0.0
+        if not completed:
+            incomplete_reason = "judge:timeout"
     elif not report:
         judge_error = (
             f"final_judge produced no report (exit {res.exit_code}); "
             f"tail: {res.tail[-800:]}"
         )
         reward = 0.0
+        incomplete_reason = (
+            "judge:killed" if res.exit_code == 137 else "judge:no_report"
+        )
     elif res.exit_code and not judge_error:
         judge_error = f"judge process failed (exit {res.exit_code})"
         reward = 0.0
@@ -324,6 +365,8 @@ def run_judge(
         exit_code=res.exit_code,
         seconds=res.seconds,
         report=report,
+        completed=completed,
+        incomplete_reason=incomplete_reason,
     )
 
 

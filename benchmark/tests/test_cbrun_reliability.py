@@ -22,9 +22,9 @@ from cbrun.denylist import (  # noqa: E402
     render_pip_shim,
     render_strip_script,
 )
-from cbrun.docker_env import Container  # noqa: E402
+from cbrun.docker_env import Container, _exec_hit_wall  # noqa: E402
 from cbrun.case_checks import check_case_assets  # noqa: E402
-from cbrun.judge import export_app, validate_judge_report  # noqa: E402
+from cbrun.judge import JudgeOutcome, export_app, validate_judge_report  # noqa: E402
 from cbrun.recipe import RecipeLockError  # noqa: E402
 from cbrun.recipe_image import resource_fetch_command  # noqa: E402
 from cbrun.infra_signals import invalid_reason, scan_log_text  # noqa: E402
@@ -304,6 +304,61 @@ def test_side_effect_ban_blocks_workspace_socket(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(launcher, "_importer_under_workspace", lambda _ws: True)
     with pytest.raises(RuntimeError, match="JUDGE_BANS"):
         launcher._side_effect_hook("socket.connect", ("x",), workspace, {"socket"})
+
+
+def test_exec_hit_wall_requires_137_at_budget() -> None:
+    assert _exec_hit_wall(60.0, 137, 60.0) is True
+    assert _exec_hit_wall(60.0, 137, 60.5) is True
+    assert _exec_hit_wall(60.0, 137, 4.0) is False
+    assert _exec_hit_wall(60.0, 1, 60.0) is False
+    assert _exec_hit_wall(None, 137, 60.0) is False
+
+
+def test_apply_judge_outcome_marks_incomplete_invalid() -> None:
+    from cbrun.results import TrialResult
+    from cbrun.run_case import _apply_judge_outcome
+
+    def _result() -> TrialResult:
+        return TrialResult("c", "codex", "m", reward=0.0, terminal_status="completed")
+
+    timeout = _result()
+    _apply_judge_outcome(
+        timeout,
+        JudgeOutcome(
+            0.0, "judge timed out", 137, 60.0, completed=False, incomplete_reason="judge:timeout"
+        ),
+    )
+    assert timeout.run_valid is False
+    assert timeout.invalid_reason == "judge:timeout"
+
+    killed = _result()
+    _apply_judge_outcome(
+        killed,
+        JudgeOutcome(
+            0.0, "no report", 137, 4.0, completed=False, incomplete_reason="judge:killed"
+        ),
+    )
+    assert killed.run_valid is False
+    assert killed.invalid_reason == "judge:killed"
+
+    missing = _result()
+    _apply_judge_outcome(
+        missing,
+        JudgeOutcome(
+            0.0, "no report", 2, 1.0, completed=False, incomplete_reason="judge:no_report"
+        ),
+    )
+    assert missing.run_valid is False
+    assert missing.invalid_reason == "judge:no_report"
+
+    internal = _result()
+    _apply_judge_outcome(
+        internal,
+        JudgeOutcome(0.0, "shadowed pytest", 0, 1.0, report={"judge_error": "shadowed pytest"}),
+    )
+    assert internal.run_valid is True
+    assert internal.invalid_reason is None
+    assert internal.judge_error == "shadowed pytest"
 
 
 def test_exec_argv_uses_pipefail_and_env_keys_only() -> None:
@@ -845,6 +900,16 @@ def test_infra_signals_ignore_bare_401_and_recovered_filter() -> None:
     )
 
 
+def test_infra_signals_ignore_documentation_rate_limit_wording() -> None:
+    prose = (
+        "implements rate limiting per RFC 6585\n"
+        "returns Unauthorized on missing token\n"
+    )
+    assert scan_log_text(prose) == {}
+    counts = scan_log_text("HTTP 429 from the gateway\n")
+    assert counts["rate_limit"] == 1
+
+
 def test_denylist_module_has_no_product_ada_special_case() -> None:
     text = (BENCHMARK_ROOT / "cbrun" / "denylist.py").read_text(encoding="utf-8")
     assert "watch_ada" not in text
@@ -887,6 +952,52 @@ def test_substrate_unknown_provider_raises() -> None:
     with pytest.raises(SubstrateUnavailable, match="unknown provider"):
         with mounted_substrates({"judge_substrates": ["nope"]}, Path("/tmp")):
             pass
+
+
+def test_substrates_module_has_no_posix_only_import_at_load() -> None:
+    """Windows hosts import cbrun.substrates for every judge; fcntl must be lazy."""
+    import ast
+
+    from cbrun import substrates
+
+    tree = ast.parse(Path(substrates.__file__).read_text(encoding="utf-8"))
+    top_level = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module for node in tree.body if isinstance(node, ast.ImportFrom)
+    }
+    assert "fcntl" not in top_level
+
+
+def test_cow_fs_refuses_explicitly_on_non_linux_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cbrun import substrates
+
+    monkeypatch.setattr(substrates.sys, "platform", "win32")
+    assert substrates.supports_ficlone(tmp_path) is False
+    with pytest.raises(substrates.SubstrateUnavailable, match="Linux host"):
+        with substrates.mounted_substrates({"judge_substrates": ["cow_fs"]}, tmp_path):
+            pass
+    # Cases that declare no substrate never touch the FICLONE path.
+    with substrates.mounted_substrates({}, tmp_path) as mounts:
+        assert mounts == []
+
+
+def test_cow_fs_refuses_explicitly_without_fcntl_module(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cbrun import substrates
+
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    assert substrates.supports_ficlone(tmp_path) is False
+    if sys.platform == "linux":
+        with pytest.raises(substrates.SubstrateUnavailable, match="fcntl"):
+            with substrates.mounted_substrates({"judge_substrates": ["cow_fs"]}, tmp_path):
+                pass
 
 
 def test_builtin_codex_spec_declares_node_runtime() -> None:

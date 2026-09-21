@@ -164,9 +164,11 @@ class Container:
                 seconds=time.monotonic() - start,
                 tail=_tail(tail),
             )
+        seconds = time.monotonic() - start
         return ExecResult(
             exit_code=proc.returncode,
-            seconds=time.monotonic() - start,
+            timed_out=_exec_hit_wall(timeout_sec, proc.returncode, seconds),
+            seconds=seconds,
             tail=_tail(proc.stdout + proc.stderr),
         )
 
@@ -377,6 +379,14 @@ class Container:
 
     def __exit__(self, *exc) -> None:
         self.remove()
+
+
+def _exec_hit_wall(timeout_sec: float | None, exit_code: int, seconds: float) -> bool:
+    """True when the container-side ``timeout --signal=KILL`` fired.
+
+    Exit 137 below the budget is a kill (OOM or explicit), not a wall hit.
+    """
+    return timeout_sec is not None and exit_code == 137 and seconds >= timeout_sec
 
 
 def _shq(text: str) -> str:

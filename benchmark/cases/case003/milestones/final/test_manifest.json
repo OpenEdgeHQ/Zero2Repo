@@ -16,6 +16,7 @@
   ],
   "support_files": [
     "tests/_harness.py",
+    "tests/_helpers.py",
     "tests/conftest.py"
   ],
   "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F01_helpers.py tests/F02_acceptance.py tests/F02_helpers.py tests/F03_acceptance.py tests/F04_acceptance.py tests/F04_helpers.py tests/F05_acceptance.py tests/F05_helpers.py tests/F06_acceptance.py tests/F07_acceptance.py",

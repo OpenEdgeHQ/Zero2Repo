@@ -82,6 +82,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--test-timeout-sec", type=float, default=DEFAULT_TEST_TIMEOUT_SEC)
     parser.add_argument("--timeout-multiplier", type=float, default=1.0)
     parser.add_argument(
+        "--allow-emulated",
+        action="store_true",
+        help="Allow a container platform that differs from the host arch. "
+        "Emulated trials are excluded from reward_mean_valid.",
+    )
+    parser.add_argument(
         "--reasoning-effort",
         choices=sorted(CODEX_REASONING_EFFORTS),
         default=None,
@@ -230,10 +236,18 @@ def main(argv: list[str] | None = None) -> int:
         )
     from .state import is_emulated
 
+    if is_emulated() and not args.allow_emulated:
+        print(
+            "error: container platform differs from host arch; "
+            "pass --allow-emulated (emulated results are not comparable "
+            "to native runs).",
+            file=sys.stderr,
+        )
+        return 2
     if is_emulated():
         print(
             "warning: container platform differs from host arch; "
-            "results are emulated and not comparable to native runs.",
+            "emulated trials are excluded from reward_mean_valid.",
             file=sys.stderr,
         )
 
@@ -259,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
                     enforce_denylist=args.enforce_denylist,
                     denylist_fix_retries=args.denylist_fix_retries,
                     block_github=args.block_github,
+                    allow_emulated=args.allow_emulated,
                 )
             except Exception as exc:  # noqa: BLE001 - record, never crash the matrix
                 result = TrialResult(

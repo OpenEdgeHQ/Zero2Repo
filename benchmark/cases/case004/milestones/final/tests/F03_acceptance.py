@@ -120,7 +120,7 @@ def test_timestamped_sign_recover_when_package_importable():
     print(f"importable recovered={recovered!r}", flush=True)
 
 
-def test_timestamped_signer_fails_when_package_not_importable():
+def test_timestamped_signer_round_trip_is_required_unconditionally():
     """Grade L160's constructed-helper round-trip, not an absent-package error.
 
     The PRD does not promise a hard error when the package is off the import
@@ -147,7 +147,7 @@ def test_timestamped_dump_load_when_package_importable():
     print(f"importable loaded={loaded!r}", flush=True)
 
 
-def test_timestamped_serializer_fails_when_package_not_importable():
+def test_timestamped_serializer_round_trip_is_required_unconditionally():
     """Grade L160's constructed-helper round-trip, not an absent-package error.
 
     The PRD does not promise a hard error when the package is off the import

@@ -4,7 +4,7 @@
 
 ### Product overview
 
-**Hrefparse** is an embeddable C++20 library that parses, validates, normalizes, and mutates URLs according to the WHATWG URL Standard. It also implements URL Search Params query-string handling and URLPattern matching from the same family of web platform APIs. Internationalized domain names follow Unicode Technical Standard #46 (ToASCII / ToUnicode), including Punycode (`xn--`) labels.
+**Hrefparse** is an embeddable C++20 library that parses, validates, normalizes, and mutates URLs according to the WHATWG URL Standard. It also implements URL Search Params query-string handling and URLPattern matching from the same family of web platform APIs. Internationalized domain names follow Unicode Technical Standard #46 (ToASCII / ToUnicode), including Punycode (`xn--`) labels. UTS #46 CheckBidi and CheckJoiners validity checks are not part of this product's obligations.
 
 A common use is to take a URL string and produce its WHATWG-normalized **href**. That is a different contract from RFC 3986 parsers: Hrefparse rewrites hosts and paths. The product’s canonical illustration is the input `https://www.7‑Eleven.com/Home/Privacy/Montréal` (Unicode hyphen in the host, accented path segment) normalizing to `https://www.xn--7eleven-506c.com/Home/Privacy/Montr%C3%A9al`. Leaving the string unchanged, or applying only RFC 3986 encoding, is a failure of the product.
 

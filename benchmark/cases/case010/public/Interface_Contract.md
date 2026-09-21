@@ -813,7 +813,7 @@ Both constructors and `parse` succeed when `data.path` is empty. They do not req
 
 The parser consults the caller’s grammar. Two grammars that differ in quoted terminals or in right-hand-side order are independent: the same token list can parse under one and yield an empty set under the other.
 
-A token that no production quotes is uncovered. `parse` of a list that contains an uncovered token does not succeed. That failure is distinguishable from a successful empty parse set (the outcome for a covered but ungrammatical list). Exception class and message wording are not pinned.
+A token that no production quotes is uncovered. `parse` of a list that contains an uncovered token does not succeed. That failure is distinguishable from a successful empty parse set (the outcome for a covered but ungrammatical list). The refusal is an exception; it may be raised when `parse` is called or when its result is first iterated. Returning any non-exception value — a string, an empty set, or a set containing non-tree items — is not a refusal. Exception class and message wording are not pinned.
 
 Signatures, exhaustive counts, covering shapes, and uncovered-token refusal belong with each parser.
 
@@ -858,7 +858,7 @@ The same fourteen-production shape with caller-chosen quoted tokens for the dete
 
 ### Uncovered tokens
 
-A token that no production quotes is uncovered. `parse` of `the`, `unicorn`, `chased`, `the`, `dog` against the fourteen-production grammar (which never quotes `unicorn`) does **not** succeed. The failure is distinguishable from the successful empty set returned for `dog`, `cat`, `the`. Exception class and message wording are not pinned. The same split holds for a caller-chosen nonce token in an otherwise legal five-token frame: the legal list parses as one tree; a permutation of covered tokens that is ungrammatical yields `[]`; substituting the nonce for the verb is refused.
+A token that no production quotes is uncovered. `parse` of `the`, `unicorn`, `chased`, `the`, `dog` against the fourteen-production grammar (which never quotes `unicorn`) does **not** succeed. The failure is distinguishable from the successful empty set returned for `dog`, `cat`, `the`. The refusal is an exception; it may be raised when `parse` is called or when its result is first iterated. Returning any non-exception value — a string, an empty set, or a set containing non-tree items — is not a refusal. Exception class and message wording are not pinned. The same split holds for a caller-chosen nonce token in an otherwise legal five-token frame: the legal list parses as one tree; a permutation of covered tokens that is ungrammatical yields `[]`; substituting the nonce for the verb is refused.
 
 ## `lingora.parse.ShiftReduceParser`
 

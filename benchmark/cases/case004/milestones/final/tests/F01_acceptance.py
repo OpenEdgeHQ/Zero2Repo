@@ -69,7 +69,7 @@ def test_sign_recover_when_package_importable():
     require_validity_success(validity_of(signer, token), payload=recovered)
 
 
-def test_signer_fails_when_package_not_importable():
+def test_signer_round_trip_is_required_unconditionally():
     """Grade L92's constructed-signer round-trip, not an absent-package error.
 
     The PRD does not promise a hard error when the package is off the import

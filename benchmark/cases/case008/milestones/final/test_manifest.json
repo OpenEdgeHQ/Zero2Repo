@@ -10,6 +10,7 @@
   "support_files": [
     "tests/CMakeLists.txt",
     "tests/_harness.py",
+    "tests/_helpers.py",
     "tests/conftest.py"
   ],
   "test_command": "python3 -m pytest tests/F01_acceptance.py tests/F02_acceptance.py tests/F03_acceptance.py tests/F04_acceptance.py",

@@ -1178,9 +1178,14 @@ def write_shim_assets(
         return ""
 
     build_ctx.mkdir(parents=True, exist_ok=True)
-    (build_ctx / "denylist.hashes").write_text("\n".join(hashes) + "\n", encoding="utf-8")
-    (build_ctx / "strip_banned.py").write_text(render_strip_script(), encoding="utf-8")
-    (build_ctx / "cbrun_denylist_hook.py").write_text(render_pip_module_hook(), encoding="utf-8")
+    for name, text in (
+        ("denylist.hashes", "\n".join(hashes) + "\n"),
+        ("strip_banned.py", render_strip_script()),
+        ("cbrun_denylist_hook.py", render_pip_module_hook()),
+    ):
+        path = build_ctx / name
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o644)
     shim_dir = build_ctx / "shims"
     shim_dir.mkdir(exist_ok=True)
     pip_shim = render_pip_shim()
@@ -1197,7 +1202,9 @@ def write_shim_assets(
         ("pnpm", npm_shim),
         ("yarn", npm_shim),
     ):
-        (shim_dir / name).write_text(content, encoding="utf-8")
+        dest = shim_dir / name
+        dest.write_text(content, encoding="utf-8")
+        dest.chmod(0o755)
     bins = " ".join(
         f"{SHIM_BIN_DIR}/{name}"
         for name in ("pip", "pip3", "conda", "mamba", "uv", "npm", "npx", "pnpm", "yarn")
@@ -1208,6 +1215,7 @@ def write_shim_assets(
         f"COPY cbrun_denylist_hook.py {CONTAINER_PIP_HOOK_PATH}\n"
         f"COPY shims/ {SHIM_BIN_DIR}/\n"
         f"RUN chmod +x {bins} && "
+        f"chmod 644 {CONTAINER_DENYLIST_HASHES_PATH} {CONTAINER_STRIP_SCRIPT_PATH} {CONTAINER_PIP_HOOK_PATH} && "
         f"python3 {CONTAINER_STRIP_SCRIPT_PATH} && "
         "for py in /opt/conda/bin/python3 /usr/bin/python3; do "
         '  if [ -x "$py" ]; then '

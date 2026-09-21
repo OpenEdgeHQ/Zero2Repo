@@ -2112,10 +2112,11 @@ def require_parse_trees(result: CallResult) -> list[Any]:
 
 
 def require_parse_refused(result: CallResult) -> CallResult:
-    """Did not yield a successful parse-tree set (including empty).
+    """Uncovered-token refusal is an exception on the call or first iterate.
 
-    An iterable of trees, or ``[]``, is success and must raise. Does not
-    pin an exception type. Unclassifiable outcomes raise.
+    A non-exception return — a tree, a string, ``None``, a tree set
+    (including empty), or any other value — is not a refusal. Does not
+    pin an exception type.
     """
     if not isinstance(result, CallResult):
         raise HarnessError(
@@ -2137,11 +2138,10 @@ def require_parse_refused(result: CallResult) -> CallResult:
             "must not succeed, including as a one-tree set"
         )
     if isinstance(value, (str, bytes, bytearray)):
-        print(
-            f"parse not a tree set: string {value!r}",
-            flush=True,
+        raise AssertionError(
+            "parse returned a string without raising; a non-exception "
+            f"value is not a refusal: {value!r}"
         )
-        return result
     if value is None:
         raise AssertionError(
             "parse returned None without raising; cannot classify as a "
@@ -2154,24 +2154,17 @@ def require_parse_refused(result: CallResult) -> CallResult:
             f"parse returned {type(value).__name__} {value!r} without "
             "raising; cannot classify as a parse refusal"
         ) from exc
-    trees: list[Any] = []
-    all_trees = True
-    for item in items:
-        if not _looks_like_constituent_tree(item):
-            all_trees = False
-            break
-        trees.append(item)
-    if all_trees:
+    except Exception as exc:
         raise AssertionError(
-            "parse succeeded with a parse-tree set "
-            f"(n={len(trees)}); an uncovered-token path must not succeed, "
-            "including as an empty set"
-        )
-    print(
-        f"parse not a tree set: {type(value).__name__} {value!r}",
-        flush=True,
+            "parse raised while the helper iterated a leftover lazy "
+            f"value ({type(exc).__name__}: {exc}); harness did not "
+            "capture the exception"
+        ) from exc
+    raise AssertionError(
+        "parse returned a non-exception value "
+        f"({type(value).__name__} n={len(items)}); an uncovered-token "
+        "path must raise, including when the value is not a tree set"
     )
-    return result
 
 
 def constituent_children(tree: Any) -> list[Any]:

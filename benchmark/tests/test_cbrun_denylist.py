@@ -115,8 +115,11 @@ def test_write_shim_assets_uses_hashes_not_plaintext(tmp_path: Path) -> None:
     build_ctx = tmp_path / "ctx"
     snippet = write_shim_assets(build_ctx, denylist)
     assert CONTAINER_DENYLIST_HASHES_PATH in snippet
+    assert "chmod 644" in snippet
     assert "denylist.json" not in snippet
     assert (build_ctx / "denylist.hashes").is_file()
+    assert (build_ctx / "denylist.hashes").stat().st_mode & 0o777 == 0o644
+    assert (build_ctx / "shims" / "pip").stat().st_mode & 0o777 == 0o755
     assert "sympy" not in (build_ctx / "denylist.hashes").read_text(encoding="utf-8")
     pip_shim = (build_ctx / "shims" / "pip").read_text(encoding="utf-8")
     assert "denylist.hashes" in pip_shim

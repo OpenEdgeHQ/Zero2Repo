@@ -10,8 +10,8 @@ stream, non-interactive no-launch, flush, borrowed stdout stays open;
 progress-bar visits, label-once vs hidden, tty snapshots, delta
 update, known vs unknown length, remaining-time estimate when length
 is known; getchar from the terminal; interrupt vs EOF; pause; editor
-save/absent; application launch of a URL or filename and file-manager
-select; screen clear; Linux, macOS, and Windows application directory.
+save/absent; application launch of a URL or filename; screen clear;
+Linux, macOS, and Windows application directory.
 CSI opcodes, exception types, pager color-flag spelling, ETA clock
 wording, pause prompt text, opener executable names, and Python None
 as the spelling of absent are not pinned. Default style reset is
@@ -1643,31 +1643,6 @@ def test_application_launch_opens_url_or_filename_with_default_application():
     assert path in file_record, (
         f"default-application launch did not receive filename {path!r}; "
         f"record={file_record!r}"
-    )
-
-
-def test_application_launch_can_open_file_manager_with_file_selected():
-    with workspace() as ws:
-        target = ws.write(f"doc-{uuid.uuid4().hex}.txt", _payload() + "\n")
-        path = str(target)
-        with recording_default_application(ws.path) as sentinel:
-            opened = application_launch_record(
-                sentinel, lambda: launch(path, wait=True)
-            )
-            located = application_launch_record(
-                sentinel, lambda: launch(path, wait=True, locate=True)
-            )
-        print(f"opened={opened!r} located={located!r}", flush=True)
-    assert path in opened, (
-        f"default-application baseline missing filename {path!r}; "
-        f"record={opened!r}"
-    )
-    opened_rest = failure_report_remainder(opened, path)
-    located_rest = failure_report_remainder(located, path)
-    assert opened_rest != located_rest, (
-        "file-manager select is not distinguishable from opening with the "
-        "default associated application after stripping the filename; "
-        f"opened={opened_rest!r} located={located_rest!r}"
     )
 
 

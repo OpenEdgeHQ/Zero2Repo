@@ -88,11 +88,11 @@ The surfaces group as:
 
 **Host rules at construction.** An HTTP/1.1 request requires a `Host` header. An HTTP/1.0 request with no `Host` succeeds. Two `Host` headers are refused, including on HTTP/1.0. A failed event construction produces no event, is a `LocalProtocolError` (not a `RemoteProtocolError`), and leaves any already-created connection’s `our_state` and `their_state` unchanged.
 
-**Suggested status.** Every protocol error carries an integer suggested status. The default is 400. A `Transfer-Encoding` other than `chunked` at construction suggests 501. Exceeding the incomplete-event size limit suggests 431. Wording of protocol-error messages is not a compatibility contract.
+**Suggested status.** Every protocol error carries an integer suggested status. The default is 400. A `Transfer-Encoding` other than `chunked` at construction suggests 501. A second `Transfer-Encoding` header (even when both values are chunked) also suggests 501. Exceeding the incomplete-event size limit suggests 431. Wording of protocol-error messages is not a compatibility contract.
 
 **Content-Length.** A decimal digit string of at most 20 digits is accepted. Equal repeats, or comma-separated equal pieces, collapse to one `content-length`. Disagreeing values, non-digits, or more than 20 digits are refused as a local protocol error.
 
-**Transfer-Encoding.** A single `chunked` value (any letter case) is stored as lowercase `chunked`. A second `Transfer-Encoding` header is refused. `gzip`, `deflate`, or `chunked` together with `gzip`, is a local protocol error whose suggested status is 501.
+**Transfer-Encoding.** A single `chunked` value (any letter case) is stored as lowercase `chunked`. A second `Transfer-Encoding` header is refused; that refusal also suggests 501. `gzip`, `deflate`, or `chunked` together with `gzip`, is a local protocol error whose suggested status is 501.
 
 **Wire dialect.** The product encodes only HTTP/1.1. When encoding a request, the `Host` header is written before every other header, even if it was not first in the caller’s list. The original name casing from construction (raw items) is what is written. An HTTP/1.0 peer can still be pulled. An HTTP/1.0 peer always ends the connection after one cycle; the HTTP/1.0 `Connection: keep-alive` pseudo-standard is not supported.
 

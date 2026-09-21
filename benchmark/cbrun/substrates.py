@@ -8,9 +8,9 @@ capabilities.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +22,7 @@ __all__ = [
     "HostMount",
     "KNOWN_PROVIDERS",
     "SubstrateUnavailable",
+    "ficlone_host_unsupported_reason",
     "names_from_manifest",
     "mounted_substrates",
     "supports_ficlone",
@@ -33,6 +34,22 @@ CONTAINER_SUBSTRATE_ROOT = "/mnt/cb-substrate"
 COW_FSTYPES = frozenset({"xfs", "btrfs", "bcachefs", "ocfs2", "btrfs.zstd"})
 # Linux: _IOW(0x94, 9, int)
 _FICLONE = 0x40049409
+
+
+def ficlone_host_unsupported_reason() -> str | None:
+    """Why this host cannot issue FICLONE, or None on a capable host.
+
+    The ``fcntl`` ioctl interface is POSIX-only. Importing it at module load
+    would make every judge and asset check crash on Windows even for cases
+    that never declare a substrate, so it is resolved here, on demand.
+    """
+    if sys.platform != "linux":
+        return f"FICLONE needs a Linux host; this host is {sys.platform}"
+    try:
+        import fcntl  # noqa: F401
+    except ImportError:
+        return "FICLONE needs the fcntl module, which this Python lacks"
+    return None
 
 
 class SubstrateUnavailable(Exception):
@@ -122,6 +139,10 @@ def helper_visible_cow_mounts(mounts_text: str) -> list[str]:
 
 def supports_ficlone(directory: Path) -> bool:
     """True when *directory* can clone a regular file with FICLONE."""
+    if ficlone_host_unsupported_reason() is not None:
+        return False
+    import fcntl
+
     directory = Path(directory)
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -207,6 +228,9 @@ def _loop_umount(mountpoint: Path) -> None:
 
 
 def _prepare_cow_fs(scratch_dir: Path) -> HostMount:
+    unsupported = ficlone_host_unsupported_reason()
+    if unsupported is not None:
+        raise SubstrateUnavailable("cow_fs", unsupported)
     existing = _existing_ficlone_dir()
     if existing is not None:
         dest = existing / f"cb-cow-{os.getpid()}"

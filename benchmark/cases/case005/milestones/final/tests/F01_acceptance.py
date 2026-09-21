@@ -992,7 +992,7 @@ def test_second_transfer_encoding_chunked_refused():
                 ("Transfer-Encoding", "chunked"),
             ]
         ),
-        suggested=None,
+        suggested=501,
     )
 
 
@@ -1013,7 +1013,7 @@ def test_second_transfer_encoding_mixed_case_names_refused():
                 ("TRANSFER-ENCODING", "chunked"),
             ]
         ),
-        suggested=None,
+        suggested=501,
     )
 
 

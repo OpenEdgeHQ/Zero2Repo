@@ -83,7 +83,7 @@ def test_dump_load_when_package_importable():
     print(f"importable recovered={loaded!r}", flush=True)
 
 
-def test_serializer_fails_when_package_not_importable():
+def test_serializer_round_trip_is_required_unconditionally():
     # L38 remainder after the substrate paragraph was dropped: construct
     # a helper and dump then load of a mapping whose id is 42 recovers
     # that mapping. Do not require a hard error when the package is absent.

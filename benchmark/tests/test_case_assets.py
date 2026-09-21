@@ -177,7 +177,13 @@ def test_check_case_assets_accepts_matching_test_command_template(tmp_path: Path
 
 
 def test_privilege_markers_require_judge_substrates(tmp_path: Path) -> None:
-    case = _write_case(tmp_path)
+    case = _write_case(
+        tmp_path,
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": ["tests/helper.py"],
+        },
+    )
     helper = case / "milestones" / "final" / "tests" / "helper.py"
     helper.write_text("def setup():\n    losetup('/dev/loop0')\n", encoding="utf-8")
     issues = check_case_assets(case)
@@ -190,7 +196,7 @@ def test_privilege_markers_ok_with_declared_substrate(tmp_path: Path) -> None:
         tmp_path,
         tests_manifest={
             "test_files": ["tests/test_ok.py"],
-            "support_files": [],
+            "support_files": ["tests/helper.py"],
             "judge_substrates": ["cow_fs"],
         },
     )
@@ -230,8 +236,72 @@ def test_suite_wall_fields_must_be_numbers(tmp_path: Path) -> None:
     assert "suite_wall_measured_on must be an object" in joined
 
 
-def test_privilege_markers_ignore_amount_substring(tmp_path: Path) -> None:
+def test_suite_wall_requires_measured_on_arch_and_os(tmp_path: Path) -> None:
+    missing = _write_case(
+        tmp_path / "missing",
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "suite_wall_seconds": 10,
+        },
+    )
+    issues = " ".join(check_case_assets(missing))
+    assert "suite_wall_measured_on is required" in issues
+
+    incomplete = _write_case(
+        tmp_path / "incomplete",
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "judge_timeout_sec": 20,
+            "suite_wall_measured_on": {"arch": "x86_64"},
+        },
+    )
+    issues = " ".join(check_case_assets(incomplete))
+    assert "suite_wall_measured_on.os is required" in issues
+
+    ok = _write_case(
+        tmp_path / "ok",
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": [],
+            "suite_wall_seconds": 10,
+            "judge_timeout_sec": 20,
+            "suite_wall_measured_on": {"arch": "x86_64", "os": "linux"},
+        },
+    )
+    assert check_case_assets(ok) == []
+
+
+def test_undeclared_tests_dir_entry_is_error(tmp_path: Path) -> None:
     case = _write_case(tmp_path)
+    extra = case / "milestones" / "final" / "tests" / "_helpers.py"
+    extra.write_text("x = 1\n", encoding="utf-8")
+    issues = check_case_assets(case)
+    assert issues and "tests/_helpers.py is not declared" in issues[0]
+
+    declared = _write_case(
+        tmp_path / "dir",
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": ["tests/_fixtures"],
+        },
+    )
+    (declared / "milestones" / "final" / "tests" / "_fixtures").mkdir()
+    (declared / "milestones" / "final" / "tests" / "_fixtures" / "a.txt").write_text(
+        "x\n", encoding="utf-8"
+    )
+    assert check_case_assets(declared) == []
+
+
+def test_privilege_markers_ignore_amount_substring(tmp_path: Path) -> None:
+    case = _write_case(
+        tmp_path,
+        tests_manifest={
+            "test_files": ["tests/test_ok.py"],
+            "support_files": ["tests/helper.py"],
+        },
+    )
     helper = case / "milestones" / "final" / "tests" / "helper.py"
     helper.write_text(
         "def _runtime_grouped_amount():\n    return 1\n",

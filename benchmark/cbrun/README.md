@@ -62,8 +62,9 @@ wall-clock budgets:
   `global_timeout_multiplier`) and is applied once, including to a widened
   per-case judge budget.
 * Each trial records `host_arch` and `emulated` (container platform ≠ host).
-  Emulated trials are counted in `aggregate.emulated_trials` and are not
-  comparable to native runs.
+  Emulated runs require `--allow-emulated`. They are counted in
+  `aggregate.emulated_trials` and excluded from `reward_mean_valid`.
+  `suite_wall_measured_on.arch` must match the container platform.
 
 A conservative stall watchdog stops a wedged CLI when both stdout and `/app`
 stay quiet, without treating a long compile or a long model turn as a hang.
@@ -328,8 +329,10 @@ the provider on the host (reuse a writable FICLONE directory whose
 capabilities. Solve containers do not receive the mount.
 
 Preparation failure is `judge_error` with `substrates_missing` (and
-`run_valid=false`), not a scored reward 0. Official 009 CoW scoring is
-**cbrun only**. Harbor starts its own verifier and this adapter only
+`run_valid=false`), not a scored reward 0. `cow_fs` needs a Linux host
+(FICLONE via `fcntl`); on other hosts it is reported unavailable with that
+reason, and cases that declare no substrate are unaffected. Official 009
+CoW scoring is **cbrun only**. Harbor starts its own verifier and this adapter only
 copies `final_judge.py` into that image; it cannot attach substrates. A
 bare Harbor run of a substrate case reports `substrates_missing`.
 

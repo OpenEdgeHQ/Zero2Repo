@@ -385,7 +385,7 @@ Help pages include type-driven details (for example listing choice values).
 
 ### FP-11: Terminal output and interaction helpers
 
-**Public entry:** Echo (including to standard error), styling, styled echo, unstyling, pager output (including a writable pager stream), progress bars, reading a single character, pause until a key, launching an editor, launching an application or locating a file in the file manager, clearing the screen, looking up a per-user application config directory, opening files/streams (shared with FP-09), and binary/text standard-stream accessors.
+**Public entry:** Echo (including to standard error), styling, styled echo, unstyling, pager output (including a writable pager stream), progress bars, reading a single character, pause until a key, launching an editor, launching an application, clearing the screen, looking up a per-user application config directory, opening files/streams (shared with FP-09), and binary/text standard-stream accessors.
 
 **Normal behavior:**
 
@@ -396,7 +396,7 @@ Help pages include type-driven details (for example listing choice values).
 - Single-character input reads one character from the terminal even if standard input is a pipe. Interrupt and end-of-file key sequences become interrupt and end-of-file failures, not raw characters.
 - Pause prints a short message and waits for a key when interactive; when not interactive it does nothing. A session is interactive when standard input is a PTY (or stdin/stdout is a TTY).
 - Editor launch opens the user’s editor on a string (returns the saved text, or absent if the user quits without saving) or on a filename (no returned text).
-- Application launch opens a URL or filename with the default associated application, and can open a file manager with the file selected.
+- Application launch opens a URL or filename with the default associated application. A `locate` argument may be accepted; whether a file manager is actually opened is not part of acceptance.
 - Screen clear clears the visible terminal; when not connected to a terminal it does nothing.
 - Application directory: given an application name, the path is the platform config location. For an app named `Foo Bar`: on macOS, `~/Library/Application Support/Foo Bar`; on Unix, `~/.config/foo-bar` (or `$XDG_CONFIG_HOME/foo-bar` when that variable is set); on Windows, the roaming or local application-data folder plus `Foo Bar`. A POSIX-forced mode uses `~/.foo-bar` on POSIX systems instead.
 

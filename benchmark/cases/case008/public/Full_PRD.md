@@ -20,7 +20,7 @@ This document specifies **user- and integrator-observable behavior only**. Exact
 | **Host** | Hostname plus port when a non-default port is present (WHATWG host). |
 | **Hostname** | The host without a port (WHATWG hostname). Domain names, IPv4 addresses, and IPv6 addresses are the three host kinds. |
 | **Origin** | The WHATWG serialized origin (scheme, host, and port for tuple origins; the Standard’s opaque-origin serialization for opaque URLs). Credentials, path, query, and fragment are not part of the origin. |
-| **IDNA** | Internationalized Domain Names in Applications: ToASCII / ToUnicode per UTS #46, with Punycode (`xn--`) labels in ASCII hosts. |
+| **IDNA** | Internationalized Domain Names in Applications: ToASCII / ToUnicode per UTS #46, with Punycode (`xn--`) labels in ASCII hosts. UTS #46 CheckBidi and CheckJoiners validity checks are not part of this product's obligations. |
 | **URL Search Params** | The WHATWG query-string list of key/value pairs (the search parameters API), independent of a full URL object. |
 | **URLPattern** | The WHATWG URLPattern matcher: patterns over URL components, with named groups, wildcards, and optional custom regular expressions. |
 | **Length cap** | A process-wide maximum byte length for a URL’s serialized href (and for related search-parameter input). Default is the maximum 32-bit unsigned integer (about four gigabytes). The caller may lower it. |

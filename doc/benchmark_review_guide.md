@@ -67,6 +67,18 @@ Not in this round: case003 S01/S03/S04/S05 wording, case004 codec construction o
 3. **Every oracle fix ships a red control.** Put a workspace under
    `cases/<id>/controls/<name>/` with `expect.json` (`reward: 0` or `1`) and
    `app/`. `python3 tools/run_controls.py --out …` must keep those red.
+4. **Pinned values must be asserted.** Where the contract pins a concrete
+   value (default, status code, limit), hidden tests must pass that
+   value into the helper. An “unpinned” switch is only for values the
+   contract left unspecified.
+5. **External standards are enumerated.** Citing RFC / UTS / WHATWG
+   requires listing which obligations are in scope and which are not.
+6. **External-process oracles use documented observation points.** Assert
+   that a product launched a process only through a point the product
+   documents (for example a recorder script installed as the default
+   application). Do not rely on a recorder enumerating command names.
+7. **Test names describe the asserted behavior.** Do not keep a name
+   from a deleted scenario.
 
 ## 4. Runner hard rules (all cases)
 
