@@ -26,7 +26,7 @@ __all__ = [
 # cost $3 with no wall clock. Our tasks build a whole project from scratch
 # (some with GPU compilation), so a uniform 2h is the stable choice.
 DEFAULT_AGENT_TIMEOUT_SEC: float = 7200.0
-DEFAULT_TEST_TIMEOUT_SEC: float = 600.0
+DEFAULT_TEST_TIMEOUT_SEC: float = 7200.0
 # Stall watchdog: kill the solve only after this many seconds with no new agent
 # output. Set high so long compiles / long model turns are not misjudged as
 # hangs. 0 disables the stall guard (rely on the wall clock only).

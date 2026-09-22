@@ -53,11 +53,11 @@ wall-clock budgets:
 
 * `max_agent_timeout_sec` — solve phase. Final-stage cases use a uniform **2h**
   (`7200s`).
-* `max_test_timeout_sec` — judge phase. Default **10min** (`600s`). A case
-  may widen this via `milestones/final/test_manifest.json` fields
-  `judge_timeout_sec` (explicit) or `suite_wall_seconds × 2` (headroom).
-  Per-case values never tighten a CLI `--test-timeout-sec`. Cases without
-  those fields keep the 600s default.
+* `max_test_timeout_sec` — judge phase. Default **2h** (`7200s`), the same
+  wall clock as the solve phase. A case may widen this via
+  `milestones/final/test_manifest.json` fields `judge_timeout_sec` (explicit)
+  or `suite_wall_seconds × 2` (headroom). Per-case values never tighten a
+  CLI `--test-timeout-sec`. Cases without those fields keep the 7200s default.
 * `--timeout-multiplier` scales both wall clocks (mirrors Terminal-Bench's
   `global_timeout_multiplier`) and is applied once, including to a widened
   per-case judge budget.
