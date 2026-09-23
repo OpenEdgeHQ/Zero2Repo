@@ -171,7 +171,7 @@ def _cli_install_snippet(environ: dict[str, str] | None, backend: str | None = N
 
 
 def _agent_user_snippet() -> str:
-    """Create fixed non-root user for agents that reject root bypass (e.g. Claude Code)."""
+    """Create the fixed non-root user used by the judge and by specs that opt into it."""
     return (
         "if ! id -u cbagent >/dev/null 2>&1; then "
         "  command -v useradd >/dev/null 2>&1 || { "

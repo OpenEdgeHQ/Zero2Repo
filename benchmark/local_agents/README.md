@@ -48,7 +48,7 @@ python local_agents/smoke.py --all
 For each backend the script verifies the **same container path cbrun uses**:
 
 1. Derive/reuse the `:agent` image for `case001`.
-2. Run agent **setup** (Codex writes `auth.json` / `config.toml`; Claude runs as `cbagent`).
+2. Run agent **setup** (Codex writes `auth.json` / `config.toml`; Claude runs as root with `IS_SANDBOX=1`).
 3. Ask the model to create `/app/smoke_probe.txt` with content `AGENT_OK`.
 4. Confirm the probe file exists and the agent CLI produced output.
 5. Confirm **judge harness starts** (reward may be 0 — empty `/app` is expected to fail tests).

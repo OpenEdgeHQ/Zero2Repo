@@ -10,7 +10,7 @@ import pytest
 BENCHMARK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
-from cbrun import agents  # noqa: E402
+from cbrun import agent_spec, agents  # noqa: E402
 
 
 def test_backends_are_the_four_supported() -> None:
@@ -204,32 +204,37 @@ def test_cli_version_spec_requires_cursor_pin() -> None:
     )
 
 
-def test_claude_runs_nonroot() -> None:
+def test_claude_runs_as_root() -> None:
     inv = agents.resolve_invocation(
         "claude-code",
         model="claude-sonnet-4",
         instruction_path="/i.md",
         log_path="/l.txt",
     )
-    assert inv.run_as == "cbagent"
-    assert inv.spec.run_as == "nonroot"
-    assert "chown -R cbagent:cbagent" in inv.prepare_workspace
+    assert inv.run_as is None
+    assert inv.spec.run_as == "root"
+    assert inv.home == "/root"
+    assert inv.env["IS_SANDBOX"] == "1"
+    assert "chown -R cbagent:cbagent" not in inv.prepare_workspace
 
 
-def test_claude_repoints_config_dir_into_writable_home() -> None:
-    """CLAUDE_CONFIG_DIR must land under the agent HOME (not the root-owned
-    image-baked path) or the Bash tool fails at init with EACCES."""
-    inv = agents.resolve_invocation(
-        "claude-code",
+def test_claude_nonroot_spec_still_repoints_config_dir() -> None:
+    """A spec that opts into the non-root user must get a writable config dir."""
+    spec = agent_spec.AgentSpec(
+        name="claude-code",
+        command="claude",
+        run_as="nonroot",
+        home="/home/cbagent",
+    )
+    inv = agent_spec.resolve_agent(
+        spec=spec,
         model="claude-sonnet-4",
         instruction_path="/i.md",
         log_path="/l.txt",
-        # Simulate a deliverable image that bakes a root-owned config dir.
         environ={"CLAUDE_CONFIG_DIR": "/claude-home"},
     )
+    assert inv.run_as == "cbagent"
     assert inv.env["CLAUDE_CONFIG_DIR"] == "/home/cbagent/.claude"
-    assert "CLAUDE_CONFIG_DIR" in inv.env_keys
-    # The config dir is created and chowned to the agent before solve.
     assert "/home/cbagent/.claude" in inv.prepare_workspace
     assert "chown -R cbagent:cbagent" in inv.prepare_workspace
 

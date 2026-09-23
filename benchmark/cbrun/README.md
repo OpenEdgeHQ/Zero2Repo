@@ -93,7 +93,7 @@ Four backends ship as built-in **AgentSpec** records:
 |---------|-----|-------|
 | `codex` | `@openai/codex` | Writes `~/.codex/auth.json` + `config.toml` from `OPENAI_*` env before solve. Default `model_prefix=keep` for OpenAI-compatible gateways. |
 | `opencode` | `opencode-ai` | Forwards provider env based on `provider/model` id. |
-| `claude-code` | `@anthropic-ai/claude-code` | Runs as non-root user `cbagent` with `bypassPermissions` (Claude Code rejects root). Judge still runs as root. |
+| `claude-code` | `@anthropic-ai/claude-code` | Runs as root with `bypassPermissions`. Claude Code refuses that mode for a real root login, so the solve process sets `IS_SANDBOX=1`. Judge still runs as root. |
 | `cursor` | Cursor CLI (`cursor-agent`) | Forwards `CURSOR_API_KEY`. Installed from the official Cursor install script into the `:agent` image. |
 
 Auth/provider env is selected centrally and forwarded into the container; only
@@ -132,11 +132,11 @@ cats that file into `agent_setup.log`; it never prints `auth.json`). When
 unset, Codex 0.153.x is observed to default to `low`; the CLI prints a
 warning and `summary.json` records `reasoning_effort=null`.
 
-### Claude Code non-root contract
+### Claude Code root contract
 
 * Agent deliverables **must** land in `/app` (hard contract; not overridable).
-* Solve runs as `cbagent`; judge reads `/app` as root.
-* Agent HOME (`/home/cbagent`) holds CLI caches only; it is not scored.
+* Solve runs as root, same as the Cursor and Codex backends, so it can read root-only spec files baked into an image. `IS_SANDBOX=1` is set because Claude Code rejects `bypassPermissions` for an ordinary root login.
+* Agent HOME (`/root`) holds CLI caches only; it is not scored.
 
 ## Bring your own agent
 

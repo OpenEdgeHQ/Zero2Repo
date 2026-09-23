@@ -308,6 +308,12 @@ def _resolve_env(
         out["CLAUDE_CONFIG_DIR"] = _claude_config_dir(spec)
         if "CLAUDE_CONFIG_DIR" not in keys:
             keys.append("CLAUDE_CONFIG_DIR")
+    if spec.name == "claude-code" and spec.run_as == "root":
+        # bypassPermissions is refused for a real root login. Claude Code allows
+        # it when the process identifies itself as a harness sandbox.
+        out["IS_SANDBOX"] = "1"
+        if "IS_SANDBOX" not in keys:
+            keys.append("IS_SANDBOX")
     if spec.run_as == "nonroot":
         home = _home_for(spec)
         out.setdefault("HOME", home)
@@ -441,9 +447,9 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         name="claude-code",
         env_passthrough=(),
         python_hook="cbrun.agent_hooks:claude_code_env",
-        run_as="nonroot",
+        run_as="root",
         model_prefix="keep",
-        home=AGENT_USER_HOME,
+        home="/root",
         runtime="node",
         command=(
             "cat {instruction_quoted} | claude --print --verbose --output-format stream-json "

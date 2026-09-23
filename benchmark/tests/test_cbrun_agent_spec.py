@@ -179,6 +179,7 @@ def test_invalid_run_as_rejected() -> None:
 
 
 def test_prepare_workspace_nonroot_chowns_app() -> None:
-    inv = agent_spec.resolve_agent(backend="claude-code", model="claude-sonnet-4")
+    spec = agent_spec.AgentSpec(name="custom", command="true", run_as="nonroot")
+    inv = agent_spec.resolve_agent(spec=spec, model="m")
     assert "cbagent" in inv.prepare_workspace
     assert "/app" in inv.prepare_workspace
