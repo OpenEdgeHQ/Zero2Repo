@@ -113,6 +113,8 @@ pip install -e .
 # Optional cost reporting: pip install -e ".[cost]"
 ```
 
+USD cost for a run is computed with [CalLLMCost](https://github.com/Amorth/CalLLMCost), a small dependency-free library that normalizes provider `usage` payloads into four token buckets and prices them from a pinned table. It is vendored here for the benchmark, and it is handy on its own whenever you need the same accounting.
+
 ### Configure an agent
 
 ```bash
