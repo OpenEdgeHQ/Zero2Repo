@@ -74,13 +74,17 @@ class AgentSpec:
     setup_timeout_sec: float = 120.0
     python_hook: str | None = None
     runtime: str | None = None
+    # Container directories where the CLI writes session files with token
+    # usage. Shell-expanded in the solve env; archived after every trial so
+    # usage survives a killed process.
+    usage_paths: tuple[str, ...] = ()
 
     def spec_hash(self) -> str:
         payload = json.dumps(self.to_dict(), sort_keys=True)
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "command": self.command,
             "env_passthrough": list(self.env_passthrough),
@@ -93,6 +97,9 @@ class AgentSpec:
             "python_hook": self.python_hook,
             "runtime": self.runtime,
         }
+        if self.usage_paths:
+            out["usage_paths"] = list(self.usage_paths)
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentSpec:
@@ -111,6 +118,9 @@ class AgentSpec:
         passthrough = data.get("env_passthrough") or []
         if not isinstance(passthrough, list):
             raise ValueError(f"AgentSpec {name!r}: env_passthrough must be a list")
+        usage_paths = data.get("usage_paths") or []
+        if not isinstance(usage_paths, list):
+            raise ValueError(f"AgentSpec {name!r}: usage_paths must be a list")
         return cls(
             name=name,
             command=command,
@@ -123,6 +133,7 @@ class AgentSpec:
             setup_timeout_sec=float(data.get("setup_timeout_sec") or 120.0),
             python_hook=_optional_str(data.get("python_hook")),
             runtime=_optional_str(data.get("runtime")),
+            usage_paths=tuple(str(p) for p in usage_paths if str(p).strip()),
         )
 
 
@@ -417,6 +428,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         model_prefix="keep",
         home="/root/.codex",
         runtime="node",
+        usage_paths=("$CODEX_HOME/sessions",),
         command=(
             "codex exec "
             "--dangerously-bypass-approvals-and-sandbox "
@@ -451,6 +463,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         model_prefix="keep",
         home="/root",
         runtime="node",
+        usage_paths=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects",),
         command=(
             "cat {instruction_quoted} | claude --print --verbose --output-format stream-json "
             "--permission-mode bypassPermissions "
@@ -467,7 +480,7 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         command=(
             "cursor-agent -p --force --trust --sandbox disabled "
             "--model {model_quoted} --workspace {workdir_quoted} "
-            "--output-format text "
+            "--output-format stream-json "
             "< {instruction_quoted} "
             "2>&1 | stdbuf -oL tee {log_quoted}"
         ),

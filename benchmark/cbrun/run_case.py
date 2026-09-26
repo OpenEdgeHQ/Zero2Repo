@@ -62,6 +62,7 @@ from .limits import (
 from .results import TrialResult
 from .steps import Step, discover_steps
 from .submit import CONTAINER_SUBMIT_PATH, NO_SUBMIT_ERROR, is_valid_submit
+from .usage import USAGE_ARCHIVE_DIR, collect_trial_usage
 
 __all__ = ["run_trial"]
 
@@ -254,18 +255,61 @@ def run_trial(
                 break
         result.passed_steps = passed_steps
     finally:
-        _archive_trial(container, out_dir=out_dir, result=result)
+        _archive_trial(container, out_dir=out_dir, result=result, invocation=invocation)
+        _record_token_usage(out_dir, result)
         result.finished_at = utc_now()
 
     return result
 
 
-def _archive_trial(container: Container, *, out_dir: Path, result: TrialResult) -> None:
+def _harvest_usage_files(container: Container, invocation: AgentInvocation) -> str | None:
+    """Copy the CLI's session files into ``/logs/agent/usage`` before archiving."""
+    paths = invocation.spec.usage_paths
+    if not paths:
+        return None
+    dest = f"/logs/agent/{USAGE_ARCHIVE_DIR}"
+    lines = [f"mkdir -p {dest}"]
+    for index, raw in enumerate(paths):
+        lines.append(
+            f'src="{raw}"; if [ -d "$src" ]; then mkdir -p {dest}/{index} && cp -a "$src"/. {dest}/{index}/; fi'
+        )
+    res = container.exec(
+        "; ".join(lines),
+        env=invocation.env,
+        timeout_sec=120.0,
+        user=invocation.run_as,
+    )
+    if res.exit_code != 0:
+        return f"usage files: exit {res.exit_code}: {(res.tail or '').strip()[-200:]}"
+    return None
+
+
+def _record_token_usage(out_dir: Path, result: TrialResult) -> None:
+    try:
+        result.token_usage = collect_trial_usage(out_dir)
+    except Exception as exc:  # noqa: BLE001
+        result.token_usage = {"complete": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _archive_trial(
+    container: Container,
+    *,
+    out_dir: Path,
+    result: TrialResult,
+    invocation: AgentInvocation | None = None,
+) -> None:
     """Freeze the container, archive ``/app`` and ``/logs/agent``, then remove it.
 
     Every failure is recorded on ``result.artifact_errors``; nothing raises.
     """
     try:
+        if invocation is not None and not container.paused:
+            try:
+                harvest_error = _harvest_usage_files(container, invocation)
+            except Exception as exc:  # noqa: BLE001
+                harvest_error = f"usage files: {type(exc).__name__}: {exc}"
+            if harvest_error:
+                result.artifact_errors.append(harvest_error)
         # ``docker exec`` is refused on a paused container, so probe the log
         # directory before pausing; ``docker cp`` still works afterwards.
         has_agent_logs = False if container.paused else container.path_exists("/logs/agent")

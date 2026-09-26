@@ -302,6 +302,7 @@ def test_cursor_command_shape() -> None:
     assert cmd.startswith("cursor-agent -p --force --trust --sandbox disabled")
     assert "--workspace /app" in cmd or "--workspace '/app'" in cmd
     assert "cursor-grok-4.6-high" in cmd
+    assert "--output-format stream-json" in cmd
     assert "< /tmp/cbrun/instruction.md" in cmd or "< '/tmp/cbrun/instruction.md'" in cmd
     assert "$(cat" not in cmd
     assert "tee /logs/agent/agent.txt" in cmd

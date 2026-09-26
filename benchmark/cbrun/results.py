@@ -63,6 +63,7 @@ class TrialResult:
     run_valid: bool = True
     invalid_reason: str | None = None
     substrates_missing: list[str] = field(default_factory=list)
+    token_usage: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -115,7 +116,30 @@ def _aggregate(results: list[TrialResult]) -> dict:
             if r.invalid_reason and str(r.invalid_reason).startswith("judge:")
         ),
         "emulated_trials": sum(1 for r in results if r.emulated),
+        "token_usage": _aggregate_usage([r.token_usage for r in results]),
     }
+
+
+_USAGE_KEYS = (
+    "input_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+)
+
+
+def _aggregate_usage(records: list[dict]) -> dict:
+    """Sum per-trial token usage; trials without complete usage are counted."""
+    out: dict = {key: 0 for key in _USAGE_KEYS}
+    for record in records:
+        for key in _USAGE_KEYS:
+            value = record.get(key) if record else None
+            if isinstance(value, int):
+                out[key] += value
+    out["incomplete_trials"] = sum(1 for record in records if not (record or {}).get("complete"))
+    return out
 
 
 def format_reward_matrix(results: list[TrialResult]) -> str:
