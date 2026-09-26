@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "case_id": "case001",
+  "frozen_at": "2026-09-05T06:56:19.679687+00:00",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "runner": {
+    "docker_image": "",
+    "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'flit_core>=3.12,<4' && rm -rf /var/lib/apt/lists/*",
+    "build_command": ""
+  },
+  "source_image": {
+    "tag": "codingbench-env/hukkin-tomli-001-bdirect:ckpt-codingbench-init",
+    "kind": "checkpoint",
+    "digest": "sha256:09a4769c81acd4756053138b7695b50a33b6c4ac2880422d2f83839456743411"
+  },
+  "repo": {
+    "path": "repos/tomli",
+    "commit": "5a77b12a7a9f052ce5a20c335d2825658f6aea52",
+    "tree_sha256": "bc3f419a417289a09cb48f9ae580683d507648702b0e4dc88f542572141624a3",
+    "container_path": "/opt/codingbench/repo"
+  }
+}

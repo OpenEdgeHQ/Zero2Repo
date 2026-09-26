@@ -1,0 +1,113 @@
+{
+  "schema_version": 2,
+  "modules": [
+    "F01_helpers",
+    "F02_helpers",
+    "F03_helpers",
+    "F04_helpers",
+    "__future__",
+    "_harness",
+    "contextlib",
+    "dataclasses",
+    "datetime",
+    "hashlib",
+    "io",
+    "signtoken",
+    "json",
+    "os",
+    "os.environ",
+    "os.pathsep",
+    "pathlib",
+    "pytest",
+    "secrets",
+    "shutil",
+    "string",
+    "subprocess",
+    "sys",
+    "sys.modules",
+    "sys.path",
+    "sys.stderr",
+    "sys.stdout",
+    "tempfile",
+    "time",
+    "types",
+    "typing",
+    "warnings"
+  ],
+  "names": [
+    "HMACAlgorithm",
+    "NoneAlgorithm",
+    "Serializer",
+    "Signer",
+    "TimedSerializer",
+    "TimestampSigner",
+    "URLSafeSerializer",
+    "URLSafeTimedSerializer"
+  ],
+  "imports": [
+    {
+      "module": "signtoken",
+      "names": [
+        "HMACAlgorithm",
+        "NoneAlgorithm",
+        "Serializer",
+        "Signer",
+        "TimedSerializer",
+        "TimestampSigner",
+        "URLSafeSerializer",
+        "URLSafeTimedSerializer"
+      ]
+    }
+  ],
+  "calls": [],
+  "interface_dependencies": [
+    {
+      "target": "signtoken"
+    }
+  ],
+  "compile_units": [],
+  "non_source_support_files": [],
+  "extractors": [
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F01_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F01_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F02_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F02_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F03_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F03_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F04_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/F04_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/_harness.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pallets-itsdangerous-001-bdirect/milestones/final/tests/conftest.py",
+      "level": "python-ast"
+    }
+  ],
+  "unextracted_files": []
+}

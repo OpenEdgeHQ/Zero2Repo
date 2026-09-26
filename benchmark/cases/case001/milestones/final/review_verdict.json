@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "repair_owner": "none",
+  "dimensions": {
+    "prd_accuracy": {
+      "score": 5,
+      "rationale": "Preamble obligations before the first FP heading are observable and each has a live hidden assertion: two array-of-tables items with a string name and an integer number; v1.1.0 inline-table newlines and trailing commas, backslash-e / backslash-x, omitted seconds; decode error as a value error with recoverable place; type error versus decode error; parse-only library with no writer; CPU-only with no negative-control that disables the package (the named probe document still parses while the package is importable). FP-01 through FP-05 headings match features.json and coverage_matrix core_capabilities. Finite sets (four string forms, four integer bases, inf/nan spellings, named invalid constructs, 310/470 nesting lower bounds, decode-error constructor offset 13) are enumerated. Layout of the importable package under src is in the Contract."
+    },
+    "gt_core_logic": {
+      "score": 5,
+      "rationale": "The neutralized tree under milestones/gt/code/src is a real recursive-descent parser (package-root loads/load/decode-error, table/array/key flags, scalar constructors, float converter, UTF-8 binary read), not stubs. produce_sft is off, so excerpt-versus-original is not scored. Every non-scaffolding feature has verification.status passed, gt_verified true, red_check probe-ok with red_check_source b-loop-probes. Missing mutants/ is not a defect while probe rounds recorded kills."
+    },
+    "artifact_consistency": {
+      "score": 5,
+      "rationale": "Contract and tests share the literal import tomlparse and names loads, load, and TOMLDecodeError; parse_float, decode-error fields msg/doc/pos/lineno/colno, and src layout are named in the Contract at the granularity tests use. test_usage.json modules/names/imports match. Objective gate reported no contract-coverage-gap or test-usage-not-grounded. test_manifest.json lists existing FNN_acceptance.py / FNN_helpers.py files, workdir \".\", execution_groups per feature; coverage_matrix.features{}.test_files is mirrored into features.json test_files (basenames). Suite honesty: accept_cursor.json status complete; d_verify_evidence.json collected 303 and passed (112+91+21+45+34). This review re-ran agent_verify suite --all --world neutral: collected 303, exit 0. Published test truth is test_manifest.test_command (pytest); install/build come from the mapped runner/recipe (registry pin, empty build). Hardware_Requirements.md states contestant-machine CPU baseline only, with no pipeline-internal paths."
+    },
+    "leakage": {
+      "score": 5,
+      "rationale": "Objective-gate report listed no leak-judge, test-reference-leak, or runner-identity-leak issues. This review does not re-implement substring matching. Public PRD/Contract/Hardware_Requirements and test_manifest commands use the neutralized product name and pytest paths. Hidden tests do not quote path::node ids in public documents. Controlled Contract disclosure of decode-error fields is white-box, not leakage."
+    },
+    "test_focus": {
+      "score": 5,
+      "rationale": "Acceptance files target PRD core capabilities (document structure, native scalars, binary UTF-8 files, decode-error kind and place, parse_float) through the package-root entries only. No private parser imports. Runtime tokens block fixture memorization. Nesting tests score the PRD lower bounds (470/310/310) and do not require RecursionError at extra depth."
+    },
+    "test_correctness": {
+      "score": 5,
+      "rationale": "Adversarial probes killed a wrong implementation on every feature (F01 30, F02 16, F03 11, F04 21, F05 18). Recorded kills: F01 empty-comment-fails -> tests/F01_acceptance.py::test_comment_only_no_newline_is_empty_mapping; F02 bool-true-as-int -> tests/F02_acceptance.py::test_true_contrasts_with_integer_one; F03 accept-text-mode -> tests/F03_acceptance.py::test_runtime_text_mode_file_refused_as_type_error; F04 accept-invalid -> tests/F04_acceptance.py::TestInvalidDocument::test_named_invalid_brackets_are_decode_error; F05 accept-dict -> tests/F05_acceptance.py::test_empty_dict_converter_is_value_error_not_decode_error. This review's agent_verify suite --all --world neutral: 303 passed, exit 0. No pytest skip/xfail. Refusal helpers require_decode_failure / require_type_error / require_illegal_converter_failure assert the PRD carrier (decode error as value error, type error, or value error that is not a decode error), not absence of a mapping alone. Mechanical-scan negative arms are success-path contrasts (empty sequence, comment text not a key, naive tzinfo is None, leftover integers) or already assert the named carrier; F03 invalid UTF-8 uses the PRD's unsuccessful/no-mapping carrier. Expected float values use the language float constructor the PRD named, not a reimplementation of the parser. No always-true assertions; empty-selection cannot pass because pytest is given explicit file lists that collect 303 items."
+    },
+    "prd_coverage": {
+      "score": 5,
+      "rationale": "Every coverage_matrix core capability has tests that assert the success or refusal shape. F01 structure/keys/headers/AOT/inline/arrays/comments/refusals; F02 booleans/four string forms/escapes/four integer bases/default floats/four date-time kinds/illegal scalars as decode error; F03 binary UTF-8 parity, CRLF, text-mode TypeError, invalid UTF-8 unsuccessful; F04 named invalid documents, interior vs end-of-document place, constructor offset 13 -> line 3 col 2, bytes/boolean TypeError; F05 decimal converter, specials, integers unconverted, default float, dict/list converter ValueError not decode error. No env-gated skip. CPU-only profile has no removable substrate, so no negative-control clause is required. Cheaper proxies (hard-coded tables, ignore converter, latin-1 misread) were killed in the probe rounds."
+    },
+    "design_goal_unity": {
+      "score": 5,
+      "rationale": "PRD, Contract, GT, and tests describe one importable parse-only library: string and binary entries, one decode-error kind for invalid TOML, TypeError for wrong Python type, ValueError (not decode error) for illegal converter results, v1.1.0 dialect, plain mappings. F01 structural refusals, F02 illegal scalars, and F04 named invalid documents all require the same decode error as a value error. Recursion remains distinct. No D_ISSUES_FOR_E.md / CODE_ISSUES_FOR_D.md defects. F_GATE_REPORT: no objective gate issues."
+    }
+  },
+  "repair_notes": "This review re-ran agent_verify suite --all --world neutral: collected 303, exit 0 (112+91+21+45+34), matching d_verify_evidence.json. Mechanical-scan absence arms were reviewed against the whole-PRD carrier rule and are enforced or are success-path contrasts, not evadable silent-no-op paths. No defects in this pass.",
+  "findings": [],
+  "tests_digest": "2007841630152a0cb4765d3ff6e589ae387db31de63a7e8089876e0455f19d05"
+}

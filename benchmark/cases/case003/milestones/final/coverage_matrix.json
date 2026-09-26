@@ -1,0 +1,802 @@
+{
+  "schema_version": 1,
+  "features": {
+    "F01": {
+      "core_capabilities": [
+        {
+          "id": "F01-cap-01",
+          "description": "Single-document parse of a Core mapping, scalar, or sequence, including `answer: 42` as a numeric 42 and ignoring a leading byte-order mark"
+        },
+        {
+          "id": "F01-cap-02",
+          "description": "Multi-document parse returns documents in order, two empty document-start markers as two nulls, and empty or comment-only text as an empty list"
+        },
+        {
+          "id": "F01-cap-03",
+          "description": "Distinguish the two parse entries on empty input and on a multi-document stream: single-document fails, multi-document succeeds"
+        },
+        {
+          "id": "F01-cap-04",
+          "description": "Anchors and aliases share constructed identity, including a recursive alias on the default sequence and mapping tags"
+        },
+        {
+          "id": "F01-cap-05",
+          "description": "Reject duplicate keys by default; with JSON-parse compatibility the later pair wins on every document of the stream"
+        },
+        {
+          "id": "F01-cap-06",
+          "description": "Decode double-quoted and single-quoted folding (CR/LF as space; backslash-joined breaks only in double quotes), eight-digit Unicode escapes, and `%TAG` handles that contain digits (`%TAG !a1! tag:yaml.org,2002:` then `--- !a1!str 123` is the string `123`)"
+        },
+        {
+          "id": "F01-cap-07",
+          "description": "Reject unknown explicit tags, explicit tags on the wrong node kind, and the documented malformed inputs (including unpaired UTF-16 surrogate code units U+DC00 followed by U+D800), yielding no usable document"
+        },
+        {
+          "id": "F01-cap-08",
+          "description": "When a source-path label is supplied, include that label in the failure report and present line-break count one for `a: 1` then CR/LF then `@` versus count zero for `@` then CR/LF then `a: 1` (a CR/LF pair is one break; the count is not a byte offset, a column, or a parse-step; storage, print form, and zero- versus one-based numbering are not scored)"
+        }
+      ],
+      "test_files": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ]
+    },
+    "F02": {
+      "core_capabilities": [
+        {
+          "id": "F02-cap-01",
+          "description": "Failsafe keeps plain scalars as strings while still constructing sequences and mappings"
+        },
+        {
+          "id": "F02-cap-02",
+          "description": "JSON implicit null, boolean, integer, and float rules, including the documented forms that stay strings"
+        },
+        {
+          "id": "F02-cap-03",
+          "description": "Core (the parse default) implicit null, boolean, integer, and float rules, including forms that stay strings and overflow `1e999`"
+        },
+        {
+          "id": "F02-cap-04",
+          "description": "YAML 1.1 implicit boolean, integer, and float notations, including sexagesimal and underscores, without treating YAML 1.2 `0o` as an integer (implicit `0o123` stays a string; explicit `!!int 0o123` fails)"
+        },
+        {
+          "id": "F02-cap-05",
+          "description": "Explicit tags resolve or fail independently of implicit rules: empty `!!str`/`!!seq`/`!!map`, shared numeric forms across typed schemas, a decimal integer that is `1` followed by 399 zeros staying a string on JSON/Core/YAML 1.1, and rejected `!!bool`/`!!int`/`!!float` text"
+        },
+        {
+          "id": "F02-cap-06",
+          "description": "Schema selection is the only switch for these implicit rules; Core must not apply YAML 1.1 sexagesimal, underscore, leading-zero-octal, or yes/on boolean words"
+        }
+      ],
+      "test_files": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ]
+    },
+    "F03": {
+      "core_capabilities": [
+        {
+          "id": "F03-cap-01",
+          "description": "Default plain-object map stores string properties, stringifies non-string scalar keys, and keeps `__proto__` as an own data property without prototype pollution"
+        },
+        {
+          "id": "F03-cap-02",
+          "description": "Default plain-object map rejects a sequence or mapping used as a key"
+        },
+        {
+          "id": "F03-cap-03",
+          "description": "Real-map replacement constructs a `Map` that keeps numeric keys distinct from string keys and preserves complex keys through dump-then-parse"
+        },
+        {
+          "id": "F03-cap-04",
+          "description": "Legacy-map replacement stringifies sequence and mapping keys, still stores `__proto__` as an own property, and rejects a nested-array key (including via alias)"
+        },
+        {
+          "id": "F03-cap-05",
+          "description": "Attaching the real-map or legacy-map tag replaces the default `!!map` for that schema rather than offering three simultaneous containers"
+        }
+      ],
+      "test_files": [
+        "tests/F03_acceptance.py"
+      ]
+    },
+    "F04": {
+      "core_capabilities": [
+        {
+          "id": "F04-cap-01",
+          "description": "`!!binary` constructs a `Uint8Array` from Base64, dump-then-parse restores the bytes, an empty `!!binary` is an empty `Uint8Array`, and invalid Base64 fails"
+        },
+        {
+          "id": "F04-cap-02",
+          "description": "`!!timestamp` implicit UTC forms construct date values, one-digit months stay strings, impossible calendar values stay strings implicitly and fail when explicit, and dump-then-parse restores the instant"
+        },
+        {
+          "id": "F04-cap-03",
+          "description": "`!!set` constructs a `Set` of keys with null values, dumps with `!!set`, and rejects a non-null set item"
+        },
+        {
+          "id": "F04-cap-04",
+          "description": "`!!omap` constructs an ordered sequence of single-key mappings with unique keys, is load-only on dump, and rejects mapping-shaped or multi-key items"
+        },
+        {
+          "id": "F04-cap-05",
+          "description": "`!!pairs` constructs an array of two-element arrays, allows duplicate keys, rejects complex keys on the default map, and preserves them on real-map"
+        },
+        {
+          "id": "F04-cap-06",
+          "description": "Merge keys are off under Core and on under YAML 1.1 or Core with the merge tag; an explicit pair wins over a merged pair; a later mapping in a merge sequence does not overwrite a key already brought in by an earlier mapping (`<<: [ { r: 10 }, { r: 1 } ]` yields `r: 10`); illegal merge sources fail"
+        }
+      ],
+      "test_files": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ]
+    },
+    "F05": {
+      "core_capabilities": [
+        {
+          "id": "F05-cap-01",
+          "description": "Dump-then-parse of `{ answer: 42 }` restores numeric 42; the default dump schema quotes YAML 1.1 boolean words (`yes`, `Yes`, `on`, \u2026) and `true`/`42`/`null`; under JSON the string `yes` is plain"
+        },
+        {
+          "id": "F05-cap-02",
+          "description": "Quote strings that would be read as YAML structure (`---`, `--- x`, `...`, `- value`, `=`, `foo: bar`) and strings that begin or end with a space, while leaving `---x` and `...x` plain"
+        },
+        {
+          "id": "F05-cap-03",
+          "description": "Honor quote style (single vs double) and the quote-every-non-key-string switch"
+        },
+        {
+          "id": "F05-cap-04",
+          "description": "Dump integers at or above `1e21` as floats and round-trip special floats (NaN, infinities, small exponents) on JSON, Core, and YAML 1.1"
+        },
+        {
+          "id": "F05-cap-05",
+          "description": "Reuse a second occurrence of the same object as an alias by default, and inline both copies when the no-reuse switch is on; when a node has both an anchor and an explicit tag, default order is anchor then tag, and a switch reverses that to tag then anchor"
+        },
+        {
+          "id": "F05-cap-06",
+          "description": "Apply indent width, line width, sequence-indent, nested-sequence, flow-depth, and flow-presentation choices as documented"
+        },
+        {
+          "id": "F05-cap-07",
+          "description": "Sort keys when a comparator-less sort is requested; otherwise keep insertion order"
+        },
+        {
+          "id": "F05-cap-08",
+          "description": "Fail dump of functions and regular expressions unless the skip-unrepresentable switch is on; treat `undefined` as documented (sequence item as null, mapping value omitted, root as empty text)"
+        }
+      ],
+      "test_files": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ]
+    },
+    "F06": {
+      "core_capabilities": [
+        {
+          "id": "F06-cap-01",
+          "description": "Attach a scalar custom tag that constructs a caller-defined value on load and writes that tag back on dump"
+        },
+        {
+          "id": "F06-cap-02",
+          "description": "Attach a sequence custom tag that converts collected items into a different result and dump the tagged sequence; an alias to that node refers to the converted result"
+        },
+        {
+          "id": "F06-cap-03",
+          "description": "Attach a mapping custom tag that receives each pair and dump-then-parse restores the tagged mapping"
+        },
+        {
+          "id": "F06-cap-04",
+          "description": "Register the same tag name for more than one node kind, and prefer an exact tag name over a prefix match"
+        },
+        {
+          "id": "F06-cap-05",
+          "description": "Accept unknown tags through prefix-matching tags and write those tag names back on dump"
+        },
+        {
+          "id": "F06-cap-06",
+          "description": "Refuse a schema without the default string tag, refuse an implicit prefix-matching scalar, fail a recursive alias into a converting tag, and fail a tag that rejects the collected items"
+        }
+      ],
+      "test_files": [
+        "tests/F06_acceptance.py"
+      ]
+    },
+    "F07": {
+      "core_capabilities": [
+        {
+          "id": "F07-cap-01",
+          "description": "Enforce collection nesting depth (omitted default is the implementer\u2019s and is not scored as an exact collection-count pair; aliases are not counted): ten nested flow sequences succeed at 20 and fail at 5; at limit 5, ten aliases to one empty sequence succeed and a recursive self-alias succeeds; 100000 opening brackets fail under the omitted default as a parse failure, not a host stack overflow"
+        },
+        {
+          "id": "F07-cap-02",
+          "description": "Enforce the alias budget per document (default unlimited): two aliases succeed at 2 and fail at 1; budget 0 rejects every alias; two documents that each have one alias succeed at budget 1"
+        },
+        {
+          "id": "F07-cap-03",
+          "description": "Enforce the merge-key budget per parse call (default 10000 keys processed by each `<<` application, shared across a multi-document stream): omitted budget accepts 10000 one-key mappings and rejects 10001; three merged keys succeed at 5 and fail at 2; merging one three-key mapping twice in one `<<` sequence fails at 5 and succeeds at 6; two documents that each merge two keys fail at 3 and succeed at 4; disabling the budget allows a 150-key merge chain"
+        }
+      ],
+      "test_files": [
+        "tests/F07_acceptance.py"
+      ]
+    }
+  },
+  "capabilities": [
+    {
+      "capability_id": "F01-cap-01",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Single-document parse of a Core mapping, scalar, or sequence, including `answer: 42` as a numeric 42 and ignoring a leading byte-order mark"
+    },
+    {
+      "capability_id": "F01-cap-02",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Multi-document parse returns documents in order, two empty document-start markers as two nulls, and empty or comment-only text as an empty list"
+    },
+    {
+      "capability_id": "F01-cap-03",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Distinguish the two parse entries on empty input and on a multi-document stream: single-document fails, multi-document succeeds"
+    },
+    {
+      "capability_id": "F01-cap-04",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Anchors and aliases share constructed identity, including a recursive alias on the default sequence and mapping tags"
+    },
+    {
+      "capability_id": "F01-cap-05",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Reject duplicate keys by default; with JSON-parse compatibility the later pair wins on every document of the stream"
+    },
+    {
+      "capability_id": "F01-cap-06",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Decode double-quoted and single-quoted folding (CR/LF as space; backslash-joined breaks only in double quotes), eight-digit Unicode escapes, and `%TAG` handles that contain digits (`%TAG !a1! tag:yaml.org,2002:` then `--- !a1!str 123` is the string `123`)"
+    },
+    {
+      "capability_id": "F01-cap-07",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Reject unknown explicit tags, explicit tags on the wrong node kind, and the documented malformed inputs (including unpaired UTF-16 surrogate code units U+DC00 followed by U+D800), yielding no usable document"
+    },
+    {
+      "capability_id": "F01-cap-08",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "When a source-path label is supplied, include that label in the failure report and present line-break count one for `a: 1` then CR/LF then `@` versus count zero for `@` then CR/LF then `a: 1` (a CR/LF pair is one break; the count is not a byte offset, a column, or a parse-step; storage, print form, and zero- versus one-based numbering are not scored)"
+    },
+    {
+      "capability_id": "F02-cap-01",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Failsafe keeps plain scalars as strings while still constructing sequences and mappings"
+    },
+    {
+      "capability_id": "F02-cap-02",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "JSON implicit null, boolean, integer, and float rules, including the documented forms that stay strings"
+    },
+    {
+      "capability_id": "F02-cap-03",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Core (the parse default) implicit null, boolean, integer, and float rules, including forms that stay strings and overflow `1e999`"
+    },
+    {
+      "capability_id": "F02-cap-04",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "YAML 1.1 implicit boolean, integer, and float notations, including sexagesimal and underscores, without treating YAML 1.2 `0o` as an integer (implicit `0o123` stays a string; explicit `!!int 0o123` fails)"
+    },
+    {
+      "capability_id": "F02-cap-05",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Explicit tags resolve or fail independently of implicit rules: empty `!!str`/`!!seq`/`!!map`, shared numeric forms across typed schemas, a decimal integer that is `1` followed by 399 zeros staying a string on JSON/Core/YAML 1.1, and rejected `!!bool`/`!!int`/`!!float` text"
+    },
+    {
+      "capability_id": "F02-cap-06",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Schema selection is the only switch for these implicit rules; Core must not apply YAML 1.1 sexagesimal, underscore, leading-zero-octal, or yes/on boolean words"
+    },
+    {
+      "capability_id": "F03-cap-01",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Default plain-object map stores string properties, stringifies non-string scalar keys, and keeps `__proto__` as an own data property without prototype pollution"
+    },
+    {
+      "capability_id": "F03-cap-02",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Default plain-object map rejects a sequence or mapping used as a key"
+    },
+    {
+      "capability_id": "F03-cap-03",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Real-map replacement constructs a `Map` that keeps numeric keys distinct from string keys and preserves complex keys through dump-then-parse"
+    },
+    {
+      "capability_id": "F03-cap-04",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Legacy-map replacement stringifies sequence and mapping keys, still stores `__proto__` as an own property, and rejects a nested-array key (including via alias)"
+    },
+    {
+      "capability_id": "F03-cap-05",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Attaching the real-map or legacy-map tag replaces the default `!!map` for that schema rather than offering three simultaneous containers"
+    },
+    {
+      "capability_id": "F04-cap-01",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "`!!binary` constructs a `Uint8Array` from Base64, dump-then-parse restores the bytes, an empty `!!binary` is an empty `Uint8Array`, and invalid Base64 fails"
+    },
+    {
+      "capability_id": "F04-cap-02",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "`!!timestamp` implicit UTC forms construct date values, one-digit months stay strings, impossible calendar values stay strings implicitly and fail when explicit, and dump-then-parse restores the instant"
+    },
+    {
+      "capability_id": "F04-cap-03",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "`!!set` constructs a `Set` of keys with null values, dumps with `!!set`, and rejects a non-null set item"
+    },
+    {
+      "capability_id": "F04-cap-04",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "`!!omap` constructs an ordered sequence of single-key mappings with unique keys, is load-only on dump, and rejects mapping-shaped or multi-key items"
+    },
+    {
+      "capability_id": "F04-cap-05",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "`!!pairs` constructs an array of two-element arrays, allows duplicate keys, rejects complex keys on the default map, and preserves them on real-map"
+    },
+    {
+      "capability_id": "F04-cap-06",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Merge keys are off under Core and on under YAML 1.1 or Core with the merge tag; an explicit pair wins over a merged pair; a later mapping in a merge sequence does not overwrite a key already brought in by an earlier mapping (`<<: [ { r: 10 }, { r: 1 } ]` yields `r: 10`); illegal merge sources fail"
+    },
+    {
+      "capability_id": "F05-cap-01",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Dump-then-parse of `{ answer: 42 }` restores numeric 42; the default dump schema quotes YAML 1.1 boolean words (`yes`, `Yes`, `on`, \u2026) and `true`/`42`/`null`; under JSON the string `yes` is plain"
+    },
+    {
+      "capability_id": "F05-cap-02",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Quote strings that would be read as YAML structure (`---`, `--- x`, `...`, `- value`, `=`, `foo: bar`) and strings that begin or end with a space, while leaving `---x` and `...x` plain"
+    },
+    {
+      "capability_id": "F05-cap-03",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Honor quote style (single vs double) and the quote-every-non-key-string switch"
+    },
+    {
+      "capability_id": "F05-cap-04",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Dump integers at or above `1e21` as floats and round-trip special floats (NaN, infinities, small exponents) on JSON, Core, and YAML 1.1"
+    },
+    {
+      "capability_id": "F05-cap-05",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Reuse a second occurrence of the same object as an alias by default, and inline both copies when the no-reuse switch is on; when a node has both an anchor and an explicit tag, default order is anchor then tag, and a switch reverses that to tag then anchor"
+    },
+    {
+      "capability_id": "F05-cap-06",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Apply indent width, line width, sequence-indent, nested-sequence, flow-depth, and flow-presentation choices as documented"
+    },
+    {
+      "capability_id": "F05-cap-07",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Sort keys when a comparator-less sort is requested; otherwise keep insertion order"
+    },
+    {
+      "capability_id": "F05-cap-08",
+      "prd_refs": [
+        "F05"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F05_acceptance.py",
+        "tests/F05_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Fail dump of functions and regular expressions unless the skip-unrepresentable switch is on; treat `undefined` as documented (sequence item as null, mapping value omitted, root as empty text)"
+    },
+    {
+      "capability_id": "F06-cap-01",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Attach a scalar custom tag that constructs a caller-defined value on load and writes that tag back on dump"
+    },
+    {
+      "capability_id": "F06-cap-02",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Attach a sequence custom tag that converts collected items into a different result and dump the tagged sequence; an alias to that node refers to the converted result"
+    },
+    {
+      "capability_id": "F06-cap-03",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Attach a mapping custom tag that receives each pair and dump-then-parse restores the tagged mapping"
+    },
+    {
+      "capability_id": "F06-cap-04",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Register the same tag name for more than one node kind, and prefer an exact tag name over a prefix match"
+    },
+    {
+      "capability_id": "F06-cap-05",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept unknown tags through prefix-matching tags and write those tag names back on dump"
+    },
+    {
+      "capability_id": "F06-cap-06",
+      "prd_refs": [
+        "F06"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F06_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a schema without the default string tag, refuse an implicit prefix-matching scalar, fail a recursive alias into a converting tag, and fail a tag that rejects the collected items"
+    },
+    {
+      "capability_id": "F07-cap-01",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enforce collection nesting depth (omitted default is the implementer\u2019s and is not scored as an exact collection-count pair; aliases are not counted): ten nested flow sequences succeed at 20 and fail at 5; at limit 5, ten aliases to one empty sequence succeed and a recursive self-alias succeeds; 100000 opening brackets fail under the omitted default as a parse failure, not a host stack overflow"
+    },
+    {
+      "capability_id": "F07-cap-02",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enforce the alias budget per document (default unlimited): two aliases succeed at 2 and fail at 1; budget 0 rejects every alias; two documents that each have one alias succeed at budget 1"
+    },
+    {
+      "capability_id": "F07-cap-03",
+      "prd_refs": [
+        "F07"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F07_acceptance.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enforce the merge-key budget per parse call (default 10000 keys processed by each `<<` application, shared across a multi-document stream): omitted budget accepts 10000 one-key mappings and rejects 10001; three merged keys succeed at 5 and fail at 2; merging one three-key mapping twice in one `<<` sequence fails at 5 and succeeds at 6; two documents that each merge two keys fail at 3 and succeed at 4; disabling the budget allows a 150-key merge chain"
+    }
+  ]
+}

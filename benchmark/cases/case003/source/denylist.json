@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "case003",
+  "ecosystem": "npm",
+  "install_ban": [
+    "github.com/nodeca/js-yaml",
+    "github.com/nodeca/js-yaml-js-types",
+    "js-yaml",
+    "js-yaml-js-types",
+    "nodeca/js-yaml",
+    "nodeca/js-yaml-js-types"
+  ],
+  "import_ban": [
+    "js-yaml",
+    "js-yaml-js-types",
+    "js-yaml-js-types/",
+    "js-yaml/"
+  ],
+  "notes": "Bans the upstream npm package js-yaml, its first-party companion js-yaml-js-types, GitHub slugs nodeca/js-yaml and nodeca/js-yaml-js-types, and the JS import roots js-yaml / js-yaml/; allows runner-provided Node.js/npm/apt/curl and repo build deps (argparse, typescript, vite, rollup, eslint) and does not ban org-wide or generic names (nodeca, yaml)."
+}

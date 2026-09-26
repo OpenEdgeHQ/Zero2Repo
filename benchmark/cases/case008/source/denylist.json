@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "case_id": "case008",
+  "ecosystem": "source",
+  "install_ban": [
+    "ada",
+    "ada-url",
+    "ada-url/ada",
+    "adaurl",
+    "can-ada",
+    "github.com/ada-url/ada",
+    "goada",
+    "libada"
+  ],
+  "import_ban": [
+    "ada.cpp",
+    "ada.h",
+    "ada/",
+    "ada::",
+    "ada_c.h"
+  ],
+  "runtime_equivalents": [
+    {
+      "import_root": "ada",
+      "runtime": "node",
+      "evidence": "process.versions.ada in the Node the agent CLI ships"
+    }
+  ],
+  "notes": "Bans the Ada WHATWG URL parser (CMake/pkg-config/library ada, registry/vcpkg/PyPI/crates ada-url, GitHub ada-url/ada, libada, plus can-ada/goada bindings) and C++ namespace ada:: with headers ada.h/ada_c.h/ada.cpp and include root ada/; allows runner-provided cmake, ninja, googletest, simdjson, build-essential, curl, git, and PyGithub."
+}

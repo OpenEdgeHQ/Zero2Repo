@@ -1,0 +1,669 @@
+{
+  "schema_version": 1,
+  "features": {
+    "F01": {
+      "core_capabilities": [
+        {
+          "id": "F01-cap-01",
+          "description": "Sign then recover a value so that text `my string` signed with secret `secret-key` recovers as bytes, and a validity check reports success on that token without returning the payload"
+        },
+        {
+          "id": "F01-cap-02",
+          "description": "Emit a token of payload, then separator, then signature, with default separator a period, and refuse a token whose separator was replaced or whose payload was changed"
+        },
+        {
+          "id": "F01-cap-03",
+          "description": "Refuse a truncated signature on recovery and on a validity check, while still exposing the original payload bytes on that failure for inspection"
+        },
+        {
+          "id": "F01-cap-04",
+          "description": "Isolate signing contexts with a salt so different salts cannot recover each other's tokens, and use a product-defined default salt when the caller omits one"
+        },
+        {
+          "id": "F01-cap-05",
+          "description": "Accept a secret as a list of keys oldest to newest: sign with the last key, recover from newest to oldest, and refuse a token once its key has been dropped"
+        },
+        {
+          "id": "F01-cap-06",
+          "description": "Round-trip under each of the four built-in key-derivation schemes (`concat`, `django-concat`, `hmac`, `none`), refuse a token produced under a different scheme, and fail rather than defaulting on an unrecognized name"
+        },
+        {
+          "id": "F01-cap-07",
+          "description": "Use SHA-1 as the default digest (matching an explicit SHA-1 signer), round-trip under a different digest on the same signer, and refuse a SHA-512 token on a SHA-1 signer that has no fallbacks"
+        },
+        {
+          "id": "F01-cap-08",
+          "description": "Default to HMAC using the configured digest so a changed payload is refused; allow a no-op algorithm that emits an empty signature and round-trips without tamper detection; do not interchange HMAC tokens with tokens from another algorithm"
+        },
+        {
+          "id": "F01-cap-09",
+          "description": "Refuse construction when the separator is a hyphen, letter, digit, underscore, or equals sign, and refuse recovery of a separator-less value as a signature failure"
+        }
+      ],
+      "test_files": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ]
+    },
+    "F02": {
+      "core_capabilities": [
+        {
+          "id": "F02-cap-01",
+          "description": "Dump then load JSON-representable objects (null, true, text, integer lists, mappings) so the loaded object equals the original, with the default token for the list of integers 1 through 4 including that JSON text"
+        },
+        {
+          "id": "F02-cap-02",
+          "description": "Return text or bytes from dump according to the internal dump/load object, accept either form on load, and round-trip an object through a file stream"
+        },
+        {
+          "id": "F02-cap-03",
+          "description": "Honor a per-call salt so a token dumped with salt `other` loads only when that same salt is passed, and refuse it as a signature mismatch under the helper's default salt"
+        },
+        {
+          "id": "F02-cap-04",
+          "description": "Replace the internal dump/load object, forward extra dump options (skip-non-basic-keys turns a mapping whose only key is an empty tuple into an empty mapping), and refuse to load a token whose dump format is not JSON on a JSON helper"
+        },
+        {
+          "id": "F02-cap-05",
+          "description": "Replace the signer type or signing options so dump then load still round-trips, while a default helper and an `hmac`-derivation helper do not load each other's tokens"
+        },
+        {
+          "id": "F02-cap-06",
+          "description": "Try fallback signing configurations in caller-listed order (signing-option mapping, alternative signer type, or a pair of both) so a SHA-256 token loads on a SHA-1 helper only when SHA-256 is listed as a fallback"
+        },
+        {
+          "id": "F02-cap-07",
+          "description": "On signature mismatch, distinguish that failure from success, expose the unsigned payload for inspection, and recover the original object by decoding that payload without counting as a successful load"
+        },
+        {
+          "id": "F02-cap-08",
+          "description": "Distinguish a payload-decode failure (valid signature over undecodable garbage) from a signature mismatch, retaining the original decode error; unsafe load does not convert that case into a success pair"
+        },
+        {
+          "id": "F02-cap-09",
+          "description": "On a signature mismatch, unsafe load always returns a pair reporting whether the signature verified and yielding the object when the payload can still be decoded, never treating a bad signature as success and never aborting the caller"
+        },
+        {
+          "id": "F02-cap-10",
+          "description": "Refuse as a signature mismatch a dumped token that was uppercased, had a character appended, had its first character replaced, or had its separator removed"
+        },
+        {
+          "id": "F02-cap-11",
+          "description": "Use SHA-1 as the serializer default digest so dumping the JSON list containing only 42 matches an explicit SHA-1 helper and differs from a longer SHA-512 token that a SHA-1 helper without fallback cannot load"
+        }
+      ],
+      "test_files": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ]
+    },
+    "F03": {
+      "core_capabilities": [
+        {
+          "id": "F03-cap-01",
+          "description": "Round-trip a timestamped sign/recover of bytes and a timestamped dump/load of an object when no maximum age is supplied"
+        },
+        {
+          "id": "F03-cap-02",
+          "description": "Place a time field between payload and signature, and when asked return the signing time as a timezone-aware UTC datetime equal to the signing instant"
+        },
+        {
+          "id": "F03-cap-03",
+          "description": "Enforce maximum age in seconds so a check 1 second after signing with max age 10 succeeds and the same check after 11 seconds is expired, distinguishable from signature mismatch and from missing or malformed timestamp; a validity check with that same maximum age reports success then failure"
+        },
+        {
+          "id": "F03-cap-04",
+          "description": "On expiry, still expose the original payload (decodable to the object on the timestamped serializer) and a timezone-aware UTC signing-time datetime"
+        },
+        {
+          "id": "F03-cap-05",
+          "description": "Treat a signing time in the future relative to the check clock, when a maximum age is supplied, as expired (negative age is not valid), still exposing a signing-time datetime"
+        },
+        {
+          "id": "F03-cap-06",
+          "description": "Refuse a non-timestamped token as a missing timestamp, with no signing-time field, distinguishable from expiry and from a signature mismatch"
+        },
+        {
+          "id": "F03-cap-07",
+          "description": "Refuse a malformed or overflow/out-of-range time field as a malformed timestamp, not as expiry, with the signing-time field absent"
+        },
+        {
+          "id": "F03-cap-08",
+          "description": "Refuse a changed timestamped payload as a time-signature failure (exposing a signing-time datetime when the time field still decodes); unsafe load with a maximum age still returns the FP-02 pair and does not report an expired token as a valid signature"
+        },
+        {
+          "id": "F03-cap-09",
+          "description": "When a timestamped serialize-and-sign helper verifies a signature but the age exceeds the maximum, refuse as expired and do not try further fallback configurations (an expired SHA-256 token is not loaded via a SHA-1 fallback)"
+        }
+      ],
+      "test_files": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ]
+    },
+    "F04": {
+      "core_capabilities": [
+        {
+          "id": "F04-cap-01",
+          "description": "Round-trip the README mapping whose `id` is 5 and whose `name` is `signtoken` through a URL-safe helper constructed with secret `secret key` and salt `auth`, recovering that mapping as a text token"
+        },
+        {
+          "id": "F04-cap-02",
+          "description": "Emit tokens using only letters, digits, underscore, hyphen, and period, with compact JSON so a URL-safe dump of the list of integers 1 through 4 has no brackets or spaces and still loads as that list"
+        },
+        {
+          "id": "F04-cap-03",
+          "description": "Compress the payload when compression shortens it (one thousand `a` characters yields a token shorter than one thousand characters whose payload section begins with a period) and leave a small mapping such as one whose `id` is 42 uncompressed (payload section does not begin with a period), with both forms loading"
+        },
+        {
+          "id": "F04-cap-04",
+          "description": "On the URL-safe timestamped helper, round-trip the same objects as URL-safe text, enforce maximum age 10 seconds as in FP-03 (including a timezone-aware UTC signing time), and still compress the thousand-`a` string below one thousand characters with a payload section that begins with a period"
+        },
+        {
+          "id": "F04-cap-05",
+          "description": "Refuse FP-02 tamper transforms of a URL-safe token as a signature mismatch, and refuse invalid URL-safe encoding or invalid compressed data (payload section begins with a period but is not valid compressed data) as a payload-decode failure distinguishable from a signature mismatch"
+        },
+        {
+          "id": "F04-cap-06",
+          "description": "Refuse a token with no timestamp on the URL-safe timestamped helper as a missing timestamp, even when the remaining alphabet is URL-safe, and never emit plus or slash in a product-produced token"
+        }
+      ],
+      "test_files": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ]
+    }
+  },
+  "capabilities": [
+    {
+      "capability_id": "F01-cap-01",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Sign then recover a value so that text `my string` signed with secret `secret-key` recovers as bytes, and a validity check reports success on that token without returning the payload"
+    },
+    {
+      "capability_id": "F01-cap-02",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Emit a token of payload, then separator, then signature, with default separator a period, and refuse a token whose separator was replaced or whose payload was changed"
+    },
+    {
+      "capability_id": "F01-cap-03",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a truncated signature on recovery and on a validity check, while still exposing the original payload bytes on that failure for inspection"
+    },
+    {
+      "capability_id": "F01-cap-04",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Isolate signing contexts with a salt so different salts cannot recover each other's tokens, and use a product-defined default salt when the caller omits one"
+    },
+    {
+      "capability_id": "F01-cap-05",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Accept a secret as a list of keys oldest to newest: sign with the last key, recover from newest to oldest, and refuse a token once its key has been dropped"
+    },
+    {
+      "capability_id": "F01-cap-06",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Round-trip under each of the four built-in key-derivation schemes (`concat`, `django-concat`, `hmac`, `none`), refuse a token produced under a different scheme, and fail rather than defaulting on an unrecognized name"
+    },
+    {
+      "capability_id": "F01-cap-07",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Use SHA-1 as the default digest (matching an explicit SHA-1 signer), round-trip under a different digest on the same signer, and refuse a SHA-512 token on a SHA-1 signer that has no fallbacks"
+    },
+    {
+      "capability_id": "F01-cap-08",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Default to HMAC using the configured digest so a changed payload is refused; allow a no-op algorithm that emits an empty signature and round-trips without tamper detection; do not interchange HMAC tokens with tokens from another algorithm"
+    },
+    {
+      "capability_id": "F01-cap-09",
+      "prd_refs": [
+        "F01"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F01_acceptance.py",
+        "tests/F01_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse construction when the separator is a hyphen, letter, digit, underscore, or equals sign, and refuse recovery of a separator-less value as a signature failure"
+    },
+    {
+      "capability_id": "F02-cap-01",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Dump then load JSON-representable objects (null, true, text, integer lists, mappings) so the loaded object equals the original, with the default token for the list of integers 1 through 4 including that JSON text"
+    },
+    {
+      "capability_id": "F02-cap-02",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Return text or bytes from dump according to the internal dump/load object, accept either form on load, and round-trip an object through a file stream"
+    },
+    {
+      "capability_id": "F02-cap-03",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Honor a per-call salt so a token dumped with salt `other` loads only when that same salt is passed, and refuse it as a signature mismatch under the helper's default salt"
+    },
+    {
+      "capability_id": "F02-cap-04",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Replace the internal dump/load object, forward extra dump options (skip-non-basic-keys turns a mapping whose only key is an empty tuple into an empty mapping), and refuse to load a token whose dump format is not JSON on a JSON helper"
+    },
+    {
+      "capability_id": "F02-cap-05",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Replace the signer type or signing options so dump then load still round-trips, while a default helper and an `hmac`-derivation helper do not load each other's tokens"
+    },
+    {
+      "capability_id": "F02-cap-06",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Try fallback signing configurations in caller-listed order (signing-option mapping, alternative signer type, or a pair of both) so a SHA-256 token loads on a SHA-1 helper only when SHA-256 is listed as a fallback"
+    },
+    {
+      "capability_id": "F02-cap-07",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "On signature mismatch, distinguish that failure from success, expose the unsigned payload for inspection, and recover the original object by decoding that payload without counting as a successful load"
+    },
+    {
+      "capability_id": "F02-cap-08",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Distinguish a payload-decode failure (valid signature over undecodable garbage) from a signature mismatch, retaining the original decode error; unsafe load does not convert that case into a success pair"
+    },
+    {
+      "capability_id": "F02-cap-09",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "On a signature mismatch, unsafe load always returns a pair reporting whether the signature verified and yielding the object when the payload can still be decoded, never treating a bad signature as success and never aborting the caller"
+    },
+    {
+      "capability_id": "F02-cap-10",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse as a signature mismatch a dumped token that was uppercased, had a character appended, had its first character replaced, or had its separator removed"
+    },
+    {
+      "capability_id": "F02-cap-11",
+      "prd_refs": [
+        "F02"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F02_acceptance.py",
+        "tests/F02_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Use SHA-1 as the serializer default digest so dumping the JSON list containing only 42 matches an explicit SHA-1 helper and differs from a longer SHA-512 token that a SHA-1 helper without fallback cannot load"
+    },
+    {
+      "capability_id": "F03-cap-01",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Round-trip a timestamped sign/recover of bytes and a timestamped dump/load of an object when no maximum age is supplied"
+    },
+    {
+      "capability_id": "F03-cap-02",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Place a time field between payload and signature, and when asked return the signing time as a timezone-aware UTC datetime equal to the signing instant"
+    },
+    {
+      "capability_id": "F03-cap-03",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Enforce maximum age in seconds so a check 1 second after signing with max age 10 succeeds and the same check after 11 seconds is expired, distinguishable from signature mismatch and from missing or malformed timestamp; a validity check with that same maximum age reports success then failure"
+    },
+    {
+      "capability_id": "F03-cap-04",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "On expiry, still expose the original payload (decodable to the object on the timestamped serializer) and a timezone-aware UTC signing-time datetime"
+    },
+    {
+      "capability_id": "F03-cap-05",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Treat a signing time in the future relative to the check clock, when a maximum age is supplied, as expired (negative age is not valid), still exposing a signing-time datetime"
+    },
+    {
+      "capability_id": "F03-cap-06",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a non-timestamped token as a missing timestamp, with no signing-time field, distinguishable from expiry and from a signature mismatch"
+    },
+    {
+      "capability_id": "F03-cap-07",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a malformed or overflow/out-of-range time field as a malformed timestamp, not as expiry, with the signing-time field absent"
+    },
+    {
+      "capability_id": "F03-cap-08",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a changed timestamped payload as a time-signature failure (exposing a signing-time datetime when the time field still decodes); unsafe load with a maximum age still returns the FP-02 pair and does not report an expired token as a valid signature"
+    },
+    {
+      "capability_id": "F03-cap-09",
+      "prd_refs": [
+        "F03"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F03_acceptance.py",
+        "tests/F03_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "When a timestamped serialize-and-sign helper verifies a signature but the age exceeds the maximum, refuse as expired and do not try further fallback configurations (an expired SHA-256 token is not loaded via a SHA-1 fallback)"
+    },
+    {
+      "capability_id": "F04-cap-01",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Round-trip the README mapping whose `id` is 5 and whose `name` is `signtoken` through a URL-safe helper constructed with secret `secret key` and salt `auth`, recovering that mapping as a text token"
+    },
+    {
+      "capability_id": "F04-cap-02",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Emit tokens using only letters, digits, underscore, hyphen, and period, with compact JSON so a URL-safe dump of the list of integers 1 through 4 has no brackets or spaces and still loads as that list"
+    },
+    {
+      "capability_id": "F04-cap-03",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Compress the payload when compression shortens it (one thousand `a` characters yields a token shorter than one thousand characters whose payload section begins with a period) and leave a small mapping such as one whose `id` is 42 uncompressed (payload section does not begin with a period), with both forms loading"
+    },
+    {
+      "capability_id": "F04-cap-04",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "On the URL-safe timestamped helper, round-trip the same objects as URL-safe text, enforce maximum age 10 seconds as in FP-03 (including a timezone-aware UTC signing time), and still compress the thousand-`a` string below one thousand characters with a payload section that begins with a period"
+    },
+    {
+      "capability_id": "F04-cap-05",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse FP-02 tamper transforms of a URL-safe token as a signature mismatch, and refuse invalid URL-safe encoding or invalid compressed data (payload section begins with a period but is not valid compressed data) as a payload-decode failure distinguishable from a signature mismatch"
+    },
+    {
+      "capability_id": "F04-cap-06",
+      "prd_refs": [
+        "F04"
+      ],
+      "priority": "core",
+      "coverage_status": "core_covered",
+      "test_refs": [
+        "tests/F04_acceptance.py",
+        "tests/F04_helpers.py"
+      ],
+      "strength": "value_oracle",
+      "notes": "Refuse a token with no timestamp on the URL-safe timestamped helper as a missing timestamp, even when the remaining alphabet is URL-safe, and never emit plus or slash in a product-produced token"
+    }
+  ]
+}

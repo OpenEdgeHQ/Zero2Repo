@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "case010",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/nltk/nltk",
+    "nltk",
+    "nltk/nltk",
+    "python-nltk",
+    "python3-nltk"
+  ],
+  "import_ban": [
+    "nltk",
+    "nltk/"
+  ],
+  "notes": "Bans the upstream NLTK PyPI package and import root (nltk), GitHub slug nltk/nltk, and Debian aliases python-nltk / python3-nltk; allows runner-provided infra (python3, pip, setuptools, pytest, pytest-mock, regex, defusedxml, click, joblib, tqdm) and optional extras (numpy, scikit-learn, scipy, matplotlib, pyparsing, twython, requests) and does not ban org-wide or data-only names (nltk-contrib, nltk-data)."
+}

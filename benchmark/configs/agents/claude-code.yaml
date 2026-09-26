@@ -1,0 +1,26 @@
+# Harbor job config: run zero2repo tasks with the Claude Code agent.
+#
+# Uses CodingBenchClaudeCode (image-baked claude + npm fallback). Prefer Max OAuth
+# (see repo doc/archive/pipeline/pipeline_P1_harness_setup.md). Do not set ANTHROPIC_* if using
+# subscription login. API key mode: export ANTHROPIC_API_KEY (optional BASE_URL).
+#
+# Run from the benchmark/ directory after building the released suite:
+#   python -m coding_bench_harbor.run_adapter --all --force
+#   harbor run --config configs/agents/claude-code.yaml
+jobs_dir: jobs
+n_attempts: 1
+timeout_multiplier: 1.0
+orchestrator:
+  type: local
+  n_concurrent_trials: 1
+environment:
+  type: docker
+  force_build: true
+  delete: true
+  env:
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+agents:
+  - import_path: coding_bench_harbor.agents.claude_code:CodingBenchClaudeCode
+    model_name: anthropic/claude-opus-4-1
+datasets:
+  - path: output

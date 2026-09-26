@@ -1,0 +1,113 @@
+{
+  "schema_version": 2,
+  "modules": [
+    "F01_helpers",
+    "F02_helpers",
+    "F03_helpers",
+    "F04_helpers",
+    "F05_helpers",
+    "__future__",
+    "_harness",
+    "calendar",
+    "collections.abc",
+    "contextlib",
+    "copy",
+    "dataclasses",
+    "datetime",
+    "decimal",
+    "io",
+    "math",
+    "os",
+    "os.environ",
+    "os.pathsep",
+    "pathlib",
+    "pytest",
+    "re",
+    "shutil",
+    "subprocess",
+    "sys",
+    "sys.path",
+    "sys.stderr",
+    "sys.stdout",
+    "tempfile",
+    "tomlparse",
+    "types",
+    "typing",
+    "uuid",
+    "warnings"
+  ],
+  "names": [
+    "TOMLDecodeError",
+    "load",
+    "loads"
+  ],
+  "imports": [
+    {
+      "module": "tomlparse",
+      "names": [
+        "TOMLDecodeError",
+        "load",
+        "loads"
+      ]
+    }
+  ],
+  "calls": [],
+  "interface_dependencies": [
+    {
+      "target": "tomlparse"
+    }
+  ],
+  "compile_units": [],
+  "non_source_support_files": [],
+  "extractors": [
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F01_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F01_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F02_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F02_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F03_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F03_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F04_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F04_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F05_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/F05_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/_harness.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/hukkin-tomli-001-bdirect/milestones/final/tests/conftest.py",
+      "level": "python-ast"
+    }
+  ],
+  "unextracted_files": []
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "case_id": "case011",
+  "base_image": "codingbench-base/ubuntu:24.04",
+  "resolved": {
+    "python": {
+      "attrs": "26.1.0",
+      "coverage": "7.16.0",
+      "hypothesis": "5.35.4",
+      "packaging": "24.1",
+      "pytest": "8.4.1",
+      "pytest-cov": "3.0.0",
+      "setuptools": "71.1.0",
+      "sortedcontainers": "2.4.0",
+      "wheel": "0.45.1"
+    },
+    "apt": {}
+  },
+  "public": true,
+  "runner": {
+    "install_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y --no-install-recommends python3-pip && printf '[global]\\nbreak-system-packages = true\\n' > /etc/pip.conf && python3 -m pip install --no-cache-dir --break-system-packages --disable-pip-version-check 'pytest==8.4.1' 'pytest-cov==3.0.0' 'hypothesis==5.35.4' 'setuptools==71.1.0' 'wheel==0.45.1' 'packaging==24.1' && rm -rf /var/lib/apt/lists/*",
+    "build_command": "true"
+  }
+}

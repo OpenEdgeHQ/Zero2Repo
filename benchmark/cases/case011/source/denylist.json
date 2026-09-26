@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "case011",
+  "ecosystem": "pip",
+  "install_ban": [
+    "github.com/jmespath/jmespath.py",
+    "jmespath",
+    "jmespath-py",
+    "jmespath.py",
+    "jmespath/jmespath.py",
+    "python-jmespath",
+    "python3-jmespath"
+  ],
+  "import_ban": [
+    "jmespath",
+    "jmespath/"
+  ],
+  "notes": "Bans the upstream JMESPath PyPI package and import root (jmespath), repo-name/PEP 503 aliases (jmespath.py / jmespath-py), GitHub slug jmespath/jmespath.py, and Debian aliases python-jmespath / python3-jmespath; allows runner-provided infra (python3, pip, pytest, pytest-cov, hypothesis, setuptools, wheel, packaging) and does not ban org-wide, CLI-generic, or sibling names (jmespath-community, jp, jp.py)."
+}

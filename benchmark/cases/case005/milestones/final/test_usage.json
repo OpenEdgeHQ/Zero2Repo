@@ -1,0 +1,123 @@
+{
+  "schema_version": 2,
+  "modules": [
+    "F01_helpers",
+    "F02_helpers",
+    "F03_helpers",
+    "F04_helpers",
+    "F05_helpers",
+    "F06_helpers",
+    "F07_helpers",
+    "__future__",
+    "_harness",
+    "contextlib",
+    "dataclasses",
+    "httpwire",
+    "httpwire.__name__",
+    "http",
+    "io",
+    "os",
+    "os.environ",
+    "os.pathsep",
+    "pathlib",
+    "pytest",
+    "re",
+    "shutil",
+    "subprocess",
+    "sys",
+    "sys.path",
+    "sys.stderr",
+    "sys.stdout",
+    "tempfile",
+    "time",
+    "types",
+    "typing",
+    "warnings"
+  ],
+  "names": [
+    "split"
+  ],
+  "imports": [
+    {
+      "module": "httpwire.__name__",
+      "names": [
+        "split"
+      ]
+    }
+  ],
+  "calls": [],
+  "interface_dependencies": [
+    {
+      "target": "httpwire"
+    }
+  ],
+  "compile_units": [],
+  "non_source_support_files": [],
+  "extractors": [
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F01_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F01_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F02_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F02_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F03_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F03_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F04_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F04_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F05_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F05_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F06_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F06_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F07_acceptance.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/F07_helpers.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/_harness.py",
+      "level": "python-ast"
+    },
+    {
+      "file": "/data/CodingBench/cases/rereview/pythonhyper-h11-001-bdirect/milestones/final/tests/conftest.py",
+      "level": "python-ast"
+    }
+  ],
+  "unextracted_files": []
+}
