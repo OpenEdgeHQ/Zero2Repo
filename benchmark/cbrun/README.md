@@ -367,16 +367,7 @@ bare Harbor run of a substrate case reports `substrates_missing`.
 * `coding_bench_harbor.final_judge`: the scoring engine (single source of truth,
   shared with the Harbor adapter).
 
-## Tests
+## Local agent smoke
 
-* Fast unit tests (no Docker): `tests/test_cbrun_agents.py`,
-  `tests/test_cbrun_agent_spec.py`, `tests/test_cbrun_core.py`,
-  `tests/test_cbrun_wiring.py`.
-* Docker-gated integration (`@pytest.mark.slow`,
-  `tests/test_cbrun_docker.py`): oracle sanity (GT → reward 1), fairness
-  invariant (`:agent` image has no `/tests/final`, CLIs present, `cbagent`
-  user exists, Codex setup writes config). They skip automatically when Docker
-  or the required images are unavailable.
-* **Local agent smoke** (your credentials, no source edits):
-  [`../local_agents/README.md`](../local_agents/README.md) — copy `*.env.example`,
-  run `./local_agents/run_smoke.sh`.
+Your credentials, no source edits: [`../local_agents/README.md`](../local_agents/README.md).
+Copy `*.env.example`, then run `./local_agents/run_smoke.sh`.
