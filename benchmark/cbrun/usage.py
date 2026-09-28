@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .pricing import trial_cost
+
 __all__ = [
     "AGENT_LOG_NAMES",
     "USAGE_ARCHIVE_DIR",
@@ -49,9 +51,11 @@ class Buckets:
     cache_write_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    # Part of cache_write_tokens written with a one-hour TTL.
+    cache_write_1h_tokens: int = 0
 
     def add(self, other: "Buckets") -> None:
-        for name in (*_BUCKETS, "reasoning_tokens"):
+        for name in (*_BUCKETS, "reasoning_tokens", "cache_write_1h_tokens"):
             setattr(self, name, getattr(self, name) + getattr(other, name))
 
     def total(self) -> int:
@@ -66,6 +70,7 @@ class LogUsage:
     calls_source: str | None = None
     harness_cost_usd: float | None = None
     by_model: dict[str, dict[str, int]] = field(default_factory=dict)
+    calls_by_model: dict[str, Buckets] = field(default_factory=dict)
 
     @property
     def found(self) -> bool:
@@ -110,11 +115,14 @@ def _cursor_result(usage: dict) -> Buckets:
 
 
 def _anthropic(usage: dict) -> Buckets:
+    creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else {}
+    write = _int(usage.get("cache_creation_input_tokens"))
     return Buckets(
         input_tokens=_int(usage.get("input_tokens")),
         cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
-        cache_write_tokens=_int(usage.get("cache_creation_input_tokens")),
+        cache_write_tokens=write,
         output_tokens=_int(usage.get("output_tokens")),
+        cache_write_1h_tokens=min(_int(creation.get("ephemeral_1h_input_tokens")), write),
     )
 
 
@@ -160,7 +168,7 @@ def _codex_token_count_total(event: dict) -> dict | None:
 def parse_usage_text(text: str) -> LogUsage:
     """Extract usage from one log or session file."""
     out = LogUsage()
-    claude_msgs: dict[str, Buckets] = {}
+    claude_msgs: dict[str, tuple[str, Buckets]] = {}
     opencode_calls: Buckets | None = None
     opencode_cost = 0.0
     saw_opencode_cost = False
@@ -197,7 +205,7 @@ def parse_usage_text(text: str) -> LogUsage:
         message = event.get("message")
         if etype == "assistant" and isinstance(message, dict) and isinstance(message.get("usage"), dict):
             key = str(message.get("id") or event.get("requestId") or event.get("uuid") or len(claude_msgs))
-            claude_msgs[key] = _anthropic(message["usage"])
+            claude_msgs[key] = (str(message.get("model") or ""), _anthropic(message["usage"]))
             continue
 
         part = event.get("part")
@@ -220,9 +228,19 @@ def parse_usage_text(text: str) -> LogUsage:
 
     if claude_msgs:
         out.calls = Buckets()
-        for b in claude_msgs.values():
+        for model, b in claude_msgs.values():
             out.calls.add(b)
+            out.calls_by_model.setdefault(model, Buckets()).add(b)
         out.calls_source = "claude_assistant_messages"
+        # modelUsage in the final result does not split cache writes by TTL.
+        if out.summary is not None and not out.summary.cache_write_1h_tokens:
+            out.summary.cache_write_1h_tokens = min(
+                out.calls.cache_write_1h_tokens, out.summary.cache_write_tokens
+            )
+        for model, slot in out.by_model.items():
+            calls = out.calls_by_model.get(model)
+            if calls is not None:
+                slot["cache_write_1h_tokens"] = min(calls.cache_write_1h_tokens, slot["cache_write_tokens"])
     elif opencode_calls is not None:
         out.calls, out.calls_source = opencode_calls, "opencode_step_finish"
         if saw_opencode_cost and out.harness_cost_usd is None:
@@ -303,6 +321,7 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
 
     for name in _BUCKETS:
         record[name] = getattr(total, name)
+    record["cache_write_1h_tokens"] = total.cache_write_1h_tokens
     record["reasoning_tokens"] = total.reasoning_tokens
     record["total_tokens"] = total.total()
     record["sources"] = sources
@@ -312,15 +331,39 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
     costs = [log.harness_cost_usd for log in per_log.values() if log.harness_cost_usd is not None]
     if costs:
         record["harness_cost_usd"] = round(sum(costs), 6)
-    by_model: dict[str, dict[str, int]] = {}
-    for log in per_log.values():
-        for model, buckets in log.by_model.items():
-            slot = by_model.setdefault(model, {k: 0 for k in _BUCKETS})
-            for k in _BUCKETS:
-                slot[k] += buckets.get(k, 0)
+    by_model = _by_model(per_log.values()) if all_summarized or sessions is None else None
     if by_model:
         record["by_model"] = by_model
     return record
+
+
+def _log_by_model(log: LogUsage) -> dict[str, dict[str, int]] | None:
+    if log.by_model:
+        return log.by_model
+    best = log.best()
+    if best is not None and best[1] == "claude_assistant_messages" and "" not in log.calls_by_model:
+        return {
+            model: {k: getattr(b, k) for k in (*_BUCKETS, "cache_write_1h_tokens")}
+            for model, b in log.calls_by_model.items()
+        }
+    return None
+
+
+def _by_model(logs: Iterable[LogUsage]) -> dict[str, dict[str, int]] | None:
+    """Per-model usage summed over logs, or None unless every log with usage has it."""
+    keys = (*_BUCKETS, "cache_write_1h_tokens")
+    out: dict[str, dict[str, int]] = {}
+    for log in logs:
+        if not log.found:
+            continue
+        per_model = _log_by_model(log)
+        if per_model is None:
+            return None
+        for model, buckets in per_model.items():
+            slot = out.setdefault(model, {k: 0 for k in keys})
+            for k in keys:
+                slot[k] += buckets.get(k, 0)
+    return out or None
 
 
 def _backfill(out_root: Path) -> int:
@@ -334,11 +377,13 @@ def _backfill(out_root: Path) -> int:
         if not trial_dir.is_dir():
             print(f"skip {trial['case_id']}/{trial['backend']}: {trial_dir} missing", file=sys.stderr)
             continue
-        trial["token_usage"] = collect_trial_usage(trial_dir)
+        usage = collect_trial_usage(trial_dir)
+        usage.update(trial_cost(usage, trial.get("resolved_model") or trial.get("model")))
+        trial["token_usage"] = usage
         changed += 1
-        usage = trial["token_usage"]
         state = "complete" if usage["complete"] else f"INCOMPLETE missing={usage['missing']}"
-        print(f"{trial['case_id']}/{trial['backend']}: total={usage['total_tokens']} {state}")
+        cost = "unpriced" if usage["cost_usd"] is None else f"${usage['cost_usd']:.2f}"
+        print(f"{trial['case_id']}/{trial['backend']}: total={usage['total_tokens']} cost={cost} {state}")
     from .results import _aggregate_usage
     from .state import atomic_json
 

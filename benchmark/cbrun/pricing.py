@@ -1,0 +1,103 @@
+"""USD cost of a trial's token usage from the bundled list-price table.
+
+``model_pricing.json`` holds per-1M-token prices for the evaluated models.
+A model string such as ``commonstack/claude-opus-5-5-20260921`` or
+``grok-4.7-high`` is matched by its last path segment, with any date suffix
+and reasoning-effort suffix removed, against each entry's aliases.
+
+``cache_write_1h_tokens`` is the part of ``cache_write_tokens`` written with a
+one-hour TTL; it uses ``cache_write_1h_per_m`` when the model has one.
+``uncached_input_is_cache_write`` marks models whose provider caches every
+eligible prompt automatically and bills the write: when the log reports no
+cache writes, uncached input is priced as cache writes.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Mapping
+
+__all__ = ["PRICING_PATH", "lookup_model", "trial_cost"]
+
+PRICING_PATH = Path(__file__).with_name("model_pricing.json")
+
+_DATE_SUFFIX = re.compile(r"-\d{8}$")
+_EFFORT_SUFFIX = re.compile(r"-(minimal|low|medium|high|xhigh|max)$")
+
+
+@lru_cache(maxsize=1)
+def _table() -> dict[str, Any]:
+    return json.loads(PRICING_PATH.read_text(encoding="utf-8"))
+
+
+def _slug(model: str) -> str:
+    slug = model.strip().lower().rsplit("/", 1)[-1]
+    slug = _DATE_SUFFIX.sub("", slug)
+    return _EFFORT_SUFFIX.sub("", slug)
+
+
+def lookup_model(model: str | None) -> tuple[str, dict[str, Any]] | None:
+    if not model or not model.strip():
+        return None
+    slug = _slug(model)
+    for model_id, entry in _table()["models"].items():
+        if slug == model_id.rsplit("/", 1)[-1] or slug in entry.get("aliases", ()):
+            return model_id, entry
+    return None
+
+
+def _count(buckets: Mapping[str, Any], key: str) -> int:
+    value = buckets.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _price(buckets: Mapping[str, Any], entry: Mapping[str, Any]) -> float:
+    uncached = _count(buckets, "input_tokens")
+    read = _count(buckets, "cache_read_tokens")
+    write = _count(buckets, "cache_write_tokens")
+    write_1h = min(_count(buckets, "cache_write_1h_tokens"), write)
+    output = _count(buckets, "output_tokens")
+    if entry.get("uncached_input_is_cache_write") and write == 0:
+        uncached, write = 0, uncached
+    write_rate = entry["cache_write_per_m"]
+    return (
+        uncached * entry["input_per_m"]
+        + read * entry["cache_read_per_m"]
+        + (write - write_1h) * write_rate
+        + write_1h * entry.get("cache_write_1h_per_m", write_rate)
+        + output * entry["output_per_m"]
+    ) / 1_000_000
+
+
+def trial_cost(usage: Mapping[str, Any], model: str | None) -> dict[str, Any]:
+    """Return ``cost_usd`` fields for one ``token_usage`` record.
+
+    Per-model usage (``by_model``) is priced model by model; otherwise the
+    totals are priced as ``model``. ``cost_usd`` is None when any model with
+    usage has no price.
+    """
+    by_model = usage.get("by_model")
+    parts: list[tuple[str | None, Mapping[str, Any]]] = (
+        list(by_model.items()) if isinstance(by_model, Mapping) and by_model else [(model, usage)]
+    )
+    total = 0.0
+    priced: list[str] = []
+    unpriced: list[str] = []
+    for name, buckets in parts:
+        found = lookup_model(name)
+        if found is None:
+            unpriced.append(str(name))
+            continue
+        model_id, entry = found
+        total += _price(buckets, entry)
+        if model_id not in priced:
+            priced.append(model_id)
+    return {
+        "cost_usd": None if unpriced else round(total, 6),
+        "priced_models": priced,
+        "unpriced_models": unpriced,
+        "pricing_fetched_at": _table()["fetched_at"],
+    }

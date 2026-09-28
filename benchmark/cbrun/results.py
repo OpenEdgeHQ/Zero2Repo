@@ -124,6 +124,7 @@ _USAGE_KEYS = (
     "input_tokens",
     "cache_read_tokens",
     "cache_write_tokens",
+    "cache_write_1h_tokens",
     "output_tokens",
     "reasoning_tokens",
     "total_tokens",
@@ -131,14 +132,22 @@ _USAGE_KEYS = (
 
 
 def _aggregate_usage(records: list[dict]) -> dict:
-    """Sum per-trial token usage; trials without complete usage are counted."""
+    """Sum per-trial token usage and cost; incomplete and unpriced trials are counted."""
     out: dict = {key: 0 for key in _USAGE_KEYS}
+    cost = 0.0
     for record in records:
         for key in _USAGE_KEYS:
             value = record.get(key) if record else None
             if isinstance(value, int):
                 out[key] += value
+        value = (record or {}).get("cost_usd")
+        if isinstance(value, (int, float)):
+            cost += value
+    out["cost_usd"] = round(cost, 6)
     out["incomplete_trials"] = sum(1 for record in records if not (record or {}).get("complete"))
+    out["unpriced_trials"] = sum(
+        1 for record in records if not isinstance((record or {}).get("cost_usd"), (int, float))
+    )
     return out
 
 

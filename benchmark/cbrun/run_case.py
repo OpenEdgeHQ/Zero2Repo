@@ -62,6 +62,7 @@ from .limits import (
 from .results import TrialResult
 from .steps import Step, discover_steps
 from .submit import CONTAINER_SUBMIT_PATH, NO_SUBMIT_ERROR, is_valid_submit
+from .pricing import trial_cost
 from .usage import USAGE_ARCHIVE_DIR, collect_trial_usage
 
 __all__ = ["run_trial"]
@@ -286,7 +287,9 @@ def _harvest_usage_files(container: Container, invocation: AgentInvocation) -> s
 
 def _record_token_usage(out_dir: Path, result: TrialResult) -> None:
     try:
-        result.token_usage = collect_trial_usage(out_dir)
+        usage = collect_trial_usage(out_dir)
+        usage.update(trial_cost(usage, result.resolved_model or result.model))
+        result.token_usage = usage
     except Exception as exc:  # noqa: BLE001
         result.token_usage = {"complete": False, "error": f"{type(exc).__name__}: {exc}"}
 
