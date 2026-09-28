@@ -2941,14 +2941,14 @@ int run_session(bool have_pattern, const std::string& pattern, bool have_base,
   options.ignore_case = ignore_case;
   const hrefparse::url_pattern_options* opt_ptr = &options;
 
-  tl::expected<hrefparse::url_pattern<Provider>, hrefparse::errors> compiled;
-  if (have_pattern) {
-    std::string_view pat = pattern;
-    std::string_view base_sv = base;
-    const std::string_view* base_ptr = have_base ? &base_sv : nullptr;
-    compiled = hrefparse::parse_url_pattern<Provider>(std::string_view(pat), base_ptr,
-                                                opt_ptr);
-  } else {
+  auto compiled = [&]() -> tl::expected<hrefparse::url_pattern<Provider>, hrefparse::errors> {
+    if (have_pattern) {
+      std::string_view pat = pattern;
+      std::string_view base_sv = base;
+      const std::string_view* base_ptr = have_base ? &base_sv : nullptr;
+      return hrefparse::parse_url_pattern<Provider>(std::string_view(pat), base_ptr,
+                                                  opt_ptr);
+    }
     hrefparse::url_pattern_init init;
     for (const auto& kv : comps) {
       apply_comp(init, kv.first, kv.second);
@@ -2956,9 +2956,9 @@ int run_session(bool have_pattern, const std::string& pattern, bool have_base,
     if (have_base) {
       init.base_url = base;
     }
-    compiled = hrefparse::parse_url_pattern<Provider>(std::move(init), nullptr,
+    return hrefparse::parse_url_pattern<Provider>(std::move(init), nullptr,
                                                 opt_ptr);
-  }
+  }();
 
   if (!compiled) {
     emit_status("FAIL");
