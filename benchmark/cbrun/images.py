@@ -189,6 +189,7 @@ def _build_dockerfile(
     *,
     denylist_snippet: str = "",
     backend: str | None = None,
+    openhands_patch: bool = False,
 ) -> str:
     denylist_block = ""
     if denylist_snippet:
@@ -199,15 +200,20 @@ def _build_dockerfile(
     # other backends need npm.
     if backend == "openhands":
         image = agents.OPENHANDS_CLI_IMAGE
-        install = (
-            f"COPY --from={image} /root/.local /root/.local\n"
-            "COPY openhands_llm_timeout.py /tmp/openhands_llm_timeout.py\n"
+        install = f"COPY --from={image} /root/.local /root/.local\n"
+        if openhands_patch:
+            install += "COPY openhands_llm_timeout.py /tmp/openhands_llm_timeout.py\n"
+        install += (
             "RUN ln -sfn /root/.local/bin/openhands /usr/local/bin/openhands "
-            "&& /usr/local/bin/openhands --version "
-            "&& /root/.local/share/uv/tools/openhands/bin/python /tmp/openhands_llm_timeout.py "
-            "&& rm -f /tmp/openhands_llm_timeout.py\n"
-            f"RUN set -eux; {_agent_user_snippet()}\n"
+            "&& /usr/local/bin/openhands --version"
         )
+        if openhands_patch:
+            install += (
+                " && /root/.local/share/uv/tools/openhands/bin/python "
+                "/tmp/openhands_llm_timeout.py "
+                "&& rm -f /tmp/openhands_llm_timeout.py"
+            )
+        install += f"\nRUN set -eux; {_agent_user_snippet()}\n"
     elif backend == "cursor":
         install = f"RUN set -eux; {cli}; {_agent_user_snippet()}\n"
     else:
@@ -274,13 +280,20 @@ def ensure_agent_image(
                 case_dir / "source" / "denylist.json",
                 required=enforce_denylist,
             )
+        openhands_patch = False
         if backend == "openhands":
             patch = Path(__file__).resolve().parent / "openhands_cli" / "apply_llm_timeout.py"
-            (build_ctx / "openhands_llm_timeout.py").write_text(
-                patch.read_text(encoding="utf-8"), encoding="utf-8"
-            )
+            if patch.is_file():
+                (build_ctx / "openhands_llm_timeout.py").write_text(
+                    patch.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+                openhands_patch = True
         dockerfile = _build_dockerfile(
-            deliverable, environ, denylist_snippet=denylist_snippet, backend=backend
+            deliverable,
+            environ,
+            denylist_snippet=denylist_snippet,
+            backend=backend,
+            openhands_patch=openhands_patch,
         )
         fingerprint = digest(
             {

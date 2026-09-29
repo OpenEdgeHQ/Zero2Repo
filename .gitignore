@@ -18,6 +18,9 @@ benchmark/cases/*/controls/
 # Internal harness tests. Not part of the released benchmark.
 benchmark/tests/
 
+# Local agent CLI image and patches. Support is the runner; this tree is not published.
+benchmark/cbrun/openhands_cli/
+
 # Notes, review guides, and one-off delivery writeups.
 doc/
 
