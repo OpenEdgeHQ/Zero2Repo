@@ -2,7 +2,7 @@
 
 Users bring their own credentials and may supply a local AgentSpec file
 (``.json`` or ``.yaml`` when PyYAML is installed). Built-in backends
-(``codex``, ``opencode``, ``claude-code``, ``cursor``) are predefined specs.
+(``codex``, ``opencode``, ``claude-code``, ``cursor``, ``openhands``) are predefined specs.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ __all__ = [
     "resolve_agent",
 ]
 
-BACKENDS = ("codex", "opencode", "claude-code", "cursor")
+BACKENDS = ("codex", "opencode", "claude-code", "cursor", "openhands")
 CODEX_REASONING_EFFORT_ENV = "CBRUN_CODEX_REASONING_EFFORT"
 CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
@@ -325,6 +325,26 @@ def _resolve_env(
         out["IS_SANDBOX"] = "1"
         if "IS_SANDBOX" not in keys:
             keys.append("IS_SANDBOX")
+    if spec.name == "openhands":
+        if not (environ.get("LLM_API_KEY") or "").strip() or not (environ.get("LLM_BASE_URL") or "").strip():
+            raise RuntimeError(
+                "cbrun: OpenHands needs LLM_API_KEY and LLM_BASE_URL "
+                "(OpenAI-compatible endpoint) in the environment"
+            )
+        out["LLM_MODEL"] = model
+        out["OPENHANDS_SUPPRESS_BANNER"] = "1"
+        # Library default is 300s. DeepSeek thinking turns stay silent well past
+        # that, so one request may run for 30 minutes before it is abandoned.
+        raw_timeout = (environ.get("LLM_TIMEOUT") or "").strip() or "1800"
+        if not raw_timeout.isdigit() or int(raw_timeout) <= 0:
+            raise RuntimeError(
+                "cbrun: LLM_TIMEOUT must be a positive integer number of seconds, "
+                f"got {raw_timeout!r}"
+            )
+        out["LLM_TIMEOUT"] = raw_timeout
+        for key in ("LLM_MODEL", "OPENHANDS_SUPPRESS_BANNER", "LLM_TIMEOUT"):
+            if key not in keys:
+                keys.append(key)
     if spec.run_as == "nonroot":
         home = _home_for(spec)
         out.setdefault("HOME", home)
@@ -482,6 +502,20 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
             "--model {model_quoted} --workspace {workdir_quoted} "
             "--output-format stream-json "
             "< {instruction_quoted} "
+            "2>&1 | stdbuf -oL tee {log_quoted}"
+        ),
+    ),
+    "openhands": AgentSpec(
+        name="openhands",
+        env_passthrough=("LLM_API_KEY", "LLM_BASE_URL"),
+        run_as="root",
+        model_prefix="keep",
+        home="/root",
+        usage_paths=("/root/.openhands",),
+        command=(
+            "openhands --headless --json --always-approve "
+            "--exit-without-confirmation --override-with-envs "
+            "-f {instruction_quoted} "
             "2>&1 | stdbuf -oL tee {log_quoted}"
         ),
     ),

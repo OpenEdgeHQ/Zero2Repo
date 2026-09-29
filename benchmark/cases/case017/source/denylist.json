@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "case_id": "case017",
+  "ecosystem": "source",
+  "install_ban": [
+    "github.com/manishrjain/zroar",
+    "manishrjain/zroar",
+    "zroar"
+  ],
+  "import_ban": [
+    "zroar",
+    "zroar/"
+  ],
+  "runtime_equivalents": [],
+  "notes": "Bans the upstream Zig package and GitHub slug (zroar / manishrjain/zroar) and the @import(\"zroar\") module root; allows recipe-provided Zig 0.16, xz-utils, zig build, and pytest, and does not ban org-wide, sibling, or competitor names (manishrjain, sroar, croaring, roaring)."
+}

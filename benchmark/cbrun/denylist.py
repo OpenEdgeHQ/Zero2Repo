@@ -100,6 +100,7 @@ _SOURCE_SUFFIXES = {
     ".swift",
     ".kt",
     ".scala",
+    ".zig",
     ".sh",
     ".bash",
     ".zsh",
@@ -280,7 +281,7 @@ _JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 _C_SUFFIXES = {".c", ".h", ".hpp", ".hh", ".cc", ".cxx", ".cpp", ".cu", ".cuh"}
 _HASH_COMMENT_SUFFIXES = _PY_SUFFIXES | {".rb", ".sh", ".bash", ".zsh", ".yaml", ".yml", ".toml"}
 _SLASH_COMMENT_SUFFIXES = (
-    _JS_SUFFIXES | _C_SUFFIXES | {".java", ".kt", ".scala", ".cs", ".go", ".rs", ".swift", ".dart"}
+    _JS_SUFFIXES | _C_SUFFIXES | {".java", ".kt", ".scala", ".cs", ".go", ".rs", ".swift", ".dart", ".zig"}
 )
 
 
@@ -439,6 +440,8 @@ def line_imports_token(line: str, token: str, suffix: str = ".py") -> bool:
         return _jvm_imports_token(code, token)
     if ext in _C_SUFFIXES:
         return _c_includes_token(code, token)
+    if ext == ".zig":
+        return _js_imports_token(code, token)
     if ext == ".rb":
         return _ruby_imports_token(code, token)
     if ext == ".php":

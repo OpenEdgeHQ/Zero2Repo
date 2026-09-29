@@ -194,8 +194,21 @@ def _build_dockerfile(
     if denylist_snippet:
         denylist_block = f"RUN mkdir -p /opt/cbrun/bin\n{denylist_snippet}"
     cli = _cli_install_snippet(environ, backend)
-    # Cursor installs from the official script; other backends need npm.
-    if backend == "cursor":
+    # Cursor installs from the official script; OpenHands is copied from a
+    # prebuilt Python 3.12 image (the CLI pins 3.12, case images are 3.13);
+    # other backends need npm.
+    if backend == "openhands":
+        image = agents.OPENHANDS_CLI_IMAGE
+        install = (
+            f"COPY --from={image} /root/.local /root/.local\n"
+            "COPY openhands_llm_timeout.py /tmp/openhands_llm_timeout.py\n"
+            "RUN ln -sfn /root/.local/bin/openhands /usr/local/bin/openhands "
+            "&& /usr/local/bin/openhands --version "
+            "&& /root/.local/share/uv/tools/openhands/bin/python /tmp/openhands_llm_timeout.py "
+            "&& rm -f /tmp/openhands_llm_timeout.py\n"
+            f"RUN set -eux; {_agent_user_snippet()}\n"
+        )
+    elif backend == "cursor":
         install = f"RUN set -eux; {cli}; {_agent_user_snippet()}\n"
     else:
         install = (
@@ -260,6 +273,11 @@ def ensure_agent_image(
                 build_ctx,
                 case_dir / "source" / "denylist.json",
                 required=enforce_denylist,
+            )
+        if backend == "openhands":
+            patch = Path(__file__).resolve().parent / "openhands_cli" / "apply_llm_timeout.py"
+            (build_ctx / "openhands_llm_timeout.py").write_text(
+                patch.read_text(encoding="utf-8"), encoding="utf-8"
             )
         dockerfile = _build_dockerfile(
             deliverable, environ, denylist_snippet=denylist_snippet, backend=backend

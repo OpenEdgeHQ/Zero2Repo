@@ -38,8 +38,9 @@ runner.
 ## Fairness: visible checks vs hidden gates
 
 * **Visible / dev checks**: the agent may write and run its own tests and any
-  public sample checks as many times as it wants and read their full output. A
-  real develop → test → debug loop is expected.
+  public sample checks as many times as it wants and read their full output.
+  The prompt states context, the goal, the rules, and the submit/scoring
+  protocol only; it does not prescribe a workflow.
 * **Hidden gates**: the hidden acceptance tests are *physically absent* from the
   solve container. cbrun derives a per-case `:agent` image from the published
   `:deliverable` image and removes `/tests/final` in a new image layer (the
@@ -87,7 +88,7 @@ The solve terminal status is recorded as one of:
 
 ## Built-in backends
 
-Four backends ship as built-in **AgentSpec** records:
+Five backends ship as built-in **AgentSpec** records:
 
 | Backend | CLI | Notes |
 |---------|-----|-------|
@@ -95,6 +96,7 @@ Four backends ship as built-in **AgentSpec** records:
 | `opencode` | `opencode-ai` | Forwards provider env based on `provider/model` id. |
 | `claude-code` | `@anthropic-ai/claude-code` | Runs as root with `bypassPermissions`. Claude Code refuses that mode for a real root login, so the solve process sets `IS_SANDBOX=1`. Judge still runs as root. |
 | `cursor` | Cursor CLI (`cursor-agent`) | Forwards `CURSOR_API_KEY`. Installed from the official Cursor install script into the `:agent` image. |
+| `openhands` | OpenHands CLI 1.16.0 | Forwards `LLM_API_KEY` and `LLM_BASE_URL`. Model id is passed as `LLM_MODEL` (use `openai/<id>` for an OpenAI-compatible endpoint). The CLI is copied from `codingbench-agent/openhands:1.16.0`, built from `cbrun/openhands_cli/Dockerfile`, because it requires Python 3.12. |
 
 Auth/provider env is selected centrally and forwarded into the container; only
 **present** keys are injected (key names are recorded in results, never values).

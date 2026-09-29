@@ -25,4 +25,4 @@ doc/
 tools/tencent_v3_baselines.py
 
 # Paper draft (not published with the benchmark)
-latex/
+paper/

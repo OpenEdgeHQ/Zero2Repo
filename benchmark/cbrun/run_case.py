@@ -73,6 +73,7 @@ _CLI_BIN = {
     "opencode": "opencode",
     "claude-code": "claude",
     "cursor": "cursor-agent",
+    "openhands": "openhands",
 }
 
 

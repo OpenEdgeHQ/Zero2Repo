@@ -15,7 +15,7 @@ tests** (binary reward: `1.0` / `0.0`). No LLM-as-judge.
 
 This repository ships:
 
-- **11 released cases** under `benchmark/cases/`: Tomlparse, python-envfile, ymlcodec (TypeScript), Signtoken, httpwire, Optlyn, Otpkit, Hrefparse (C++), Git Orbulk (Go), Lingora, and PathSel (Python)
+- **17 released cases** under `benchmark/cases/`: Tomlparse, python-envfile, ymlcodec (TypeScript), Signtoken, httpwire, Optlyn, Otpkit, Hrefparse (C++), Git Orbulk (Go), Lingora, PathSel (Python), lint-policy (TypeScript), Membundle (Go), Navfilter (C11), oggrepack (C99), prosecheck (Python and Node), and klyvmap (Zig)
 - The **`cbrun`** harness (recommended)
 - An optional **Harbor** adapter
 
@@ -63,9 +63,10 @@ the agent cannot simply recall the upstream repository.
 ### Language-agnostic by construction
 
 The authoring process makes no assumptions about language, build system or test
-framework. This release currently ships eight Python cases, one TypeScript case,
-one Go case, and one C++ case. New ecosystems are a matter of adding seed
-repositories, not rewriting the harness.
+framework. This release currently ships eight Python cases, one Python-and-Node
+case, two TypeScript cases, two Go cases, one C++ case, two C cases, and one
+Zig case. New ecosystems are a matter of adding seed repositories, not rewriting
+the harness.
 
 ### Fully automated, so it scales
 
