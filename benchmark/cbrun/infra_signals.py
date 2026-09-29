@@ -45,6 +45,9 @@ _TAIL_LINES = 200
 # the model's turn was still open (the response stream was cut off).
 _OPEN_TURN_STOPS = frozenset({None, "tool_use", "pause_turn"})
 _THINKING_BLOCKS = frozenset({"thinking", "redacted_thinking"})
+# The CLI gave up on the provider: its retries ran out on an overload, a server
+# error, or a rate limit. A 4xx the request itself caused is not matched.
+_PROVIDER_ERROR = re.compile(r"^API Error:\s*(?:5\d\d|429|529)\b|overloaded", re.I)
 
 
 def scan_log_text(text: str) -> dict[str, int]:
@@ -75,13 +78,7 @@ def count_infra_signals(*paths: Path | str | None) -> dict[str, int]:
     return totals
 
 
-def _truncated_stream(tail: str) -> bool:
-    """Claude Code stream-json that ends on a cut-off turn.
-
-    The CLI can report ``subtype: success`` after the API stream breaks
-    mid-message: the last assistant event holds only thinking, or the final
-    ``result`` carries an open-turn stop reason. Other log shapes never match.
-    """
+def _events(tail: str) -> list[dict]:
     events = []
     for line in tail.splitlines():
         line = line.strip()
@@ -93,6 +90,33 @@ def _truncated_stream(tail: str) -> bool:
             continue
         if isinstance(event, dict):
             events.append(event)
+    return events
+
+
+def _provider_gave_up(tail: str) -> bool:
+    """Claude Code stream-json whose session ended on the provider's error.
+
+    The final ``result`` is an error the CLI raised after its own retries: an
+    ``api_error`` terminal reason with a 5xx, 429, or overload message.
+    """
+    results = [e for e in _events(tail) if e.get("type") == "result" and "subtype" in e]
+    if not results:
+        return False
+    last = results[-1]
+    if not last.get("is_error"):
+        return False
+    text = str(last.get("result") or "").strip()
+    return last.get("terminal_reason") == "api_error" and bool(_PROVIDER_ERROR.search(text))
+
+
+def _truncated_stream(tail: str) -> bool:
+    """Claude Code stream-json that ends on a cut-off turn.
+
+    The CLI can report ``subtype: success`` after the API stream breaks
+    mid-message: the last assistant event holds only thinking, or the final
+    ``result`` carries an open-turn stop reason. Other log shapes never match.
+    """
+    events = _events(tail)
     results = [e for e in events if e.get("type") == "result" and "subtype" in e]
     assistants = [
         e["message"] for e in events
@@ -116,6 +140,8 @@ def invalid_reason(*, submitted: bool, log_text: str) -> str | None:
             continue
         if pattern.search(tail):
             return f"infra:{name}"
+    if _provider_gave_up(tail):
+        return "infra:provider_error"
     if _truncated_stream(tail):
         return "infra:truncated_stream"
     return None
