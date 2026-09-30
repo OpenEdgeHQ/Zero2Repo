@@ -36,7 +36,7 @@ from F04_helpers import (
     require_lossless_archive,
 )
 from F05_helpers import corrupt_stored_page_checksum, prove_checksum_mismatch
-from _harness import HarnessError, Workspace
+from _harness import HarnessError, Workspace, stored_copy
 
 
 def lossless_compress(ws: Workspace, src: str, dest: str, *effort_tokens: str) -> bytes:
@@ -48,8 +48,8 @@ def lossless_compress(ws: Workspace, src: str, dest: str, *effort_tokens: str) -
     expand_to(ws, dest, recovered)
     rec_bytes = ws.read_bytes(recovered)
     require_lossless_archive(dest_bytes, rec_bytes, src_bytes, what=dest)
-    assert dest_bytes != src_bytes, (
-        f"{dest}: compress destination bytes equal the source (copy stub)"
+    assert not stored_copy(dest_bytes, src_bytes), (
+        f"{dest}: compress destination bytes carry the source verbatim (copy stub)"
     )
     assert rec_bytes == src_bytes, (
         f"{dest}: expand did not restore the original bytes"

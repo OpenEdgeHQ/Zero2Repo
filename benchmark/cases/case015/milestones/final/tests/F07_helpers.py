@@ -24,7 +24,7 @@ from F01_helpers import (
 from F02_helpers import replace_vorbis_comment
 from F03_helpers import shared_remainder_lacking_in, strip_paths_and_sizes
 from F04_helpers import archive_bytes, expand_to
-from _harness import HarnessError, RunResult, Workspace
+from _harness import HarnessError, RunResult, Workspace, stored_copy
 
 
 def derived_batch_expand(input_rel: str) -> str:
@@ -270,8 +270,8 @@ def require_compress_member(ws: Workspace, src: str) -> str:
         raise HarnessError(f"batch compress did not write a regular file at {dest}")
     src_bytes = ws.read_bytes(src)
     dest_bytes = archive_bytes(ws, dest)
-    assert dest_bytes != src_bytes, (
-        f"compress dest {dest!r} bytes equal the source (copy stub)"
+    assert not stored_copy(dest_bytes, src_bytes), (
+        f"compress dest {dest!r} bytes carry the source verbatim (copy stub)"
     )
     recovered = unique_name("probe-rec")
     expand_to(ws, dest, recovered)

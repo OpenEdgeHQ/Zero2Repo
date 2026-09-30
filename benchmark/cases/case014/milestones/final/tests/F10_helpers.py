@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from _harness import (
+    note_product_issue,
     runtime_hex,
     DEFAULT_REPLAY_TIMEOUT,
     HarnessError,
@@ -655,8 +656,9 @@ def _dump_cells(parts: Sequence[str], lo: int, hi: int, line: str, what: str):
             return None
         try:
             values.append(float(cell))
-        except ValueError as exc:
-            raise HarnessError(f"solution {what} is not numeric: {line!r}") from exc
+        except ValueError:
+            note_product_issue("F10", f"--dump-solution {what} is not numeric: {line}")
+            return None
     if not all(math.isfinite(v) for v in values):
         return None
     return tuple(values)
@@ -677,11 +679,13 @@ def parse_replay_series(path: Path) -> tuple[SeriesPoint, ...]:
             continue
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 4:
-            raise HarnessError(f"solution row is short: {line!r}")
+            note_product_issue("F10", f"--dump-solution row is short: {line}")
+            continue
         try:
             t_us = int(float(parts[0]))
-        except ValueError as exc:
-            raise HarnessError(f"solution row is not numeric: {line!r}") from exc
+        except ValueError:
+            note_product_issue("F10", f"--dump-solution time field is not numeric: {line}")
+            continue
         llh = _dump_cells(parts, 1, 4, line, "lat/lon/h")
         if llh is None:
             continue
@@ -851,8 +855,11 @@ def _finite_cell(row: Sequence[str], index: int | None) -> float | None:
         return None
     try:
         value = float(raw)
-    except ValueError as exc:
-        raise HarnessError(f"runner cell {raw!r} is not numeric") from exc
+    except ValueError:
+        # Contract: an unpublished value is an empty cell; other text is
+        # recorded for the dedicated test and read as unpublished here.
+        note_product_issue("F10", f"runner cell {raw!r} is neither a number nor empty")
+        return None
     if not math.isfinite(value):
         # Contract: an unpublished value is an empty cell. A non-finite
         # value is read the same way so the spelling never decides a result.
@@ -926,7 +933,7 @@ def parse_runner_solution(path: Path) -> tuple[RunnerEpoch, ...]:
             continue
         mode = raw[i_mode].strip() if i_mode < len(raw) else ""
         if not mode:
-            raise HarnessError(f"runner row has no mode: {raw!r}")
+            note_product_issue("F10", f"runner row has no mode: {raw!r}")
         t_raw = raw[i_t].strip() if i_t is not None and i_t < len(raw) else raw[0]
         try:
             t_us = int(float(t_raw))
@@ -1374,12 +1381,12 @@ def classified_unpublished_3d(
     """Replay succeeded and the dump is unpublished 3D — not a missing/malformed sentinel."""
     text = reporting_text(result)
     if result.returncode != 0:
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: replay exited {result.returncode}; cannot classify unpublished 3D: "
             f"{text[-1500:]!r}"
         )
     if not dump_path.is_file() or not dump_path.read_text(encoding="utf-8").strip():
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: dump is missing or empty; cannot classify unpublished 3D"
         )
     points = parse_replay_series(dump_path)
@@ -1406,13 +1413,13 @@ def classified_non_full_runner(
     """Runner succeeded and the parsed series has no FULL row — not an empty sentinel."""
     text = reporting_text(result)
     if result.returncode != 0:
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: runner exited {result.returncode}; cannot classify non-FULL: "
             f"{text[-1500:]!r}"
         )
     epochs = parse_runner_solution(sol_path)
     if not epochs:
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: solution file parsed to zero rows; cannot classify non-FULL"
         )
     full = [e for e in epochs if e.mode == MODE_FULL]

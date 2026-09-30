@@ -1532,3 +1532,20 @@ def test_fusion_failure_diagnostic_readable_as_own_class():
         assert dist_m(last.ecef, stepped) + 0.2 < d_illegal, (
             f"{kind}: later finite GNSS did not proceed after the fusion failure"
         )
+
+
+def test_hygiene_diagnostics_are_available_and_non_negative():
+    """``ins_get_diag`` / ``diag`` are available on a live instance and the
+    invalid-input, downweight, gate, fusion, time and auto-ZUPT counters are
+    non-negative; ``--dump-solution`` rows read here are well formed -- on
+    every snapshot and dump row parsed in this session and on a pad of its
+    own. (Non-finite published values are FP-09 data here, not violations.)
+    A violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h, origin = _site()
+    for _kind, run_fn in _LANGS:
+        run = run_fn(hygiene_site(lat, lon, h, hygiene_pad(origin)))
+        assert run.init_ok and run.snaps, "pad produced no snapshots"
+    require_no_product_issues("F09", "hygiene snapshots (F09)")

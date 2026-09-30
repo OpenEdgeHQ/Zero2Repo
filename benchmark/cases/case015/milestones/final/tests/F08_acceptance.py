@@ -67,6 +67,43 @@ def test_progress_opt_in_completion_and_identical_archive():
         print("[F08] A opt-in completion and identical archive", flush=True)
 
 
+def test_progress_forms_leave_archive_bytes_unchanged_at_both_effort_ends():
+    with workspace() as ws:
+        sources = (
+            ("vorbis", vorbis_with_runtime_comment(ws), ".ogg"),
+            ("opus", opus_with_runtime_tags(ws, "hybrid"), ".opus"),
+        )
+        for codec, src, suffix in sources:
+            if codec == "opus":
+                _prove_family0(ws.read_bytes(src), what="progress identity Opus")
+            for effort in ("-1", "-9"):
+                base = unique_name(f"{codec}{effort}-off")
+                require_ok_written(
+                    run_product(ws, [effort, "e", src, base]), ws, src, base
+                )
+                base_bytes = archive_bytes(ws, base)
+                for form in (["--progress"], ["-p"], ["--progress-lines"]):
+                    dest = unique_name(f"{codec}{effort}-on")
+                    result = run_product(ws, [effort, *form, "e", src, dest])
+                    require_ok_written(result, ws, src, dest)
+                    assert archive_bytes(ws, dest) == base_bytes, (
+                        "enabling progress must not change archive bytes at the "
+                        f"same effort: {codec} {effort} with {form[0]}"
+                    )
+                member = unique_name(f"{codec}{effort}-batch") + suffix
+                ws.write(member, ws.read_bytes(src))
+                batch = run_product_long(
+                    ws, [effort, "-p", "--jobs=1", "-b", "e", member]
+                )
+                require_ok(batch)
+                batch_bytes = archive_bytes(ws, derived_batch_archive(member))
+                assert batch_bytes == base_bytes, (
+                    "batch compress with progress must write the same archive "
+                    f"as single-file compress without it: {codec} {effort}"
+                )
+                print(f"[F08] A2 {codec} {effort} progress forms identical", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # B. Short -p on single-file compress and single-file expand
 # ---------------------------------------------------------------------------

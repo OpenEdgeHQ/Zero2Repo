@@ -732,3 +732,26 @@ def test_replay_estimator_lag_tracks_constructed_gnss_lag():
         f"zero-lag climb reported {lag_0} which is not smaller than the "
         f"delayed report {lag_d}"
     )
+
+
+def test_published_delay_snapshots_are_well_formed():
+    """Published values are finite, attitude is not published without its
+    1-sigma, ``ins_get_diag`` / ``diag`` expose non-negative counters
+    (``n_gnss_no_anchor``, ``n_gnss_used``) -- on every delay snapshot parsed
+    in this session and on a delayed-GNSS run of its own. A violation fails
+    this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h = runtime_site()
+    scen = pad_then_moving_gnss(
+        lat,
+        lon,
+        h,
+        delay_ms=NAMED_DELAY_200_MS,
+        v_north=runtime_north_speed(),
+        north_offset_m=runtime_offset_north_m(),
+    )
+    for _kind, run in _langs(scen):
+        assert run.snaps, "delayed-GNSS run produced no snapshots"
+    require_no_product_issues("F04", "delay snapshots (F04)")

@@ -52,9 +52,9 @@ Filter-facing Python entries (`Navigator` / `Ins` wrappers) belong with those sy
 
 **Product and package.** The product identity is NAVFILTER. The importable Python package, the shared-object stem, and the library identity use the spelling `NAVFILTER`.
 
-**C entries.** Snake_case. Quaternion / geodesy helpers are prefixed `ins_` even when they do not require an INS instance (`ins_quat_from_rpy`, `ins_latlonh_to_ecef`, …). World Magnetic Model lookups use the `magnetic_` prefix (`magnetic_declination_deg`, `magnetic_inclination_deg`, `magnetic_field_strength_uT`, `magnetic_field_ned_uT`). Attitude-filter entries are prefixed `ahrs_`. Barometric vertical-channel entries are prefixed `baro_alt_`. Suite entries are prefixed `nav_suite_`. Instance types end in `_t` (`ins_t`, `ahrs_t`, `baro_alt_t`, `nav_suite_t`). Timestamps are `ins_time_us_t` / `ahrs_time_us_t` / `baro_alt_time_us_t`, aliases of a signed 64-bit microsecond count.
+**C entries.** Snake_case. Quaternion / geodesy helpers are prefixed `ins_` even when they do not require an INS instance (`ins_quat_from_rpy`, `ins_latlonh_to_ecef`, …). World Magnetic Model lookups use the `magnetic_` prefix (`magnetic_declination_deg`, `magnetic_inclination_deg`, `magnetic_field_strength_uT`, `magnetic_field_ned_uT`). Attitude-filter entries are prefixed `ahrs_`. Barometric vertical-channel entries are prefixed `baro_alt_`. Suite entries are prefixed `nav_suite_`. Instance types end in `_t` (`ins_t`, `ahrs_t`, `baro_alt_t`, `nav_suite_t`). Timestamps are `ins_time_us_t` / `ahrs_time_us_t` / `baro_alt_time_us_t`, aliases of a signed 64-bit microsecond count. An accessor that returns `bool` returns false while its value is unpublished — in particular while that filter instance is not initialized, and for a NULL instance — and its outputs are then unspecified; when it returns true its outputs are finite. An entry whose failure value differs from that says so with the entry.
 
-**Python entries.** The geodetic / quaternion / WMM names on the package root are unprefixed: `rpy_to_quat`, `llh_to_ecef`, `ecef_to_llh`, `wmm_field_ned`. They are not aliases of the C spellings; both spellings are published. `mag_heading` is imported from `geodetic_toolbox`, not from the `NAVFILTER` package root.
+**Python entries.** The geodetic / quaternion / WMM names on the package root are unprefixed: `rpy_to_quat`, `llh_to_ecef`, `ecef_to_llh`, `wmm_field_ned`. They are not aliases of the C spellings; both spellings are published. `mag_heading` is imported from `geodetic_toolbox`, not from the `NAVFILTER` package root. A Python reader of a value that has a `bool` C accessor yields None while that value is unpublished and a finite number or a sequence of finite numbers when it is published, unless its entry states otherwise.
 
 **Frames.** Body is FRD (x forward, y right, z down). Navigation is NED (north, east, down). Attitude is a Hamilton quaternion, scalar first, mapping body to NED. Roll, pitch, yaw are Tait-Bryan ZYX in radians unless a file format says degrees. Matrices are column-major. Specific force of a vehicle sitting still on a level pad is near (0, 0, −g) in FRD.
 
@@ -2426,7 +2426,7 @@ nav_suite_mode_t `nav_suite_get_mode`(const nav_suite_t* s);
 
 Compile arity is 1.
 
-Current solution mode (see nav_suite_mode_t).
+Current solution mode (see nav_suite_mode_t). A suite whose INS is not ready and whose ARS and AHRS have not started (for example before its first epoch), and a NULL suite, report NONE.
 
 ## `nav_suite_get_rpy`
 
@@ -3085,7 +3085,7 @@ int `ins_init`(ins_t* f, const ins_init_t* init, const ins_options_t* opt);
 
 Compile arity is 3.
 
-Zero the instance before the first call. Returns 0 on success, -1 on failure (for example an invalid ECEF origin).
+Zero the instance before the first call. Returns 0 on success, -1 on failure (for example an invalid ECEF origin). All three pointers are required: a NULL instance, init block, or options block returns -1 and the instance does not start. An options block whose fields are all zero is valid; a missing one is not.
 
 Python construction is `Ins`(`Config`(...)) as on Config. This C entry is not a second Python constructor. After that start, the wrapper is driven by the three-move loop on the INS epoch and accessor symbols.
 
@@ -3203,7 +3203,7 @@ bool `ins_auto_zupt_active`(const ins_t* f);
 
 Compile arity is 1.
 
-True when the detector currently considers the platform stationary. This call does not run the filter.
+True when the detector currently considers the platform stationary; false while the instance is not initialized. This call does not run the filter. With default options the detector's variance window covers 0.2 s and at least 8 IMU samples, and a stillness verdict must then hold for the dwell `auto_zupt_dwell_sec` (0 → 0.2 s) before this reports true.
 
 The matching Python reader on the `Ins` wrapper is `auto_zupt_active`. It takes no arguments. It does not run the filter. It is true when the detector currently considers the platform stationary.
 
@@ -3479,9 +3479,9 @@ int `ins_deadreckoning_ms`(const ins_t* f);
 
 Compile arity is 1.
 
-Integer milliseconds since the last absolute position aiding.
+Integer milliseconds since the last absolute position aiding. While the instance is initialized — ready, coasting, or frozen after the coasting window expired — the age is published and the return is 0 or more. While it is not initialized (collecting before its bootstrap, or re-armed after a GNSS quality loss) no age is published and the return is `-1`; a NULL instance also returns `-1`.
 
-The matching Python reader on the `Ins` wrapper is `deadreckoning_ms`. It takes no arguments. It does not run the filter. It is integer milliseconds of published coasting age with the same meaning as `ins_deadreckoning_ms`.
+The matching Python reader on the `Ins` wrapper is `deadreckoning_ms`. It takes no arguments. It does not run the filter. It is integer milliseconds of published coasting age with the same meaning as `ins_deadreckoning_ms`. It returns the same integer in every state, `-1` included while no age is published; it does not yield None.
 
 ## `ins_get_rpy_stddev`
 
@@ -3497,7 +3497,7 @@ Compile arity is 4.
 
 Get the current attitude 1-sigma uncertainty.
 
-The matching Python reader on the `Ins` wrapper is `stddev`. It takes no arguments. It does not run the filter. When published it is a mapping that exposes `rpy`, `pos_ned`, `vel_ned`, `acc_bias`, and `gyr_bias` as 3-sequences of 1-sigma. Attitude is not published without `rpy` uncertainty.
+The matching Python reader on the `Ins` wrapper is `stddev`. It takes no arguments. It does not run the filter. When published it is a mapping that exposes `rpy`, `pos_ned`, `vel_ned`, `acc_bias`, and `gyr_bias` as 3-sequences of 1-sigma. It yields None while the instance is not initialized and the mapping whenever it is initialized, ready or not. Attitude is not published without `rpy` uncertainty.
 
 ## `ins_get_rpy`
 
@@ -3940,9 +3940,9 @@ const ins_diag_t* `ins_get_diag`(const ins_t* f);
 
 Compile arity is 1.
 
-Access the passive debug/health bookkeeping.
+Access the passive debug/health bookkeeping. It is never NULL for a non-NULL instance: before initialization, after a refused `ins_init`, and after a re-arm alike. Its counters are non-negative integers.
 
-The matching Python reader on the `Ins` wrapper is `diag`. It takes no arguments. It does not run the filter. It is a mapping that exposes `n_gnss_used`, `n_predict`, `n_gnss_seen`, `n_gnss_rejected_noise`, `n_invalid_input`, `n_downweighted`, `n_fuse_fail`, `n_auto_zupt`, `n_gnss_no_anchor`, and `n_time_backward`. `n_gnss_no_anchor` increments for GNSS older than 500 ms and for an in-window delay with no history match. Local-position and yaw skips do not increment it.
+The matching Python reader on the `Ins` wrapper is `diag`. It takes no arguments. It does not run the filter. It is available on every instance, before initialization too. It is a mapping that exposes `n_gnss_used`, `n_predict`, `n_gnss_seen`, `n_gnss_rejected_noise`, `n_invalid_input`, `n_downweighted`, `n_fuse_fail`, `n_auto_zupt`, `n_gnss_no_anchor`, and `n_time_backward`. `n_gnss_no_anchor` increments for GNSS older than 500 ms and for an in-window delay with no history match. Local-position and yaw skips do not increment it.
 
 ## `ins_diag_t`
 

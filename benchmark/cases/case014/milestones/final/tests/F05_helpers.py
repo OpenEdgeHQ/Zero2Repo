@@ -14,7 +14,15 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Sequence
 
-from _harness import HarnessError, importable_package_name, invoke, run_python, runtime_uuid_int
+from _harness import (
+    HarnessError,
+    importable_package_name,
+    invoke,
+    run_python,
+    runtime_uuid_int,
+    nonfinite_fields,
+    note_product_issue,
+)
 from F01_helpers import hypot3, require_probe_success
 from F02_helpers import (
     DT_SEC,
@@ -105,10 +113,6 @@ static void print_sigma3(const char *key, const float *pdiag, int idx)
     float a = sqrtf(pdiag[idx] > 0.0f ? pdiag[idx] : 0.0f);
     float b = sqrtf(pdiag[idx + 1] > 0.0f ? pdiag[idx + 1] : 0.0f);
     float c = sqrtf(pdiag[idx + 2] > 0.0f ? pdiag[idx + 2] : 0.0f);
-    if (!isfinite(a) || !isfinite(b) || !isfinite(c)) {
-        fprintf(stderr, "non-finite %s uncertainty\n", key);
-        exit(2);
-    }
     printf(" %s=%.9g,%.9g,%.9g", key, a, b, c);
 }
 
@@ -122,14 +126,16 @@ static void print_snap(const ins_t *f, long long t_us)
     int bacc_ok = ins_get_bias_acc(f, bacc) ? 1 : 0;
     int bgyr_ok = ins_get_bias_gyr(f, bgyr) ? 1 : 0;
     int ned_ok = ins_get_position_local(f, ned) ? 1 : 0;
+    static const ins_diag_t no_diag;
     const ins_diag_t *d = ins_get_diag(f);
+    const int diag_ok = d != NULL ? 1 : 0;
     if (d == NULL) {
-        fprintf(stderr, "diag query failed\n");
-        exit(2);
+        d = &no_diag; /* printed as diag=0; the parser records it */
     }
     printf("SNAP t_us=%lld ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d",
            t_us, ins_is_ready(f) ? 1 : 0, pos, vel_ok, rpy_ok, ned_ok, bacc_ok,
            bgyr_ok);
+    printf(" diag=%d", diag_ok);
     if (pos) {
         printf(" ecef=%.17g,%.17g,%.17g", ecef[0], ecef[1], ecef[2]);
     } else {
@@ -154,10 +160,6 @@ static void print_snap(const ins_t *f, long long t_us)
         float rsd = 0.0f, psd = 0.0f, ysd = 0.0f;
         int std_ok = ins_get_rpy_stddev(f, &rsd, &psd, &ysd) ? 1 : 0;
         if (std_ok) {
-            if (!isfinite(rsd) || !isfinite(psd) || !isfinite(ysd)) {
-                fprintf(stderr, "non-finite attitude uncertainty\n");
-                exit(2);
-            }
             printf(" attstd=%.9g,%.9g,%.9g", rsd, psd, ysd);
         } else {
             printf(" attstd=-");
@@ -184,12 +186,8 @@ static void print_snap(const ins_t *f, long long t_us)
         printf(" posstd=- velstd=- baccstd=- bgyrstd=-");
     }
     {
-        int dr = ins_deadreckoning_ms(f);
-        if (dr < 0) {
-            printf(" dr=-");
-        } else {
-            printf(" dr=%d", dr);
-        }
+        /* Raw return; the parser checks it against the published convention. */
+        printf(" dr=%d", ins_deadreckoning_ms(f));
     }
     printf(" n_seen=%u n_used=%u n_rate=%u\n", d->n_gnss_seen, d->n_gnss_used,
            d->n_gnss_rate_limited);
@@ -418,6 +416,21 @@ def parse_triple(token):
         raise SystemExit("non-finite triple " + token)
     return tuple(vals)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -442,25 +455,15 @@ def emit(nav, t_us):
         vel_std = tuple(sd["vel_ned"])
         bacc_std = tuple(sd["acc_bias"])
         bgyr_std = tuple(sd["gyr_bias"])
-        for name, trip in (
-            ("attitude", rpy_std),
-            ("position", pos_std),
-            ("velocity", vel_std),
-            ("acc-bias", bacc_std),
-            ("gyr-bias", bgyr_std),
-        ):
-            if not all(math.isfinite(v) for v in trip):
-                raise SystemExit("non-finite %s uncertainty" % name)
     def fmt(ok, vec):
         if not ok:
             return "-"
         return "%.17g,%.17g,%.17g" % vec
-    n_seen = int(diag["n_gnss_seen"])
-    n_used = int(diag["n_gnss_used"])
+    n_seen = _cnt(diag, "n_gnss_seen")
+    n_used = _cnt(diag, "n_gnss_used")
+    # used > seen prints a negative skip count; the parser records it.
     skipped = n_seen - n_used
-    if skipped < 0:
-        raise SystemExit("GNSS used exceeds seen")
-    dr = int(nav.deadreckoning_ms())
+    dr = nav.deadreckoning_ms()
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
         % (t_us, ready, pos, vel_ok, rpy_ok, ned_ok, bacc_ok, bgyr_ok)
@@ -476,10 +479,10 @@ def emit(nav, t_us):
     line += " velstd=" + (fmt(vel_std is not None, vel_std) if vel_std is not None else "-")
     line += " baccstd=" + (fmt(bacc_std is not None, bacc_std) if bacc_std is not None else "-")
     line += " bgyrstd=" + (fmt(bgyr_std is not None, bgyr_std) if bgyr_std is not None else "-")
-    if dr < 0:
-        line += " dr=-"
-    else:
+    if isinstance(dr, int) and not isinstance(dr, bool):
         line += " dr=%d" % dr
+    else:
+        line += " dr=?"  # the reader returned something other than an int
     line += " n_seen=%d n_used=%d n_rate=%d" % (n_seen, n_used, skipped)
     print(line)
 
@@ -700,6 +703,9 @@ class GateSnapshot:
     n_seen: int
     n_used: int
     n_rate: int
+    # Raw ins_deadreckoning_ms / deadreckoning_ms return (None: not an int,
+    # or the no-instance line). dr_ms is the published age (raw >= 0).
+    dr_raw: int | None = None
 
 
 @dataclass
@@ -881,20 +887,40 @@ def parse_gate_snapshot(line: str) -> GateSnapshot:
         raise HarnessError("snapshot missing bgyrstd")
     bgyr_std_ok = fields["bgyrstd"] != "-"
     bgyr_std = _parse_vec(fields, "bgyrstd", bgyr_std_ok)
-    dr_ms = _parse_optional_int(fields, "dr")
+    if "dr" not in fields:
+        raise HarnessError("snapshot missing dr")
+    dr_tok = fields["dr"]
+    dr_read = dr_tok != "-"  # "-" only on the no-instance line after a refused init
+    dr_raw: int | None = None
+    if dr_read and dr_tok != "?":
+        try:
+            dr_raw = int(dr_tok)
+        except ValueError as exc:
+            raise HarnessError(f"dr is not an int: {dr_tok!r}") from exc
+    dr_ms = dr_raw if (dr_raw is not None and dr_raw >= 0) else None
     n_seen = _parse_int(fields, "n_seen")
     n_used = _parse_int(fields, "n_used")
     n_rate = _parse_int(fields, "n_rate")
+    # Product invariants are recorded for the dedicated tests, never raised
+    # here: one such value must not abort every run that parses the snapshot.
     if n_seen < 0 or n_used < 0:
-        raise HarnessError(f"GNSS counts must be non-negative in {line!r}")
+        note_product_issue("F05", f"GNSS counters missing or negative: {line}")
     if n_rate < 0:
-        raise HarnessError(f"rate-limit count must be non-negative in {line!r}")
-    if pos_ok and dr_ms is None:
-        raise HarnessError(f"initialized snapshot has no dead-reckoning age: {line!r}")
-    if (not pos_ok) and dr_ms is not None:
-        raise HarnessError(f"uninitialized snapshot published a dead-reckoning age: {line!r}")
+        note_product_issue("F05", f"GNSS used exceeds GNSS seen: {line}")
     if pos_ok and (pos_std is None or vel_std is None or bacc_std is None or bgyr_std is None):
-        raise HarnessError(f"initialized snapshot missing published 1-sigma: {line!r}")
+        note_product_issue("F05", f"initialized snapshot missing published 1-sigma: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F05', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F05', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F05', f"ins_get_diag returned NULL for a live instance: {line}")
+    if pos_ok and dr_ms is None:
+        note_product_issue("F05.dr", f"initialized, but no dead-reckoning age (dr={dr_tok}): {line}")
+    if (not pos_ok) and dr_read and dr_raw != -1:
+        note_product_issue(
+            "F05.dr", f"not initialized, but the age reader returned {dr_tok} instead of -1: {line}"
+        )
     return GateSnapshot(
         t_us=t_us,
         ready=ready,
@@ -916,6 +942,7 @@ def parse_gate_snapshot(line: str) -> GateSnapshot:
         bias_acc_std=bacc_std,
         bias_gyr_std=bgyr_std,
         dr_ms=dr_ms,
+        dr_raw=dr_raw,
         n_seen=n_seen,
         n_used=n_used,
         n_rate=n_rate,
@@ -987,25 +1014,25 @@ def gate_langs(scen: GateScenario, *, include_py: bool = True):
 
 def require_initialized(snap: GateSnapshot, what: str) -> None:
     if not snap.pos_ok:
-        raise HarnessError(f"{what}: expected initialized (position published) at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected initialized (position published) at t={snap.t_us}")
     if not snap.vel_ok:
-        raise HarnessError(f"{what}: velocity accessor failed while initialized at t={snap.t_us}")
+        raise AssertionError(f"{what}: velocity accessor failed while initialized at t={snap.t_us}")
     if snap.ecef is None:
-        raise HarnessError(f"{what}: initialized snapshot has no ECEF")
+        raise AssertionError(f"{what}: initialized snapshot has no ECEF")
 
 
 def require_not_initialized(snap: GateSnapshot, what: str) -> None:
     if snap.pos_ok:
-        raise HarnessError(f"{what}: expected accessors to fail at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected accessors to fail at t={snap.t_us}")
     if snap.vel_ok:
-        raise HarnessError(f"{what}: velocity still published at t={snap.t_us}")
+        raise AssertionError(f"{what}: velocity still published at t={snap.t_us}")
     if snap.ecef is not None:
-        raise HarnessError(f"{what}: unpublished position still printed an ECEF")
+        raise AssertionError(f"{what}: unpublished position still printed an ECEF")
 
 
 def require_ready_gate(snap: GateSnapshot, what: str) -> None:
     if not snap.ready:
-        raise HarnessError(f"{what}: expected ready at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected ready at t={snap.t_us}")
     require_initialized(snap, what)
 
 

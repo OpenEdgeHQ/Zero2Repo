@@ -13,7 +13,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from _harness import HarnessError, invoke, runtime_uuid_int
+from _harness import (
+    HarnessError,
+    invoke,
+    runtime_uuid_int,
+    nonfinite_fields,
+    note_product_issue,
+)
 from F01_helpers import hamilton_zyx_quaternion, require_probe_success
 from F02_helpers import (
     DT_SEC,
@@ -127,18 +133,6 @@ static void print_vert_snap(const baro_alt_t *b, long long t_us)
     int h_ok = baro_alt_get_height(b, &h) ? 1 : 0;
     int v_ok = baro_alt_get_velocity(b, &v) ? 1 : 0;
     int isa_ok = baro_alt_get_isa_altitude(b, &isa) ? 1 : 0;
-    if (h_ok && !isfinite(h)) {
-        fprintf(stderr, "published height is not finite\n");
-        exit(2);
-    }
-    if (v_ok && !isfinite(v)) {
-        fprintf(stderr, "published climb rate is not finite\n");
-        exit(2);
-    }
-    if (isa_ok && !isfinite(isa)) {
-        fprintf(stderr, "published ISA altitude is not finite\n");
-        exit(2);
-    }
     printf("SNAP t_us=%lld h_ok=%d v_ok=%d isa_ok=%d", t_us, h_ok, v_ok, isa_ok);
     if (h_ok) {
         printf(" h=%.9g", h);
@@ -163,10 +157,6 @@ static void print_off_snap(const local_gnss_alt_t *g, long long t_us)
     float off = 0.0f, std = 0.0f;
     int ok = local_gnss_alt_get(g, &off, &std) ? 1 : 0;
     if (ok) {
-        if (!isfinite(off) || !isfinite(std)) {
-            fprintf(stderr, "published offset is not finite\n");
-            exit(2);
-        }
     }
     printf("SNAP t_us=%lld get_ok=%d", t_us, ok);
     if (ok) {
@@ -182,14 +172,6 @@ static void print_chan_snap(const nav_suite_t *s, long long t_us)
     float h = 0.0f, v = 0.0f;
     int h_ok = baro_alt_get_height(&s->baro_alt, &h) ? 1 : 0;
     int v_ok = baro_alt_get_velocity(&s->baro_alt, &v) ? 1 : 0;
-    if (h_ok && !isfinite(h)) {
-        fprintf(stderr, "published channel height is not finite\n");
-        exit(2);
-    }
-    if (v_ok && !isfinite(v)) {
-        fprintf(stderr, "published channel climb is not finite\n");
-        exit(2);
-    }
     printf("SNAP t_us=%lld h_ok=%d v_ok=%d", t_us, h_ok, v_ok);
     if (h_ok) {
         printf(" h=%.9g", h);
@@ -631,7 +613,13 @@ def parse_vert_snapshot(line: str) -> VertSnapshot:
     isa_ok = _parse_flag(fields, "isa_ok")
     n_invalid = _parse_int(fields, "n_invalid")
     if n_invalid < 0:
-        raise HarnessError(f"n_invalid is negative in {line!r}")
+        note_product_issue("F07", f"n_invalid missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F07', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F07', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F07', f"ins_get_diag returned NULL for a live instance: {line}")
     return VertSnapshot(
         t_us=_parse_int(fields, "t_us"),
         h_ok=h_ok,
@@ -817,7 +805,13 @@ def parse_off_snapshot(line: str) -> OffSnapshot:
     get_ok = _parse_flag(fields, "get_ok")
     n_invalid = _parse_int(fields, "n_invalid")
     if n_invalid < 0:
-        raise HarnessError(f"n_invalid is negative in {line!r}")
+        note_product_issue("F07", f"n_invalid missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F07', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F07', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F07', f"ins_get_diag returned NULL for a live instance: {line}")
     return OffSnapshot(
         t_us=_parse_int(fields, "t_us"),
         get_ok=get_ok,

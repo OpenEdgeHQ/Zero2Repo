@@ -1251,3 +1251,20 @@ def test_auto_disable_does_not_block_explicit_flags():
     assert not disabled.stationary
     assert not just.stationary, "re-enable reported stationary immediately"
     assert later.stationary, "re-enable never became stationary after a fresh dwell"
+
+
+def test_published_aiding_snapshots_are_well_formed():
+    """Published values are finite, attitude is not published without its
+    1-sigma, ``ins_get_diag`` is available on a live instance and its counters
+    are non-negative -- on every aiding snapshot parsed in this session and on
+    a GNSS pad of its own. A violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h = runtime_wmm_site()
+    origin = ecef_from_llh_deg(lat, lon, h)
+    scen = aiding_site(lat, lon, h, gnss_stream(origin, duration_s=HAPPY_DURATION_S), origin_ecef=origin)
+    for runner in (c_aiding_run, py_aiding_run):
+        run = runner(scen)
+        assert run.snaps, "pad produced no snapshots"
+    require_no_product_issues("F03", "aiding snapshots (F03)")

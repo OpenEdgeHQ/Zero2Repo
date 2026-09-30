@@ -1449,3 +1449,19 @@ def test_suite_rebootstrap_after_implausible_height_or_climb_1sigma():
         "suite vertical-channel accessors did not succeed again without a caller re-init"
     )
     assert recovered[0].h is not None and math.isfinite(recovered[0].h)
+
+
+def test_published_vertical_snapshots_are_well_formed():
+    """Published height, climb rate, ISA altitude and offset values are finite
+    and the invalid-input counters are non-negative -- on every vertical and
+    offset snapshot parsed in this session and on a pad of its own. A
+    violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    p = tropospheric_isa_pressure_pa(runtime_pad_isa_m())
+    run = c_vert_run(
+        VertScenario(t_init=0, pressure_pa=p, cmds=vert_stream(duration_s=5.0, pressure_pa=p))
+    )
+    assert run.init_ok and run.snaps, "pad produced no snapshots"
+    require_no_product_issues("F07", "vertical-channel snapshots (F07)")

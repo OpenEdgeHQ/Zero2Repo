@@ -21,12 +21,14 @@ from F04_helpers import (
     measured_round,
     opus_with_runtime_tags,
     place_opus_scale_bundle,
+    place_ordinary_bundle,
     place_vorbis_scale_bundle,
     require_lossless_archive,
     split_member,
+    verbatim_audio_share,
     vorbis_with_runtime_comment,
 )
-from _harness import HarnessError, workspace
+from _harness import HarnessError, stored_copy, workspace
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +47,7 @@ def test_each_effort_one_through_nine_accepted_and_lossless():
                 recovered = unique_name(f"out-{label}")
                 compress_to(ws, src, dest, effort)
                 dest_bytes = archive_bytes(ws, dest)
-                assert dest_bytes != src_bytes, (
+                assert not stored_copy(dest_bytes, src_bytes), (
                     f"{label} {effort}: compress destination bytes equal "
                     "the source (copy stub)"
                 )
@@ -230,7 +232,7 @@ def test_expand_with_effort_token_recovers_original():
             src_bytes = ws.read_bytes(src)
             archive_1 = unique_name(f"{label}-a1")
             compress_to(ws, src, archive_1, "-1")
-            assert archive_bytes(ws, archive_1) != src_bytes, (
+            assert not stored_copy(archive_bytes(ws, archive_1), src_bytes), (
                 f"{label} -1 compress destination equals the source"
             )
 
@@ -259,7 +261,7 @@ def test_expand_with_effort_token_recovers_original():
 
             archive_9 = unique_name(f"{label}-a9")
             compress_to(ws, src, archive_9, "-9")
-            assert archive_bytes(ws, archive_9) != src_bytes, (
+            assert not stored_copy(archive_bytes(ws, archive_9), src_bytes), (
                 f"{label} -9 compress destination equals the source"
             )
             out9 = unique_name(f"{label}-from9")
@@ -341,7 +343,7 @@ def test_lone_minus_zero_is_usage_error():
 
         dest_ok = unique_name("ok-arc")
         compress_to(ws, src, dest_ok)
-        assert archive_bytes(ws, dest_ok) != src_bytes, (
+        assert not stored_copy(archive_bytes(ws, dest_ok), src_bytes), (
             "baseline compress without -0 did not write a distinct archive"
         )
 
@@ -390,7 +392,7 @@ def test_effort_ten_is_not_an_effort_option():
 
         dest_ok = unique_name("ok-nine")
         compress_to(ws, src, dest_ok, "-9")
-        assert archive_bytes(ws, dest_ok) != src_bytes, (
+        assert not stored_copy(archive_bytes(ws, dest_ok), src_bytes), (
             "baseline compress with effort option -9 did not write a "
             "distinct archive"
         )
@@ -446,11 +448,11 @@ def test_batch_compress_honours_effort_and_default():
 
         dest_1, bytes_1 = batch_compress_to(ws, src_bytes, "-1")
         dest_9, bytes_9 = batch_compress_to(ws, src_bytes, "-9")
-        assert bytes_1 != src_bytes, (
-            "-1 -b e destination bytes equal the source (copy stub)"
+        assert not stored_copy(bytes_1, src_bytes), (
+            "-1 -b e destination bytes carry the source verbatim (copy stub)"
         )
-        assert bytes_9 != src_bytes, (
-            "-9 -b e destination bytes equal the source (copy stub)"
+        assert not stored_copy(bytes_9, src_bytes), (
+            "-9 -b e destination bytes carry the source verbatim (copy stub)"
         )
         assert bytes_1 != bytes_9, (
             "batch compress of a member that splits at 1 versus 9 must "
@@ -510,8 +512,8 @@ def test_batch_compress_honours_effort_and_default():
         assert ws.path_is_file(dest_mid), (
             "batch compress with -5 did not write the derived archive"
         )
-        assert bytes_mid != src_bytes, (
-            "-5 -b e destination bytes equal the source (copy stub)"
+        assert not stored_copy(bytes_mid, src_bytes), (
+            "-5 -b e destination bytes carry the source verbatim (copy stub)"
         )
         assert ws.read_bytes(rec_mid) == src_bytes, (
             "expand of the -5 batch archive did not restore the original"
@@ -520,4 +522,62 @@ def test_batch_compress_honours_effort_and_default():
             f"[F04] H -1={len(bytes_1)} -9={len(bytes_9)} omit={len(bytes_omit)} "
             f"mid={len(bytes_mid)}",
             flush=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# I. Effort 9 recompresses each ordinary file below its own size
+# ---------------------------------------------------------------------------
+
+
+def test_effort_nine_archive_of_each_ordinary_file_is_smaller_than_the_file():
+    with workspace() as ws:
+        members = place_ordinary_bundle(ws)
+        codecs = {codec for codec, _rel in members}
+        assert codecs == {"vorbis", "opus"}, f"bundle lacks a codec: {codecs}"
+        for codec, src in members:
+            archive, recovered, src_bytes = measured_round(ws, src, "-9")
+            require_lossless_archive(archive, recovered, src_bytes, what=f"I {src}")
+            print(
+                f"[F04] I {codec} src={len(src_bytes)} -9={len(archive)}",
+                flush=True,
+            )
+            assert len(archive) < len(src_bytes), (
+                "At effort 9, compress of an ordinary accepted "
+                f"{codec} file writes an archive smaller than the file: "
+                f"{src!r} is {len(src_bytes)} bytes, archive {len(archive)}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# J. No effort stores the input's audio packets as copies
+# ---------------------------------------------------------------------------
+
+
+def test_no_effort_carries_the_audio_packets_as_stored_copies():
+    with workspace() as ws:
+        members = place_ordinary_bundle(ws)
+        measured_any = {"vorbis": 0, "opus": 0}
+        for codec, src in members:
+            for effort in ("-1", "-5", "-9"):
+                archive, recovered, src_bytes = measured_round(ws, src, effort)
+                require_lossless_archive(
+                    archive, recovered, src_bytes, what=f"J {effort} {src}"
+                )
+                found, measured = verbatim_audio_share(archive, src_bytes)
+                print(
+                    f"[F04] J {codec} {effort} verbatim={found}/{measured}",
+                    flush=True,
+                )
+                if measured == 0:
+                    continue
+                measured_any[codec] += measured
+                assert 2 * found < measured, (
+                    "Compress at any effort does not carry the input's audio "
+                    "packets as stored copies: counted by bytes, most audio "
+                    "packets must not appear byte-for-byte in the archive; "
+                    f"{src!r} at {effort}: {found} of {measured} bytes verbatim"
+                )
+        assert all(measured_any.values()), (
+            f"verbatim measurement covered no audio bytes: {measured_any}"
         )

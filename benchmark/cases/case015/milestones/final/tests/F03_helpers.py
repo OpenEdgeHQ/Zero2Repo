@@ -29,6 +29,7 @@ from F02_helpers import (
     is_opus_head,
     ogg_crc_page,
     parse_ogg_pages,
+    replace_vorbis_comment,
     require_no_usable_compress_dest,
     rewrite_first_page_packet,
 )
@@ -688,3 +689,190 @@ __all__ = (
     "with_ogg_version",
     "with_opus_head_padded",
 )
+
+
+# ---------------------------------------------------------------------------
+# Codec-mode contrast inputs that share no incidental covariate
+# ---------------------------------------------------------------------------
+
+_CONTRAST_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _contrast_fixture(name: str) -> bytes:
+    path = _CONTRAST_FIXTURES / name
+    if not path.is_file():
+        raise HarnessError(f"suite fixture missing: {path}")
+    return read_bytes(path)
+
+
+def _with_first_packet_field(data: bytes, offset: int, value: bytes) -> bytes:
+    """Rewrite bytes of the first packet (identification header) in place."""
+    packet = bytearray(first_complete_packet(data))
+    if offset < 0 or offset + len(value) > len(packet):
+        raise HarnessError("identification header field is out of range")
+    packet[offset : offset + len(value)] = value
+    out = rewrite_first_page_packet(data, bytes(packet))
+    if first_complete_packet(out) != bytes(packet):
+        raise HarnessError("identification header rewrite did not take")
+    return out
+
+
+def _truncated_with_eos(data: bytes, keep_pages: int) -> bytes:
+    """Keep the first pages up to a complete packet; mark the last as EOS."""
+    pages = parse_ogg_pages(data)
+    k = min(keep_pages, len(pages))
+    while k > 1 and pages[k - 1].tail:
+        k -= 1
+    if k < 3:
+        raise HarnessError("too few pages to truncate on a packet boundary")
+    last = bytearray(pages[k - 1].raw)
+    last[5] |= 0x04
+    last[22:26] = int(ogg_crc_page(bytes(last))).to_bytes(4, "little")
+    out = bytes(data[: pages[k - 1].offset]) + bytes(last)
+    if len(parse_ogg_pages(out)) != k:
+        raise HarnessError("truncated stream does not re-parse")
+    return out
+
+
+def _chain(parts: Sequence[bytes]) -> bytes:
+    serials = [parse_ogg_pages(part)[0].serial for part in parts]
+    if len(set(serials)) != len(serials):
+        raise HarnessError(f"chain links share a serial number: {serials}")
+    return b"".join(parts)
+
+
+def _runtime_opus_tags(data: bytes) -> bytes:
+    mark = f"suite-{secrets.token_hex(6)}".encode("ascii")
+    return replace_opus_tags(data, vendor=b"vendor-" + mark, fields=(b"NOTE=" + mark,))
+
+
+def _runtime_vorbis_comment(data: bytes) -> bytes:
+    mark = f"suite-{secrets.token_hex(6)}".encode("ascii")
+    return replace_vorbis_comment(data, vendor=b"vendor-" + mark, fields=(b"NOTE=" + mark,))
+
+
+def place_codec_mode_contrast(ws: Workspace) -> tuple[list[str], list[str]]:
+    """Three Opus and three Vorbis inputs for the dump codec-mode field.
+
+    The Opus inputs differ from each other in every file-dependent value a
+    dump could print: page count, link count, channel count, duration,
+    RFC 7845 input sample rate, pre-skip, and output gain. One Vorbis input
+    carries a 48 kHz identification rate. A token all three Opus dumps
+    share and no Vorbis dump carries is then the codec answer, not a
+    coincidence of the inputs. Returns ``(opus_paths, vorbis_paths)``.
+    """
+    celt = _runtime_opus_tags(_opus_kind_bytes("celt"))
+    silk = _truncated_with_eos(_runtime_opus_tags(_opus_kind_bytes("silk")), 7)
+    silk = _with_first_packet_field(silk, 10, (480).to_bytes(2, "little"))
+    silk = _with_first_packet_field(silk, 12, (44100).to_bytes(4, "little"))
+    silk = _with_first_packet_field(silk, 16, (256).to_bytes(2, "little"))
+    later = _with_first_packet_field(
+        _runtime_opus_tags(_opus_kind_bytes("silk")), 12, (16000).to_bytes(4, "little")
+    )
+    chain = _chain([_runtime_opus_tags(_opus_kind_bytes("hybrid")), later])
+    opus_data = (celt, silk, chain)
+    for data in opus_data:
+        for packet in complete_packets(data)[:1]:
+            channels, family = opus_head_fields(packet)
+            if family != 0 or channels not in (1, 2):
+                raise HarnessError("codec-mode Opus input is not family-0 mono/stereo")
+    counts = [len(parse_ogg_pages(d)) for d in opus_data]
+    if len(set(counts)) != len(counts):
+        raise HarnessError(f"codec-mode Opus inputs share a page count: {counts}")
+
+    stereo = _with_first_packet_field(
+        _runtime_vorbis_comment(_contrast_fixture("vorbis_ordinary_a.ogg")),
+        12,
+        (48000).to_bytes(4, "little"),
+    )
+    mono = _runtime_vorbis_comment(_contrast_fixture("vorbis_ordinary_c.ogg"))
+    vchain = _chain(
+        [
+            _runtime_vorbis_comment(_contrast_fixture("vorbis_a.ogg")),
+            _runtime_vorbis_comment(_contrast_fixture("vorbis_ordinary_b.ogg")),
+        ]
+    )
+    opus_paths: list[str] = []
+    vorbis_paths: list[str] = []
+    for i, data in enumerate(opus_data):
+        rel = unique_name(f"mode-opus-{i}") + ".opus"
+        ws.write(rel, data)
+        opus_paths.append(rel)
+    for i, data in enumerate((stereo, mono, vchain)):
+        rel = unique_name(f"mode-vorbis-{i}") + ".ogg"
+        ws.write(rel, data)
+        vorbis_paths.append(rel)
+    print(f"[F03] codec-mode contrast opus pages={counts}", flush=True)
+    return opus_paths, vorbis_paths
+
+
+def codec_mode_payload_across(
+    opus_texts: Sequence[str],
+    vorbis_texts: Sequence[str],
+    paths: Sequence[str],
+    sizes: Sequence[int],
+) -> frozenset[str]:
+    """Tokens every Opus dump carries and no Vorbis dump carries.
+
+    Leftovers are taken after stripping paths and per-file sizes. With
+    inputs from place_codec_mode_contrast, a nonempty result is a
+    dedicated codec-mode payload rather than a shared file covariate.
+    """
+    if len(opus_texts) < 3 or len(vorbis_texts) < 3:
+        raise HarnessError("codec-mode contrast needs three dumps per codec")
+    opus_sets = [
+        leftover_whitespace_tokens(strip_paths_and_sizes(t, paths, sizes))
+        for t in opus_texts
+    ]
+    vorbis_sets = [
+        leftover_whitespace_tokens(strip_paths_and_sizes(t, paths, sizes))
+        for t in vorbis_texts
+    ]
+    return frozenset.intersection(*opus_sets) - frozenset().union(*vorbis_sets)
+
+
+def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> frozenset[str]:
+    """Compress/expand the contrast inputs at *effort*, dump, find the field.
+
+    Each input must round-trip byte-for-byte. The dedicated codec-mode
+    payload is a token every Opus dump carries and no Vorbis dump carries
+    after path and size strip; every Vorbis leftover must also differ from
+    every Opus leftover. Returns the Opus payload tokens.
+    """
+    opus_paths, vorbis_paths = place_codec_mode_contrast(ws)
+    paths: list[str] = [str(ws.path)]
+    sizes: list[int] = []
+    texts: dict[str, str] = {}
+    for src in (*opus_paths, *vorbis_paths):
+        arc = unique_name("mode-arc")
+        rec = unique_name("mode-rec")
+        enc = run_product_long(ws, [effort, "e", src, arc])
+        require_ok(enc)
+        dec = run_product_long(ws, ["d", arc, rec])
+        require_ok(dec)
+        src_bytes = ws.read_bytes(src)
+        assert ws.read_bytes(rec) == src_bytes, (
+            f"{what}: expand of {src!r} did not restore the original bytes"
+        )
+        paths += [src, arc, rec]
+        sizes += [len(src_bytes), len(ws.read_bytes(arc))]
+        texts[src] = dump_stdout(ws, arc)
+    opus_texts = [texts[p] for p in opus_paths]
+    vorbis_texts = [texts[p] for p in vorbis_paths]
+    payload = codec_mode_payload_across(opus_texts, vorbis_texts, paths, sizes)
+    print(f"[F03] {what} codec-mode payload={sorted(payload)!r}", flush=True)
+    assert payload, (
+        "On dump standard output, a dedicated codec-mode field — not the "
+        "archive path, not a byte size, not a leftover that varies with the "
+        "file — answers whether the archive is Opus or Vorbis: Opus archives "
+        "that differ in page count, link count, channels, duration, input "
+        "rate, pre-skip, and gain share one payload of that field that no "
+        f"Vorbis archive carries ({what})"
+    )
+    opus_left = [strip_paths_and_sizes(t, paths, sizes) for t in opus_texts]
+    for text in vorbis_texts:
+        left = strip_paths_and_sizes(text, paths, sizes)
+        assert all(left != other for other in opus_left), (
+            f"{what}: a Vorbis dump is not distinguishable from an Opus dump"
+        )
+    return payload

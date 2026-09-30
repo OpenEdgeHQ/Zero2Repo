@@ -880,3 +880,21 @@ def test_python_gnss_velocity_is_ned():
     print(f"Python vel contrast |d|={delta} north_pull={north_pull}", flush=True)
     assert delta > 1e-3, "Python GNSS velocity did not change published NED velocity"
     assert north_pull > 5e-4, "Python GNSS north velocity did not pull published north speed"
+
+
+def test_published_ins_snapshots_are_well_formed():
+    """Contract accessors on the INS wrapper and filter: a published value is
+    finite, attitude is not published without its 1-sigma (Python ``rpy`` /
+    ``stddev``), and the diagnostic counters exist and are non-negative
+    (``ins_get_diag`` / ``diag``). Checked on every INS snapshot parsed in this
+    session -- the other tests of this file included -- and on a pad of its
+    own. A violation fails this test only, not every test that parses one.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h = runtime_site()
+    scen = happy_scenario(lat, lon, h)
+    for runner in (c_ins_run, py_ins_run):
+        run = runner(scen)
+        assert run.snaps, "pad produced no snapshots"
+    require_no_product_issues("F02", "INS snapshots (F02)")

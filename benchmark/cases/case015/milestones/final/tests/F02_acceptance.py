@@ -56,7 +56,7 @@ from F02_helpers import (
     with_interior_unused_zero_padding,
     with_shorter_than_canonical_interior_packet,
 )
-from _harness import files_identical, workspace
+from _harness import files_identical, stored_copy, workspace
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +96,8 @@ def test_opushead_first_page_is_not_vorbis_refusal():
         require_ok(enc)
         assert ws.path_is_file(dest), "OpusHead compress did not write a destination"
         dest_bytes = ws.read_bytes(dest)
-        assert dest_bytes != src_bytes, (
-            "OpusHead compress destination bytes equal the source"
+        assert not stored_copy(dest_bytes, src_bytes), (
+            "OpusHead compress destination bytes carry the source verbatim"
         )
         recovered = unique_name("opus-out")
         dec = run_product(ws, ["d", dest, recovered])
@@ -176,8 +176,8 @@ def test_opushead_without_opus_suffix_compresses():
         require_ok(enc)
         assert ws.path_is_file(dest), "unnamed OpusHead compress did not write dest"
         dest_bytes = ws.read_bytes(dest)
-        assert dest_bytes != src_bytes, (
-            "unnamed OpusHead compress destination bytes equal the source"
+        assert not stored_copy(dest_bytes, src_bytes), (
+            "unnamed OpusHead compress destination bytes carry the source verbatim"
         )
         recovered = unique_name("opus-nosuf-out")
         dec = run_product(ws, ["d", dest, recovered])
@@ -232,79 +232,81 @@ def test_expand_raw_vorbis_is_refused():
 
 
 def test_two_compress_invocations_write_identical_archives():
-    with workspace() as ws:
-        src = place_vorbis(ws, "a")
-        src_bytes = ws.read_bytes(src)
-        dest_a = unique_name("arc-a")
-        dest_b = unique_name("arc-b")
-        enc_a = run_product(ws, ["e", src, dest_a])
-        require_ok(enc_a)
-        enc_b = run_product(ws, ["e", src, dest_b])
-        require_ok(enc_b)
-        assert ws.path_is_file(dest_a), "first compress did not write a destination"
-        assert ws.path_is_file(dest_b), "second compress did not write a destination"
-        dest_a_bytes = ws.read_bytes(dest_a)
-        dest_b_bytes = ws.read_bytes(dest_b)
-        assert dest_a_bytes != src_bytes, (
-            "first compress destination bytes equal the source (copy stub)"
-        )
-        assert dest_b_bytes != src_bytes, (
-            "second compress destination bytes equal the source (copy stub)"
-        )
-        recovered = unique_name("from-a")
-        dec = run_product(ws, ["d", dest_a, recovered])
-        require_ok(dec)
-        assert ws.path_is_file(recovered), (
-            "expand of the first archive did not write a destination"
-        )
-        assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
-            "expand of the first archive did not restore the original bytes"
-        )
-        assert files_identical(ws.resolve(dest_a), ws.resolve(dest_b)), (
-            "two compressions of the same input, effort, and options differed"
-        )
-        print(
-            f"[F02] two compressions src={len(src_bytes)} "
-            f"arc={len(dest_a_bytes)} recovered={ws.file_size(recovered)}",
-            flush=True,
-        )
+    for effort in ((), ("-1",)):
+        with workspace() as ws:
+            src = place_vorbis(ws, "a")
+            src_bytes = ws.read_bytes(src)
+            dest_a = unique_name("arc-a")
+            dest_b = unique_name("arc-b")
+            enc_a = run_product(ws, [*effort, "e", src, dest_a])
+            require_ok(enc_a)
+            enc_b = run_product(ws, [*effort, "e", src, dest_b])
+            require_ok(enc_b)
+            assert ws.path_is_file(dest_a), "first compress did not write a destination"
+            assert ws.path_is_file(dest_b), "second compress did not write a destination"
+            dest_a_bytes = ws.read_bytes(dest_a)
+            dest_b_bytes = ws.read_bytes(dest_b)
+            assert not stored_copy(dest_a_bytes, src_bytes), (
+                "first compress destination bytes carry the source verbatim (copy stub)"
+            )
+            assert not stored_copy(dest_b_bytes, src_bytes), (
+                "second compress destination bytes carry the source verbatim (copy stub)"
+            )
+            recovered = unique_name("from-a")
+            dec = run_product(ws, ["d", dest_a, recovered])
+            require_ok(dec)
+            assert ws.path_is_file(recovered), (
+                "expand of the first archive did not write a destination"
+            )
+            assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
+                "expand of the first archive did not restore the original bytes"
+            )
+            assert files_identical(ws.resolve(dest_a), ws.resolve(dest_b)), (
+                f"two compressions of the same input, effort {effort!r}, and options differed"
+            )
+            print(
+                f"[F02] two compressions src={len(src_bytes)} "
+                f"arc={len(dest_a_bytes)} recovered={ws.file_size(recovered)}",
+                flush=True,
+            )
 
 
 def test_no_mmap_compress_matches_mapped_archive():
-    with workspace() as ws:
-        src = place_vorbis(ws, "a")
-        src_bytes = ws.read_bytes(src)
-        mapped = unique_name("mapped")
-        unmapped = unique_name("unmapped")
-        enc_m = run_product(ws, ["e", src, mapped])
-        require_ok(enc_m)
-        assert ws.path_is_file(mapped), "mapped compress did not write a destination"
-        mapped_bytes = ws.read_bytes(mapped)
-        assert mapped_bytes != src_bytes, (
-            "mapped compress destination bytes equal the source (copy stub)"
-        )
-        recovered = unique_name("mapped-out")
-        dec = run_product(ws, ["d", mapped, recovered])
-        require_ok(dec)
-        assert ws.path_is_file(recovered), (
-            "expand of the mapped archive did not write a destination"
-        )
-        assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
-            "expand of the mapped archive did not restore the original bytes"
-        )
-        enc_u = run_product(ws, ["--no-mmap", "e", src, unmapped])
-        require_ok(enc_u)
-        assert ws.path_is_file(unmapped), (
-            "--no-mmap compress did not write a destination"
-        )
-        assert files_identical(ws.resolve(mapped), ws.resolve(unmapped)), (
-            "--no-mmap changed archive bytes versus the same effort without it"
-        )
-        print(
-            f"[F02] no-mmap compress src={len(src_bytes)} "
-            f"mapped={len(mapped_bytes)} recovered={ws.file_size(recovered)}",
-            flush=True,
-        )
+    for effort in ((), ("-1",)):
+        with workspace() as ws:
+            src = place_vorbis(ws, "a")
+            src_bytes = ws.read_bytes(src)
+            mapped = unique_name("mapped")
+            unmapped = unique_name("unmapped")
+            enc_m = run_product(ws, [*effort, "e", src, mapped])
+            require_ok(enc_m)
+            assert ws.path_is_file(mapped), "mapped compress did not write a destination"
+            mapped_bytes = ws.read_bytes(mapped)
+            assert not stored_copy(mapped_bytes, src_bytes), (
+                "mapped compress destination bytes carry the source verbatim (copy stub)"
+            )
+            recovered = unique_name("mapped-out")
+            dec = run_product(ws, ["d", mapped, recovered])
+            require_ok(dec)
+            assert ws.path_is_file(recovered), (
+                "expand of the mapped archive did not write a destination"
+            )
+            assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
+                "expand of the mapped archive did not restore the original bytes"
+            )
+            enc_u = run_product(ws, ["--no-mmap", *effort, "e", src, unmapped])
+            require_ok(enc_u)
+            assert ws.path_is_file(unmapped), (
+                "--no-mmap compress did not write a destination"
+            )
+            assert files_identical(ws.resolve(mapped), ws.resolve(unmapped)), (
+                f"--no-mmap changed archive bytes versus effort {effort!r} without it"
+            )
+            print(
+                f"[F02] no-mmap compress src={len(src_bytes)} "
+                f"mapped={len(mapped_bytes)} recovered={ws.file_size(recovered)}",
+                flush=True,
+            )
 
 
 def test_no_mmap_expand_recovers_original():
@@ -316,8 +318,8 @@ def test_no_mmap_expand_recovers_original():
         require_ok(enc)
         assert ws.path_is_file(dest), "compress did not write a destination"
         dest_bytes = ws.read_bytes(dest)
-        assert dest_bytes != src_bytes, (
-            "compress destination bytes equal the source (copy stub)"
+        assert not stored_copy(dest_bytes, src_bytes), (
+            "compress destination bytes carry the source verbatim (copy stub)"
         )
         recovered = unique_name("out")
         dec = run_product(ws, ["--no-mmap", "d", dest, recovered])
@@ -837,3 +839,24 @@ def test_expand_same_path_is_file_access_and_preserves_bytes():
             f"expand same-path changed archive bytes of {archive!r}"
         )
         print(f"[F02] K expand same-path bytes={len(before)}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Expand needs only the archive (Vorbis)
+# ---------------------------------------------------------------------------
+
+
+def test_vorbis_archive_alone_expands_after_every_compress_trace_is_gone():
+    from F04_helpers import (
+        _SCALE_FILES,
+        _read_fixture,
+        _vorbis_comment_variant,
+        expand_from_archive_alone,
+    )
+
+    for fixture in (_SCALE_FILES[1], _SCALE_FILES[2]):
+        src_bytes = _vorbis_comment_variant(_read_fixture(fixture))
+        for effort in ("-1", "-9"):
+            expand_from_archive_alone(
+                src_bytes, effort, ".ogg", what=f"Vorbis {fixture.name} {effort}"
+            )

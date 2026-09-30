@@ -2633,6 +2633,9 @@ def run_search(
     args: list[str] = ["search"]
     if query is not None:
         args.append(str(query))
+    elif bundle is not None:
+        # The bundle is the documented second positional; an empty query keeps it there.
+        args.append("")
     if bundle is not None:
         args.append(str(bundle))
     if for_path is not None:

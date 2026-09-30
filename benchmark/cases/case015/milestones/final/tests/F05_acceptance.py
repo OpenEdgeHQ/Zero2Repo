@@ -26,7 +26,7 @@ from F04_helpers import _prove_family0, opus_with_runtime_tags, vorbis_with_runt
 from F05_helpers import (
     corrupt_stored_page_checksum,
     floor_slot,
-    generation_field,
+    generation_candidates_across,
     later_page_index,
     live_compress,
     lookup_slot,
@@ -442,7 +442,7 @@ def _foreign_generation_case(ws, src_a: str, src_b: str, non_archive: str, origi
         "baseline expand did not restore the original bytes"
     )
 
-    candidates = generation_field(bytes_a, bytes_b)
+    candidates = generation_candidates_across(ws, src_a, bytes_a, bytes_b)
     non_bytes = ws.read_bytes(non_archive)
     non_dest = unique_name("gen-nonarc")
     non_run = refuse_expand(ws, non_archive, non_dest, non_bytes)

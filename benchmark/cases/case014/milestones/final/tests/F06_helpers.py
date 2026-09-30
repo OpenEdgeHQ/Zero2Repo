@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from _harness import (
+    nonfinite_fields,
+    note_product_issue,
     runtime_uuid_int,
     HarnessError,
     RunResult,
@@ -167,13 +169,11 @@ static int same3(const float a[3], const float b[3])
 
 static void accept_velocity(float out[3], int *found, const float vel[3])
 {
-    if (!finite3(vel)) {
-        fprintf(stderr, "published attitude velocity is not finite\n");
-        exit(2);
-    }
     if (*found && !same3(out, vel)) {
-        fprintf(stderr, "attitude solution published two different velocities\n");
-        exit(2);
+        /* A second, different attitude velocity: keep the first. Publishing
+           any attitude velocity is what the no-velocity test rejects; it must
+           not abort every snapshot of the run. */
+        return;
     }
     out[0] = vel[0];
     out[1] = vel[1];
@@ -302,10 +302,6 @@ static int read_getter_child(const char *name, const void *arg, float out[3])
         }
         if (n != (ssize_t)sizeof buf) {
             fprintf(stderr, "attitude velocity channel: short read from %s\n", name);
-            exit(2);
-        }
-        if (!finite3(buf)) {
-            fprintf(stderr, "published attitude velocity is not finite\n");
             exit(2);
         }
         out[0] = buf[0];
@@ -516,16 +512,8 @@ static void print_filter_snap(const ahrs_t *a, long long t_us)
     int rpy = ahrs_get_rpy(a, &roll, &pitch, &yaw) ? 1 : 0;
     int b_ok = ahrs_get_bias_gyr(a, bias) ? 1 : 0;
     if (rpy) {
-        if (!isfinite(roll) || !isfinite(pitch) || !isfinite(yaw)) {
-            fprintf(stderr, "published attitude is not finite\n");
-            exit(2);
-        }
     }
     if (b_ok) {
-        if (!isfinite(bias[0]) || !isfinite(bias[1]) || !isfinite(bias[2])) {
-            fprintf(stderr, "published gyro bias is not finite\n");
-            exit(2);
-        }
     }
     float rs = 0.0f, ps = 0.0f, ys = 0.0f;
     int s_ok = ahrs_get_rpy_stddev(a, &rs, &ps, &ys) ? 1 : 0;
@@ -566,14 +554,6 @@ static void print_suite_snap(const nav_suite_t *s, long long t_us)
     float ar[3], ah[3];
     int ars = nav_suite_get_rpy_ars(s, &ar[0], &ar[1], &ar[2]) ? 1 : 0;
     int ahrs = nav_suite_get_rpy_ahrs(s, &ah[0], &ah[1], &ah[2]) ? 1 : 0;
-    if (ars && (!isfinite(ar[0]) || !isfinite(ar[1]) || !isfinite(ar[2]))) {
-        fprintf(stderr, "published ARS attitude is not finite\n");
-        exit(2);
-    }
-    if (ahrs && (!isfinite(ah[0]) || !isfinite(ah[1]) || !isfinite(ah[2]))) {
-        fprintf(stderr, "published AHRS attitude is not finite\n");
-        exit(2);
-    }
     float ars_s[3] = {0.0f, 0.0f, 0.0f};
     float ahrs_s[3] = {0.0f, 0.0f, 0.0f};
     int ars_std = ahrs_get_rpy_stddev(&s->ars, &ars_s[0], &ars_s[1], &ars_s[2]) ? 1 : 0;
@@ -608,18 +588,6 @@ static void print_suite_snap(const nav_suite_t *s, long long t_us)
     int ahrs_bias = ahrs_get_bias_gyr(&s->ahrs, ahrs_b) ? 1 : 0;
     int vel_ok = ins_get_velocity_ned(&s->ins, vel) ? 1 : 0;
     int zaru = nav_suite_get_zaru_active(s) ? 1 : 0;
-    if (ars_bias && (!isfinite(ars_b[0]) || !isfinite(ars_b[1]) || !isfinite(ars_b[2]))) {
-        fprintf(stderr, "published ARS gyro bias is not finite\n");
-        exit(2);
-    }
-    if (ahrs_bias && (!isfinite(ahrs_b[0]) || !isfinite(ahrs_b[1]) || !isfinite(ahrs_b[2]))) {
-        fprintf(stderr, "published AHRS gyro bias is not finite\n");
-        exit(2);
-    }
-    if (vel_ok && (!isfinite(vel[0]) || !isfinite(vel[1]) || !isfinite(vel[2]))) {
-        fprintf(stderr, "published velocity is not finite\n");
-        exit(2);
-    }
     printf(" zaru=%d vel=%d", zaru, vel_ok);
     if (vel_ok) {
         printf(" vel_ned=%.9g,%.9g,%.9g", vel[0], vel[1], vel[2]);
@@ -1025,8 +993,6 @@ if len(parts) != 5:
     raise SystemExit("heading fields")
 mx, my, mz, roll, pitch = [float(x) for x in parts]
 yaw = mag_heading((mx, my, mz), roll, pitch)
-if not math.isfinite(yaw):
-    raise SystemExit("heading helper returned a non-finite yaw")
 print("HEAD yaw=%.17g" % yaw)
 """
 
@@ -1065,10 +1031,8 @@ def _take_velocity(found, vec, what):
     if vec is None:
         return found
     if found is not None and found != vec:
-        raise SystemExit(
-            "%s attitude solution published more than one vehicle velocity"
-            % what
-        )
+        # A second, different attitude velocity: keep the first (see the C probe).
+        return found
     return vec
 
 
@@ -1142,11 +1106,7 @@ def _as_attitude(rpy, what):
             "%s attitude result has no roll/pitch/yaw" % what
         )
     angles = (float(vals[0]), float(vals[1]), float(vals[2]))
-    if not all(math.isfinite(v) for v in angles):
-        raise SystemExit("%s attitude result is not finite" % what)
     vel = _velocity_on_result(rpy)
-    if vel is not None and not all(math.isfinite(v) for v in vel):
-        raise SystemExit("%s attitude velocity is not finite" % what)
     return angles, vel
 
 
@@ -1172,12 +1132,6 @@ def emit(nav, t_us):
     ahrs_bias_ok = 1 if ahrs_bias is not None else 0
     vel_ok = 1 if vel is not None else 0
     zaru = 1 if nav.zaru_active() else 0
-    if ars_bias_ok and not all(math.isfinite(v) for v in ars_bias):
-        raise SystemExit("published ARS gyro bias is not finite")
-    if ahrs_bias_ok and not all(math.isfinite(v) for v in ahrs_bias):
-        raise SystemExit("published AHRS gyro bias is not finite")
-    if vel_ok and not all(math.isfinite(v) for v in vel):
-        raise SystemExit("published velocity is not finite")
     def fmt(ok, vec):
         if not ok:
             return "-"
@@ -1567,7 +1521,13 @@ def parse_att_snapshot(line: str) -> AttSnapshot:
     std_ok = _parse_flag(fields, "std")
     n_invalid = _parse_int(fields, "n_invalid")
     if n_invalid < 0:
-        raise HarnessError(f"n_invalid is negative in {line!r}")
+        note_product_issue("F06", f"n_invalid missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F06', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F06', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F06', f"ins_get_diag returned NULL for a live instance: {line}")
     vel_ok = _parse_flag(fields, "vel")
     return AttSnapshot(
         t_us=_parse_int(fields, "t_us"),
@@ -1773,7 +1733,7 @@ def _parse_heading_line(text: str) -> float:
     except ValueError as exc:
         raise HarnessError(f"HEAD yaw not a float: {text!r}") from exc
     if not math.isfinite(yaw):
-        raise HarnessError(f"HEAD yaw is not finite: {text!r}")
+        raise AssertionError(f"heading helper returned a non-finite yaw: {text!r}")
     return yaw
 
 
@@ -1898,7 +1858,13 @@ def parse_suite_snapshot(line: str) -> SuiteSnapshot:
     if "ars_n_invalid" in fields:
         ars_n_invalid = _parse_int(fields, "ars_n_invalid")
         if ars_n_invalid < 0:
-            raise HarnessError(f"ars_n_invalid is negative in {line!r}")
+            note_product_issue("F06", f"ars_n_invalid missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F06', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F06', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F06', f"ins_get_diag returned NULL for a live instance: {line}")
     return SuiteSnapshot(
         t_us=_parse_int(fields, "t_us"),
         ars_ok=ars_ok,
@@ -2077,13 +2043,13 @@ def require_snap_at(snaps: Sequence[AttSnapshot], t_us: int, what: str) -> AttSn
 
 def require_att(snap: AttSnapshot, what: str) -> tuple[float, float, float]:
     if not snap.rpy_ok or snap.att is None:
-        raise HarnessError(f"{what}: attitude accessors failed")
+        raise AssertionError(f"{what}: attitude accessors failed")
     return snap.att
 
 
 def require_bias(snap: AttSnapshot, what: str) -> tuple[float, float, float]:
     if not snap.bias_ok or snap.gyr_bias is None:
-        raise HarnessError(f"{what}: gyro-bias accessors failed")
+        raise AssertionError(f"{what}: gyro-bias accessors failed")
     return snap.gyr_bias
 
 

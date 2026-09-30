@@ -3188,3 +3188,26 @@ def test_imu_csv_accelerometer_frd_yz_consumed():
         f"{c0.returncode} {cx.returncode} {cy.returncode}"
     )
 
+
+def test_replay_and_runner_outputs_are_well_formed():
+    """Contract: every runner row names a mode, and a runner cell or a
+    ``--dump-solution`` field is either a number or (runner) empty for an
+    unpublished value -- on every runner file and dump parsed in this session
+    and on a pad of its own. Other tests read such a row or cell as
+    unpublished; this test fails when one was seen.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h, _origin = _site()
+    mag, _ned = _runner_mag(lat, lon)
+    p = tropospheric_isa_pressure_pa(150.0)
+    with workspace() as ws:
+        yaml_path, sol_path = write_runner_mapping(
+            ws, relpath="well-formed", lat_deg=lat, lon_deg=lon, h_m=h,
+            duration_s=HAPPY_DURATION_S, mag_frd=mag, pressure_pa=p,
+        )
+        _r, epochs = run_mapped_runner(yaml_path, sol_path)
+        dest = write_replay_dataset(ws, lat_deg=lat, lon_deg=lon, h_m=h, relpath="well-formed-ds")
+        series = python_replay_series(dest, ws.resolve("sol-well-formed.csv"))
+    assert epochs and series.points, "runner or replay produced nothing to read"
+    require_no_product_issues("F10", "runner / replay outputs (F10)")

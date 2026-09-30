@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Sequence
 
 from _harness import (
+    nonfinite_fields,
+    note_product_issue,
     runtime_uuid_int,
     DEFAULT_REPLAY_TIMEOUT,
     HarnessError,
@@ -95,14 +97,16 @@ static void print_snap(const ins_t *f, long long t_us)
     int bacc_ok = ins_get_bias_acc(f, bacc) ? 1 : 0;
     int bgyr_ok = ins_get_bias_gyr(f, bgyr) ? 1 : 0;
     int ned_ok = ins_get_position_local(f, ned) ? 1 : 0;
+    static const ins_diag_t no_diag;
     const ins_diag_t *d = ins_get_diag(f);
+    const int diag_ok = d != NULL ? 1 : 0;
     if (d == NULL) {
-        fprintf(stderr, "diag query failed\n");
-        exit(2);
+        d = &no_diag; /* printed as diag=0; the parser records it */
     }
     printf("SNAP t_us=%lld ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d",
            t_us, ins_is_ready(f) ? 1 : 0, pos, vel_ok, rpy_ok, ned_ok, bacc_ok,
            bgyr_ok);
+    printf(" diag=%d", diag_ok);
     if (pos) {
         printf(" ecef=%.17g,%.17g,%.17g", ecef[0], ecef[1], ecef[2]);
     } else {
@@ -288,6 +292,21 @@ def parse_triple(token):
         raise SystemExit("non-finite triple " + token)
     return tuple(vals)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -307,22 +326,21 @@ def emit(nav, t_us):
     rpy_std = None
     if sd is not None:
         rpy_std = tuple(sd["rpy"])
-        if not all(math.isfinite(v) for v in rpy_std):
-            raise SystemExit("non-finite attitude uncertainty")
-    if rpy_ok and rpy_std is None:
-        raise SystemExit("attitude published without uncertainty")
+    # Attitude published without its 1-sigma (Contract rpy / stddev) is
+    # printed as attnostd=1 and recorded by the parser; it must not abort
+    # the run.
+    attnostd = 1 if (rpy_ok and rpy_std is None) else 0
     def fmt(ok, vec):
         if not ok:
             return "-"
         return "%.17g,%.17g,%.17g" % vec
-    if "n_gnss_no_anchor" not in diag:
-        raise SystemExit("diag missing n_gnss_no_anchor")
-    n_no = int(diag["n_gnss_no_anchor"])
-    n_used = int(diag["n_gnss_used"])
+    n_no = _cnt(diag, "n_gnss_no_anchor")
+    n_used = _cnt(diag, "n_gnss_used")
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
         % (t_us, ready, pos, vel_ok, rpy_ok, ned_ok, bacc_ok, bgyr_ok)
     )
+    line += " attnostd=%d" % attnostd
     line += " ecef=" + (fmt(pos, tuple(ecef)) if pos else "-")
     line += " nedpos=" + (fmt(ned_ok, tuple(ned)) if ned_ok else "-")
     line += " velned=" + (fmt(vel_ok, tuple(vel)) if vel_ok else "-")
@@ -738,9 +756,15 @@ def parse_delay_snapshot(line: str) -> DelaySnapshot:
     n_no = _parse_int(fields, "n_no_anchor")
     n_used = _parse_int(fields, "n_used")
     if n_no < 0:
-        raise HarnessError(f"n_no_anchor is negative in {line!r}")
+        note_product_issue("F04", f"n_no_anchor missing or negative: {line}")
     if n_used < 0:
-        raise HarnessError(f"n_used is negative in {line!r}")
+        note_product_issue("F04", f"n_used missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F04', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F04', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F04', f"ins_get_diag returned NULL for a live instance: {line}")
     return DelaySnapshot(
         t_us=t_us,
         ready=ready,
@@ -905,20 +929,20 @@ def py_delay_run(scen: DelayScenario) -> DelayRun:
 
 def require_initialized_solution(snap: DelaySnapshot, what: str) -> None:
     if not (snap.pos_ok and snap.ned_ok and snap.rpy_ok):
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: accessors not successful pos={snap.pos_ok} "
             f"ned={snap.ned_ok} rpy={snap.rpy_ok} at t={snap.t_us}"
         )
     if snap.ecef is None or snap.ned is None or snap.rpy is None:
-        raise HarnessError(f"{what}: successful accessors returned no vectors")
+        raise AssertionError(f"{what}: successful accessors returned no vectors")
 
 
 def require_ready_delay(snap: DelaySnapshot, what: str) -> None:
     if not snap.ready:
-        raise HarnessError(f"{what}: expected ready at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected ready at t={snap.t_us}")
     require_initialized_solution(snap, what)
     if not snap.vel_ok or snap.vel_ned is None:
-        raise HarnessError(f"{what}: velocity not published at t={snap.t_us}")
+        raise AssertionError(f"{what}: velocity not published at t={snap.t_us}")
 
 
 def apply_delay_after(
@@ -1813,13 +1837,13 @@ def parse_forced_lag_ms(text: str) -> float:
     """
     found = _ESTIMATE_LINE_RE.findall(text)
     if not found:
-        raise HarnessError(
+        raise AssertionError(
             "forced estimator printed no 'gnss delay estimate: <N> ms' line; "
             "stdout was:\n" + text[-2000:]
         )
     value = float(found[-1])
     if not math.isfinite(value):
-        raise HarnessError(f"forced estimator lag is not finite: {found[-1]!r}")
+        raise AssertionError(f"forced estimator lag is not finite: {found[-1]!r}")
     return value
 
 

@@ -12,7 +12,7 @@ import re
 import secrets
 from pathlib import Path
 
-from F01_helpers import require_ok, require_refusal, run_product, unique_name
+from F01_helpers import place_vorbis, require_ok, require_refusal, run_product, unique_name
 from F02_helpers import (
     BOOK_SYNC,
     VORBIS_SETUP,
@@ -35,8 +35,8 @@ from F02_helpers import (
     require_no_usable_compress_dest,
     require_no_usable_expand_dest,
 )
-from F03_helpers import replace_opus_tags
-from _harness import HarnessError, RunResult, Workspace
+from F03_helpers import place_opus_classified, replace_opus_tags
+from _harness import HarnessError, RunResult, Workspace, stored_copy
 
 # Whole-word verb covariates the caller typed, plus the PRD names for those
 # verbs. Not a product-output spelling requirement.
@@ -718,6 +718,48 @@ def generation_field(
     return tuple(candidates)
 
 
+def generation_candidates_across(
+    ws: Workspace, src_a: str, bytes_a: bytes, bytes_b: bytes
+) -> tuple[tuple[int, int, int, str], ...]:
+    """Generation-identifier candidates that stay constant across archives.
+
+    The generation identifier names the product generation: it does not
+    vary with the input, the codec, or the effort. Starting from
+    generation_field over two same-codec archives, keep only candidates
+    whose value is identical in archives of *src_a* at effort 1 and 9 and
+    of an input of the other codec at effort 1 and 9. Codec, effort, size,
+    and checksum fields then drop out. Raises when nothing is left.
+    """
+    first = complete_packets(bytes(ws.read_bytes(src_a)))[0]
+    if is_opus_head(first):
+        other = place_vorbis(ws, "a")
+    else:
+        other = place_opus_classified(ws, "hybrid")
+    archives = [bytes(bytes_a), bytes(bytes_b)]
+    for src, effort in ((src_a, "-9"), (other, "-1"), (other, "-9")):
+        dest = unique_name("gen-across")
+        result = run_product(ws, [effort, "e", src, dest])
+        require_ok(result)
+        archives.append(ws.read_bytes(dest))
+    kept = []
+    for offset, width, value, endian in generation_field(archives[0], archives[1]):
+        if all(
+            len(a) >= offset + width
+            and int.from_bytes(a[offset : offset + width], endian) == value
+            for a in archives
+        ):
+            kept.append((offset, width, value, endian))
+    print(
+        f"[F05] generation candidates across codecs/efforts={len(kept)}",
+        flush=True,
+    )
+    if not kept:
+        raise HarnessError(
+            "no archive field is constant across inputs, codecs, and efforts"
+        )
+    return tuple(kept)
+
+
 def with_generation_value(
     archive: bytes, field: tuple[int, int, int, str], value: int
 ) -> bytes:
@@ -773,8 +815,8 @@ def live_compress(ws: Workspace, src: str) -> str:
         raise HarnessError(f"compress did not write a regular file at {dest}")
     src_bytes = ws.read_bytes(src)
     dest_bytes = ws.read_bytes(dest)
-    assert dest_bytes != src_bytes, (
-        "compress destination bytes equal the source (copy stub)"
+    assert not stored_copy(dest_bytes, src_bytes), (
+        "compress destination bytes carry the source verbatim (copy stub)"
     )
     print(
         f"[F05] live compress src={src!r} dest={dest!r} "

@@ -3223,3 +3223,20 @@ def test_suite_rebootstrap_after_uninitialized():
     assert skip_run.last().rpy_ok, (
         "skipped magnetometer fusion failed attitude accessors"
     )
+
+
+def test_published_attitude_snapshots_are_well_formed():
+    """Published ARS / AHRS attitude, 1-sigma, gyro bias and velocity values
+    are finite and the invalid-input counters are non-negative -- on every
+    attitude and suite snapshot parsed in this session and on a suite run of
+    its own. A violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h = _suite_site()
+    mag = body_mag_for_yaw(0.0, 0.0, runtime_att_yaw_rad(), (20.0, 0.0, 40.0))
+    epochs = suite_imu_stream(duration_s=2.0, acc=SPECIFIC_FORCE_LEVEL, mag=mag)
+    scen = SuiteScenario(lat_deg=lat, lon_deg=lon, h_m=h, epochs=epochs)
+    for run in (c_suite_run(scen), py_suite_run(scen)):
+        assert run.init_ok and run.snaps, "suite run produced no snapshots"
+    require_no_product_issues("F06", "attitude snapshots (F06)")

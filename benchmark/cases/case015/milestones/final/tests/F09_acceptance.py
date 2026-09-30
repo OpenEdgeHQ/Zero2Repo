@@ -19,9 +19,9 @@ from F01_helpers import (
 )
 from F02_helpers import parse_ogg_pages, place_vorbis_without_ogg_suffix
 from F03_helpers import (
-    dedicated_codec_mode_field,
     dump_stdout,
     place_opus_classified,
+    require_codec_mode_field,
     strip_paths_and_sizes,
 )
 from F04_helpers import (
@@ -33,7 +33,7 @@ from F04_helpers import (
     vorbis_with_runtime_comment,
 )
 from F05_helpers import (
-    generation_field,
+    generation_candidates_across,
     place_bytes_without_codec_suffix,
     with_generation_value,
 )
@@ -58,63 +58,7 @@ from _harness import workspace
 
 def test_dump_codec_mode_field_two_opus_share_vorbis_differs():
     with workspace() as ws:
-        src_silk = place_opus_classified(ws, "silk")
-        src_celt = place_opus_classified(ws, "celt")
-        _prove_family0(ws.read_bytes(src_silk), what="silk dump host")
-        _prove_family0(ws.read_bytes(src_celt), what="celt dump host")
-        src_v = vorbis_with_runtime_comment(ws)
-        arc_silk = unique_name("opus-silk")
-        arc_celt = unique_name("opus-celt")
-        arc_v = unique_name("vorbis-arc")
-        lossless_compress(ws, src_silk, arc_silk, "-1")
-        lossless_compress(ws, src_celt, arc_celt, "-1")
-        lossless_compress(ws, src_v, arc_v, "-1")
-        text_silk = dump_stdout(ws, arc_silk)
-        text_celt = dump_stdout(ws, arc_celt)
-        text_v = dump_stdout(ws, arc_v)
-        paths = [
-            src_silk,
-            src_celt,
-            src_v,
-            arc_silk,
-            arc_celt,
-            arc_v,
-            str(ws.path),
-        ]
-        sizes = (
-            len(ws.read_bytes(src_silk)),
-            len(ws.read_bytes(src_celt)),
-            len(ws.read_bytes(src_v)),
-            len(ws.read_bytes(arc_silk)),
-            len(ws.read_bytes(arc_celt)),
-            len(ws.read_bytes(arc_v)),
-        )
-        left_silk = strip_paths_and_sizes(text_silk, paths, sizes)
-        left_celt = strip_paths_and_sizes(text_celt, paths, sizes)
-        left_v = strip_paths_and_sizes(text_v, paths, sizes)
-        payloads = dedicated_codec_mode_field(
-            text_silk, text_celt, text_v, paths, sizes
-        )
-        print(
-            f"[F09] A leftover lens silk={len(left_silk)} celt={len(left_celt)} "
-            f"vorbis={len(left_v)} shared={sorted(payloads)!r}",
-            flush=True,
-        )
-        assert payloads, (
-            "On dump standard output, a dedicated codec-mode field — not "
-            "the archive path, not a byte size, not a leftover that varies "
-            "with the file — answers whether the archive is Opus or Vorbis: "
-            "two successful Opus archives share one payload of that field "
-            "and a successful Vorbis archive of a different input has a "
-            "distinguishable payload of the same field, independent of path "
-            "and size. The payload may be a number or a hex value"
-        )
-        assert left_silk != left_v and left_celt != left_v, (
-            "On dump standard output, a successful Vorbis archive of a "
-            "different input has no distinguishable dedicated codec-mode "
-            "field payload from dump of the two successful Opus archives "
-            "after path and size strip"
-        )
+        require_codec_mode_field(ws, "-1", what="F09 A effort 1")
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +69,7 @@ def test_dump_codec_mode_field_two_opus_share_vorbis_differs():
 def test_dump_stored_stage_field_vorbis_effort1_vs_effort3():
     with workspace() as ws:
         src_x = vorbis_with_runtime_comment(ws)
-        y_bytes = _vorbis_comment_variant(_read_fixture(_SCALE_FILES[1]))
+        y_bytes = _vorbis_comment_variant(_read_fixture(_SCALE_FILES[2]))
         src_y = unique_name("vorbis-y") + ".ogg"
         ws.write(src_y, y_bytes)
         assert ws.read_bytes(src_x) != y_bytes, (
@@ -504,7 +448,11 @@ def test_dump_of_non_archive_and_foreign_generation_is_refused():
         require_refusal(of_random)
         bytes_a = archive_bytes(ws, arc_a)
         bytes_b = archive_bytes(ws, arc_b)
-        candidates = generation_field(bytes_a, bytes_b)
+        candidates = generation_candidates_across(ws, src_a, bytes_a, bytes_b)
+        non_dest = unique_name("gen-nonarc-out")
+        non_expand = run_product(ws, ["d", ogg, non_dest])
+        require_refusal(non_expand)
+        non_left = strip_paths_and_sizes(non_expand.stderr_text, (ogg, non_dest), ())
         matched = None
         older_run = None
         newer_run = None
@@ -522,6 +470,15 @@ def test_dump_of_non_archive_and_foreign_generation_is_refused():
             newer_path = unique_name("gen-newer")
             ws.write(older_path, older_bytes)
             ws.write(newer_path, newer_bytes)
+            generation_refused = True
+            for path in (older_path, newer_path):
+                out = unique_name("gen-exp-out")
+                expanded = run_product(ws, ["d", path, out])
+                left = strip_paths_and_sizes(expanded.stderr_text, (path, out), ())
+                if expanded.returncode != 1 or left.split() == non_left.split():
+                    generation_refused = False
+            if not generation_refused:
+                continue
             older_try = run_product(ws, ["dump", older_path])
             newer_try = run_product(ws, ["dump", newer_path])
             print(
@@ -537,8 +494,10 @@ def test_dump_of_non_archive_and_foreign_generation_is_refused():
             older_run, newer_run = older_try, newer_try
             break
         assert matched is not None, (
-            "no shared-prefix integer, when rewritten to a strictly smaller "
-            "and a strictly larger value, both refused dump"
+            "no generation-identifier candidate (constant across inputs, "
+            "codecs, and efforts; expand of its older and newer rewrites "
+            "refused distinguishably from a non-archive), when rewritten to "
+            "a strictly smaller and a strictly larger value, was refused by dump"
         )
         require_refusal(older_run)
         require_refusal(newer_run)

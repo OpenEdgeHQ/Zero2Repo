@@ -349,7 +349,7 @@ def parse_floats(result: RunResult, n: int) -> list[float]:
         except ValueError as exc:
             raise HarnessError(f"not a float: {token!r} in {text!r}") from exc
         if not math.isfinite(value):
-            raise HarnessError(f"non-finite observation {value!r} in {text!r}")
+            raise AssertionError(f"non-finite observation {value!r} in {text!r}")
         values.append(value)
     return values
 

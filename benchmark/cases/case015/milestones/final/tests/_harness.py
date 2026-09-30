@@ -640,6 +640,176 @@ def files_identical(left: str | Path, right: str | Path) -> bool:
     return read_bytes(left) == read_bytes(right)
 
 
+def stored_copy(dest: bytes, src: bytes) -> bool:
+    """Return whether *dest* carries every byte of *src* verbatim, in order.
+
+    Equality is the degenerate case. A compress destination that wraps
+    the whole input (header, trailer, or both) is a stored copy, not a
+    recompression (PRD capability discrimination). Type errors raise.
+    """
+    for name, value in (("dest", dest), ("src", src)):
+        if not isinstance(value, (bytes, bytearray)):
+            raise HarnessError(f"stored_copy {name} expected bytes, got {type(value)!r}")
+    if not src:
+        raise HarnessError("stored_copy source is empty")
+    return bytes(src) in bytes(dest)
+
+
+# ---------------------------------------------------------------------------
+# Host side state (the archive alone must carry what expand needs)
+# ---------------------------------------------------------------------------
+
+_WRITABLE_ROOTS: tuple[str, ...] | None = None
+_PRUNE_TOPS = ("/proc", "/sys", "/dev")
+_EXTRA_ROOTS = ("/dev/shm", "/dev/mqueue")
+_SYSVIPC = (("shm", 7), ("sem", 4), ("msg", 7))
+
+
+def _writable_roots() -> tuple[str, ...]:
+    """Directories this user can create entries in. Computed once per session."""
+    global _WRITABLE_ROOTS
+    if _WRITABLE_ROOTS is not None:
+        return _WRITABLE_ROOTS
+    found: list[str] = []
+    for top, dirs, _files in os.walk("/", topdown=True, followlinks=False):
+        if top in _PRUNE_TOPS:
+            dirs[:] = []
+            continue
+        if os.access(top, os.W_OK | os.X_OK):
+            found.append(top)
+            dirs[:] = []
+    for extra in _EXTRA_ROOTS:
+        if os.path.isdir(extra) and os.access(extra, os.W_OK | os.X_OK):
+            found.append(extra)
+    _WRITABLE_ROOTS = tuple(found)
+    print(f"[harness] writable roots={list(_WRITABLE_ROOTS)!r}", flush=True)
+    return _WRITABLE_ROOTS
+
+
+def _own_pids() -> frozenset[int]:
+    uid = os.getuid()
+    pids: set[int] = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/status", encoding="ascii", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("Uid:"):
+                        if int(line.split()[1]) == uid:
+                            pids.add(int(name))
+                        break
+        except (OSError, ValueError, IndexError):
+            continue
+    return frozenset(pids)
+
+
+def _own_ipc() -> frozenset[tuple[str, int]]:
+    uid = os.getuid()
+    objs: set[tuple[str, int]] = set()
+    for kind, uid_col in _SYSVIPC:
+        try:
+            with open(f"/proc/sysvipc/{kind}", encoding="ascii", errors="replace") as fh:
+                rows = fh.read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            cols = row.split()
+            try:
+                if int(cols[uid_col]) == uid:
+                    objs.add((kind, int(cols[1])))
+            except (ValueError, IndexError):
+                continue
+    return frozenset(objs)
+
+
+@dataclass(frozen=True)
+class SideState:
+    """Snapshot of host state a product process could leave behind."""
+
+    entries: Mapping[str, tuple[int, int, int, int, int]]
+    pids: frozenset[int]
+    ipc: frozenset[tuple[str, int]]
+
+
+def side_state_snapshot() -> SideState:
+    """Record entries under every writable root, own processes, own SysV IPC."""
+    entries: dict[str, tuple[int, int, int, int, int]] = {}
+    for root in _writable_roots():
+        for top, dirs, files in os.walk(root, followlinks=False):
+            for name in (*dirs, *files):
+                path = os.path.join(top, name)
+                try:
+                    st = os.lstat(path)
+                except OSError:
+                    continue
+                entries[path] = (
+                    st.st_mode, st.st_ino, st.st_size, st.st_mtime_ns, st.st_uid
+                )
+    return SideState(entries=entries, pids=_own_pids(), ipc=_own_ipc())
+
+
+def purge_side_state(before: SideState, keep: Sequence[str | Path]) -> list[str]:
+    """Remove host state created since *before*, except the *keep* paths.
+
+    Kills this user's processes started since the snapshot, removes SysV
+    IPC objects it created, and deletes every new file, directory, socket,
+    or link under the writable roots. Returns this user's pre-existing
+    regular files (outside *keep*) whose inode, size, or mtime changed:
+    a product that parks state in an existing file is reported, not
+    silently accepted. Nothing here is a public entry.
+    """
+    import ctypes
+    import signal
+
+    keep_set = {os.path.realpath(str(p)) for p in keep}
+    for pid in sorted(_own_pids() - before.pids - {os.getpid(), os.getppid()}):
+        try:
+            os.kill(pid, signal.SIGKILL)
+            print(f"[harness] killed stray process pid={pid}", flush=True)
+        except OSError:
+            pass
+    new_ipc = _own_ipc() - before.ipc
+    if new_ipc:
+        libc = ctypes.CDLL(None, use_errno=True)
+        for kind, ident in sorted(new_ipc):
+            if kind == "shm":
+                libc.shmctl(ident, 0, None)
+            elif kind == "sem":
+                libc.semctl(ident, 0, 0)
+            else:
+                libc.msgctl(ident, 0, None)
+            print(f"[harness] removed SysV {kind} id={ident}", flush=True)
+    after = side_state_snapshot()
+    removed = 0
+    for path in sorted(set(after.entries) - set(before.entries), key=len):
+        if os.path.realpath(path) in keep_set or not os.path.lexists(path):
+            continue
+        try:
+            if stat.S_ISDIR(after.entries[path][0]) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+            removed += 1
+        except OSError as exc:
+            raise HarnessError(f"cannot remove side state {path}: {exc}") from exc
+    uid = os.getuid()
+    changed: list[str] = []
+    for path, old in before.entries.items():
+        new = after.entries.get(path)
+        if new is None or not stat.S_ISREG(old[0]) or old[4] != uid:
+            continue
+        if os.path.realpath(path) in keep_set:
+            continue
+        if new[1:4] != old[1:4]:
+            changed.append(path)
+    print(
+        f"[harness] side state purge removed={removed} changed={len(changed)}",
+        flush=True,
+    )
+    return changed
+
+
 def same_existing_file(left: str | Path, right: str | Path) -> bool:
     """Return whether two paths name the same existing regular file.
 
@@ -806,6 +976,7 @@ __all__ = (
     "SIMD_ENV",
     "HarnessError",
     "RunResult",
+    "SideState",
     "Workspace",
     "decode_utf8",
     "file_size",
@@ -815,6 +986,7 @@ __all__ = (
     "isolated_environ",
     "path_is_file",
     "product_bin",
+    "purge_side_state",
     "read_bytes",
     "read_bytes_if_present",
     "read_file",
@@ -822,6 +994,8 @@ __all__ = (
     "repo_root",
     "run_command",
     "same_existing_file",
+    "side_state_snapshot",
+    "stored_copy",
     "token",
     "workspace",
     "write_file",

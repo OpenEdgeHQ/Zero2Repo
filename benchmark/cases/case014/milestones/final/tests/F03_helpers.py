@@ -14,7 +14,15 @@ import math
 from dataclasses import dataclass, field, replace
 from typing import Sequence
 
-from _harness import HarnessError, invoke, product_identity, run_python, runtime_uuid_int
+from _harness import (
+    HarnessError,
+    invoke,
+    product_identity,
+    run_python,
+    runtime_uuid_int,
+    nonfinite_fields,
+    note_product_issue,
+)
 from F01_helpers import (
     angle_diff_deg,
     hamilton_zyx_quaternion,
@@ -74,14 +82,16 @@ static void print_snap(const ins_t *f, long long t_us)
     int bacc_ok = ins_get_bias_acc(f, bacc) ? 1 : 0;
     int bgyr_ok = ins_get_bias_gyr(f, bgyr) ? 1 : 0;
     int ned_ok = ins_get_position_local(f, ned) ? 1 : 0;
+    static const ins_diag_t no_diag;
     const ins_diag_t *d = ins_get_diag(f);
+    const int diag_ok = d != NULL ? 1 : 0;
     if (d == NULL) {
-        fprintf(stderr, "diag query failed\n");
-        exit(2);
+        d = &no_diag; /* printed as diag=0; the parser records it */
     }
     printf("SNAP t_us=%lld ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d",
            t_us, ins_is_ready(f) ? 1 : 0, pos, vel_ok, rpy_ok, ned_ok, bacc_ok,
            bgyr_ok);
+    printf(" diag=%d", diag_ok);
     if (pos) {
         printf(" ecef=%.17g,%.17g,%.17g", ecef[0], ecef[1], ecef[2]);
     } else {
@@ -309,6 +319,21 @@ def parse_triple(token):
         raise SystemExit("non-finite triple " + token)
     return tuple(vals)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -328,23 +353,24 @@ def emit(nav, t_us):
     rpy_std = None
     if sd is not None:
         rpy_std = tuple(sd["rpy"])
-        if not all(math.isfinite(v) for v in rpy_std):
-            raise SystemExit("non-finite attitude uncertainty")
-    if rpy_ok and rpy_std is None:
-        raise SystemExit("attitude published without uncertainty")
+    # Attitude published without its 1-sigma (Contract rpy / stddev) is
+    # printed as attnostd=1 and recorded by the parser; it must not abort
+    # the run.
+    attnostd = 1 if (rpy_ok and rpy_std is None) else 0
     def fmt(ok, vec):
         if not ok:
             return "-"
         return "%.17g,%.17g,%.17g" % vec
-    n_invalid = int(diag["n_invalid_input"])
-    n_dw = int(diag["n_downweighted"])
-    n_ff = int(diag["n_fuse_fail"])
-    n_az = int(diag["n_auto_zupt"])
+    n_invalid = _cnt(diag, "n_invalid_input")
+    n_dw = _cnt(diag, "n_downweighted")
+    n_ff = _cnt(diag, "n_fuse_fail")
+    n_az = _cnt(diag, "n_auto_zupt")
     stationary = 1 if nav.auto_zupt_active() else 0
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
         % (t_us, ready, pos, vel_ok, rpy_ok, ned_ok, bacc_ok, bgyr_ok)
     )
+    line += " attnostd=%d" % attnostd
     line += " ecef=" + (fmt(pos, tuple(ecef)) if pos else "-")
     line += " nedpos=" + (fmt(ned_ok, tuple(ned)) if ned_ok else "-")
     line += " velned=" + (fmt(vel_ok, tuple(vel)) if vel_ok else "-")
@@ -854,7 +880,13 @@ def parse_aiding_snapshot(line: str) -> AidingSnapshot:
     n_az = _parse_int(fields, "n_auto_zupt")
     stationary = _parse_flag(fields, "stationary")
     if n_invalid < 0 or n_dw < 0 or n_ff < 0 or n_az < 0:
-        raise HarnessError(f"diagnostic counters must be non-negative in {line!r}")
+        note_product_issue("F03", f"diagnostic counters missing or negative: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F03', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F03', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F03', f"ins_get_diag returned NULL for a live instance: {line}")
     return AidingSnapshot(
         t_us=t_us,
         ready=ready,
@@ -938,14 +970,14 @@ def py_aiding_run(scen: AidingScenario) -> AidingRun:
 
 def require_ready_solution(snap: AidingSnapshot, what: str) -> None:
     if not snap.ready:
-        raise HarnessError(f"{what}: expected ready at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected ready at t={snap.t_us}")
     if not (snap.pos_ok and snap.vel_ok and snap.rpy_ok and snap.ned_ok):
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: accessors not all successful pos={snap.pos_ok} "
             f"vel={snap.vel_ok} rpy={snap.rpy_ok} ned={snap.ned_ok}"
         )
     if snap.ecef is None or snap.ned is None or snap.vel_ned is None or snap.rpy is None:
-        raise HarnessError(f"{what}: successful accessors returned no vectors")
+        raise AssertionError(f"{what}: successful accessors returned no vectors")
 
 
 def aiding_site(

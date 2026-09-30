@@ -23,7 +23,7 @@ from F01_helpers import (
     run_product,
     unique_name,
 )
-from _harness import HarnessError, RunResult, Workspace, files_identical
+from _harness import HarnessError, RunResult, Workspace, files_identical, stored_copy
 
 OGG_CAPTURE = b"OggS"
 OGG_HDRMIN = 27
@@ -2158,8 +2158,8 @@ def roundtrip(
         raise HarnessError(f"compress did not write destination {dest}")
     src_bytes = ws.read_bytes(src)
     dest_bytes = ws.read_bytes(dest)
-    assert dest_bytes != src_bytes, (
-        "compress destination bytes equal the source (copy stub)"
+    assert not stored_copy(dest_bytes, src_bytes), (
+        "compress destination bytes carry the source verbatim (copy stub)"
     )
     dec_args: list[str] = []
     if no_mmap:

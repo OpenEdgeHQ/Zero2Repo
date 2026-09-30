@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Sequence
 
 from _harness import (
+    note_product_issue,
     runtime_uuid_int,
     DEFAULT_REPLAY_TIMEOUT,
     HarnessError,
@@ -176,14 +177,16 @@ static void print_ins_snap(const ins_t *f, long long t_us)
     int ned_ok = ins_get_position_local(f, ned) ? 1 : 0;
     int bacc_ok = ins_get_bias_acc(f, bacc) ? 1 : 0;
     int bgyr_ok = ins_get_bias_gyr(f, bgyr) ? 1 : 0;
+    static const ins_diag_t no_diag;
     const ins_diag_t *d = ins_get_diag(f);
+    const int diag_ok = d != NULL ? 1 : 0;
     if (d == NULL) {
-        fprintf(stderr, "diag query failed\n");
-        exit(2);
+        d = &no_diag; /* printed as diag=0; the parser records it */
     }
     printf("SNAP t_us=%lld ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d",
            t_us, ins_is_ready(f) ? 1 : 0, pos, vel_ok, rpy_ok, ned_ok, bacc_ok,
            bgyr_ok);
+    printf(" diag=%d", diag_ok);
     if (pos) {
         printf(" ecef=%.17g,%.17g,%.17g", ecef[0], ecef[1], ecef[2]);
     } else {
@@ -725,6 +728,21 @@ from __PKG__ import Config, Ins
 def tok_float(s):
     return float(s)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -744,12 +762,12 @@ def emit(nav, t_us):
         if not ok or vec is None:
             return "-"
         return "%.17g,%.17g,%.17g" % tuple(vec)
-    n_invalid = int(diag["n_invalid_input"])
-    n_dw = int(diag["n_downweighted"])
-    n_gate = int(diag["n_gnss_rejected_noise"])
-    n_fusion = int(diag["n_fuse_fail"])
-    n_time = int(diag["n_time_backward"])
-    n_auto = int(diag["n_auto_zupt"])
+    n_invalid = _cnt(diag, "n_invalid_input")
+    n_dw = _cnt(diag, "n_downweighted")
+    n_gate = _cnt(diag, "n_gnss_rejected_noise")
+    n_fusion = _cnt(diag, "n_fuse_fail")
+    n_time = _cnt(diag, "n_time_backward")
+    n_auto = _cnt(diag, "n_auto_zupt")
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
         % (t_us, ready, pos, vel_ok, rpy_ok, ned_ok, bacc_ok, bgyr_ok)
@@ -904,6 +922,21 @@ from __PKG__ import Config, Navigator
 def tok_float(s):
     return float(s)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -911,12 +944,12 @@ def emit(nav, t_us):
     diag = nav.diag()
     pos = 1 if ecef is not None else 0
     rpy_ok = 1 if rpy is not None else 0
-    n_invalid = int(diag["n_invalid_input"])
-    n_dw = int(diag["n_downweighted"])
-    n_gate = int(diag["n_gnss_rejected_noise"])
-    n_fusion = int(diag["n_fuse_fail"])
-    n_time = int(diag["n_time_backward"])
-    n_auto = int(diag["n_auto_zupt"])
+    n_invalid = _cnt(diag, "n_invalid_input")
+    n_dw = _cnt(diag, "n_downweighted")
+    n_gate = _cnt(diag, "n_gnss_rejected_noise")
+    n_fusion = _cnt(diag, "n_fuse_fail")
+    n_time = _cnt(diag, "n_time_backward")
+    n_auto = _cnt(diag, "n_auto_zupt")
     h = nav.height()
     h_ok = 1 if h is not None else 0
     line = "SNAP t_us=%d ready=%d pos=%d rpy=%d" % (t_us, ready, pos, rpy_ok)
@@ -1372,6 +1405,11 @@ def parse_hygiene_snapshot(line: str) -> HygieneSnapshot:
     ned_ok = _parse_flag(fields, "ned") if "ned" in fields else False
     bacc_ok = _parse_flag(fields, "bacc") if "bacc" in fields else False
     bgyr_ok = _parse_flag(fields, "bgyr") if "bgyr" in fields else False
+    if fields.get("diag") == "0":
+        note_product_issue("F09", f"ins_get_diag returned NULL for a live instance: {line}")
+    for _key in ("n_invalid", "n_downweighted", "n_gate", "n_fusion", "n_time", "n_auto_zupt"):
+        if _parse_int(fields, _key) < 0:
+            note_product_issue("F09", f"diagnostic counter {_key}={fields[_key]} missing or negative: {line}")
     return HygieneSnapshot(
         t_us=_parse_int(fields, "t_us"),
         ready=_parse_flag(fields, "ready"),
@@ -1938,12 +1976,12 @@ def last_at_or_before(run: HygieneRun, t_us: int) -> HygieneSnapshot:
 
 def require_ready_hygiene(snap: HygieneSnapshot, origin: Sequence[float], what: str) -> tuple[float, float, float]:
     if not snap.ready:
-        raise HarnessError(f"{what}: expected ready at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected ready at t={snap.t_us}")
     if not snap.pos_ok or snap.ecef is None:
-        raise HarnessError(f"{what}: position accessor failed at t={snap.t_us}")
+        raise AssertionError(f"{what}: position accessor failed at t={snap.t_us}")
     err = hypot3(snap.ecef, origin)
     if err > ECEF_MATCH_M:
-        raise HarnessError(f"{what}: ECEF {err} m from pad, bound {ECEF_MATCH_M}")
+        raise AssertionError(f"{what}: ECEF {err} m from pad, bound {ECEF_MATCH_M}")
     return snap.ecef
 
 
@@ -2087,14 +2125,16 @@ def _published_llh(line: str) -> tuple[float, float, float] | None:
     """
     parts = [p.strip() for p in line.split(",")]
     if len(parts) < 4:
-        raise HarnessError(f"solution row is short: {line!r}")
+        note_product_issue("F09", f"--dump-solution row is short: {line}")
+        return None
     cells = parts[1:4]
     if any(c == "" for c in cells):
         return None
     try:
         lat, lon, h = (float(c) for c in cells)
-    except ValueError as exc:
-        raise HarnessError(f"solution row is not numeric: {line!r}") from exc
+    except ValueError:
+        note_product_issue("F09", f"--dump-solution row is not numeric: {line}")
+        return None
     if not all(math.isfinite(v) for v in (lat, lon, h)):
         return None
     return lat, lon, h

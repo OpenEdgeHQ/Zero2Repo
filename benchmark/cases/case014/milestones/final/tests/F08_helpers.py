@@ -16,6 +16,8 @@ from dataclasses import dataclass, field, replace
 from typing import Sequence
 
 from _harness import (
+    nonfinite_fields,
+    note_product_issue,
     runtime_uuid_int,
     HarnessError,
     RunResult,
@@ -198,22 +200,6 @@ static void print_snap(const nav_suite_t *s, long long t_us)
         baro_ok = nav_suite_get_baro_alt(s, &bh, &bv) ? 1 : 0;
         ars_b = ahrs_get_bias_gyr(&s->ars, ars_bias) ? 1 : 0;
         ahrs_b = ahrs_get_bias_gyr(&s->ahrs, ahrs_bias) ? 1 : 0;
-    }
-    if (pos && (!isfinite(ecef[0]) || !isfinite(ecef[1]) || !isfinite(ecef[2]))) {
-        fprintf(stderr, "published ECEF is not finite\n");
-        exit(2);
-    }
-    if (best && (!isfinite(brpy[0]) || !isfinite(brpy[1]) || !isfinite(brpy[2]))) {
-        fprintf(stderr, "published best attitude is not finite\n");
-        exit(2);
-    }
-    if (h_ok && !isfinite(h_m)) {
-        fprintf(stderr, "published local height is not finite\n");
-        exit(2);
-    }
-    if (ell_ok && !isfinite(ell)) {
-        fprintf(stderr, "published ellipsoid height is not finite\n");
-        exit(2);
     }
     printf("SNAP t_us=%lld mode=%d mode_name=- ready=%d pos=%d vel=%d ned=%d",
            t_us, mode, ready, pos, vel_ok, ned_ok);
@@ -499,6 +485,9 @@ def fmt3(ok, vec):
 def emit(nav, t_us):
     # TEST-FIX(F08): upstream python/INSLIB/suite.py:76 shows mode_name() returns FULL, COASTING, ATTITUDE_ONLY, and NONE as text; suite.py:73 mode() returns an integer this probe only printed
     mode_name = nav.mode_name()
+    # One token whatever the reader returns; a name outside the four is
+    # recorded by the parser, it must not break the line.
+    mode_name = str(mode_name).replace(" ", "~").replace("=", "~") or "<empty>"
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
     ned = nav.position_local()
@@ -521,15 +510,9 @@ def emit(nav, t_us):
     ahrs_ok = 1 if ahrs is not None else 0
     ars_b_ok = 1 if ars_b is not None else 0
     ahrs_b_ok = 1 if ahrs_b is not None else 0
-    h_ok = 1 if (h is not None and math.isfinite(h)) else 0
-    ell_ok = 1 if (ell is not None and math.isfinite(ell)) else 0
+    h_ok = 1 if h is not None else 0
+    ell_ok = 1 if ell is not None else 0
     baro_ok = 1 if baro is not None else 0
-    if pos and not all(math.isfinite(v) for v in ecef):
-        raise SystemExit("published ECEF is not finite")
-    if best_ok and not all(math.isfinite(v) for v in best):
-        raise SystemExit("published best attitude is not finite")
-    if h_ok is False and h is not None and not math.isfinite(h):
-        pass
     line = (
         "SNAP t_us=%d mode=- mode_name=%s ready=%d pos=%d vel=%d ned=%d "
         "best=%d ins_att=%d ars=%d ahrs=%d h_ok=%d ell_ok=%d baro=%d "
@@ -911,7 +894,13 @@ def parse_nav_snapshot(line: str) -> NavSnapshot:
         MODE_ATTITUDE_ONLY,
         MODE_NONE,
     ):
-        raise HarnessError(f"unexpected mode_name {mode_name!r} in {line!r}")
+        note_product_issue("F08", f"mode name {mode_name!r} is not one of the four: {line}")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F08', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F08', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F08', f"ins_get_diag returned NULL for a live instance: {line}")
     h_val = _parse_optional_float(fields, "h")
     ell_val = _parse_optional_float(fields, "ell")
     if h_ok and h_val is None:
@@ -1124,47 +1113,47 @@ def nav_langs(scen: NavScenario, *, include_py: bool = True):
 
 def require_ready_full(snap: NavSnapshot, what: str) -> None:
     if not snap.ready:
-        raise HarnessError(f"{what}: expected INS ready at t={snap.t_us}")
+        raise AssertionError(f"{what}: expected INS ready at t={snap.t_us}")
     if not snap.pos_ok or snap.ecef is None:
-        raise HarnessError(f"{what}: INS position accessor failed at t={snap.t_us}")
+        raise AssertionError(f"{what}: INS position accessor failed at t={snap.t_us}")
 
 
 def require_positions_fail(snap: NavSnapshot, what: str) -> None:
     if snap.pos_ok or snap.ecef is not None:
-        raise HarnessError(f"{what}: INS position still published at t={snap.t_us}")
+        raise AssertionError(f"{what}: INS position still published at t={snap.t_us}")
 
 
 def require_best_attitude(snap: NavSnapshot, what: str) -> tuple[float, float, float]:
     if not snap.best_ok or snap.best is None:
-        raise HarnessError(f"{what}: best attitude was not published at t={snap.t_us}")
+        raise AssertionError(f"{what}: best attitude was not published at t={snap.t_us}")
     if not all(math.isfinite(v) for v in snap.best):
-        raise HarnessError(f"{what}: best attitude is not finite")
+        raise AssertionError(f"{what}: best attitude is not finite")
     return snap.best
 
 
 def require_ahrs_attitude(snap: NavSnapshot, what: str) -> tuple[float, float, float]:
     if not snap.ahrs_ok or snap.ahrs_att is None:
-        raise HarnessError(f"{what}: AHRS attitude was not published at t={snap.t_us}")
+        raise AssertionError(f"{what}: AHRS attitude was not published at t={snap.t_us}")
     if not all(math.isfinite(v) for v in snap.ahrs_att):
-        raise HarnessError(f"{what}: AHRS attitude is not finite")
+        raise AssertionError(f"{what}: AHRS attitude is not finite")
     return snap.ahrs_att
 
 
 def require_local_height(snap: NavSnapshot, what: str) -> float:
     if not snap.h_ok or snap.h is None:
-        raise HarnessError(f"{what}: local height accessor failed at t={snap.t_us}")
+        raise AssertionError(f"{what}: local height accessor failed at t={snap.t_us}")
     return snap.h
 
 
 def require_ellipsoid(snap: NavSnapshot, what: str) -> float:
     if not snap.ell_ok or snap.ell is None:
-        raise HarnessError(f"{what}: ellipsoid height accessor failed at t={snap.t_us}")
+        raise AssertionError(f"{what}: ellipsoid height accessor failed at t={snap.t_us}")
     return snap.ell
 
 
 def require_unpublished_ellipsoid(snap: NavSnapshot, what: str) -> None:
     if snap.ell_ok or snap.ell is not None:
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: ellipsoid height was published at t={snap.t_us} value={snap.ell}"
         )
 
@@ -1198,7 +1187,7 @@ def require_indoor_ellipsoid_not_init_origin(
         flush=True,
     )
     if indoor_ellipsoid_matches_init_origin(snap, origin_h_m):
-        raise HarnessError(
+        raise AssertionError(
             f"{what}: indoor ellipsoid {snap.ell} is the prescribed init origin height {origin_h_m}"
         )
 

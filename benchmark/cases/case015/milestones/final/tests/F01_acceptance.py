@@ -39,7 +39,7 @@ from F01_helpers import (
     unknown_short_option,
     unknown_verb,
 )
-from _harness import workspace
+from _harness import stored_copy, workspace
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +231,8 @@ def test_compress_expand_two_distinct_vorbis_files_exit_0_and_restore_bytes():
             require_ok(enc)
             assert ws.path_is_file(dest), f"compress did not write {dest}"
             dest_bytes = ws.read_bytes(dest)
-            assert dest_bytes != src_bytes, (
-                "compress destination bytes equal the source (copy stub)"
+            assert not stored_copy(dest_bytes, src_bytes), (
+                "compress destination bytes carry the source verbatim (copy stub)"
             )
             dec = run_product(ws, ["d", dest, recovered])
             require_ok(dec)
@@ -255,8 +255,8 @@ def test_compress_valid_opus_to_distinct_destination_exits_0():
         require_ok(enc)
         assert ws.path_is_file(dest), f"Opus compress did not write {dest}"
         dest_bytes = ws.read_bytes(dest)
-        assert dest_bytes != src_bytes, (
-            "Opus compress destination bytes equal the source (copy stub)"
+        assert not stored_copy(dest_bytes, src_bytes), (
+            "Opus compress destination bytes carry the source verbatim (copy stub)"
         )
         print(f"[F01] Opus compress src={len(src_bytes)} dest={len(dest_bytes)}", flush=True)
 
@@ -646,34 +646,41 @@ def test_mixer_kernels_report_identity_archives_and_unbuilt_usage_error():
                 require_usage(result)
                 print(f"[F01] unreported kernel {name!r} is usage error", flush=True)
 
-        src = place_vorbis(ws, "a")
-        src_bytes = ws.read_bytes(src)
-        archives: list[bytes] = []
-        for name in accepted:
-            dest = unique_name(f"k-{name}")
-            recovered = unique_name(f"o-{name}")
-            enc = run_product(
-                ws, ["e", src, dest], env_updates={SIMD_ENV: name}
-            )
-            require_ok(enc)
-            assert ws.path_is_file(dest), f"{name} compress did not write {dest}"
-            dest_bytes = ws.read_bytes(dest)
-            assert dest_bytes != src_bytes, (
-                f"{name} compress destination bytes equal the source"
-            )
-            archives.append(dest_bytes)
-            dec = run_product(ws, ["d", dest, recovered])
-            require_ok(dec)
-            assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
-                f"expand after {name} kernel did not restore the source bytes"
-            )
-        assert archives, "no archive was produced under an accepted mixer kernel"
-        first = archives[0]
-        for other, name in zip(archives[1:], accepted[1:]):
-            assert other == first, (
-                f"archive under {name} differs from {accepted[0]} "
-                f"(valid kernels must be bit-identical)"
-            )
+        from F03_helpers import place_opus_classified
+
+        sources = (
+            ("vorbis", place_vorbis(ws, "a")),
+            ("opus", place_opus_classified(ws, "hybrid")),
+        )
+        runs = [(codec, src, effort) for codec, src in sources for effort in ((), ("-1",))]
+        for codec, src, effort in runs:
+            src_bytes = ws.read_bytes(src)
+            archives: list[bytes] = []
+            for name in accepted:
+                dest = unique_name(f"k-{name}")
+                recovered = unique_name(f"o-{name}")
+                enc = run_product(
+                    ws, [*effort, "e", src, dest], env_updates={SIMD_ENV: name}
+                )
+                require_ok(enc)
+                assert ws.path_is_file(dest), f"{name} compress did not write {dest}"
+                dest_bytes = ws.read_bytes(dest)
+                assert not stored_copy(dest_bytes, src_bytes), (
+                    f"{name} compress destination bytes carry the source verbatim"
+                )
+                archives.append(dest_bytes)
+                dec = run_product(ws, ["d", dest, recovered])
+                require_ok(dec)
+                assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
+                    f"expand after {name} kernel did not restore the source bytes"
+                )
+            assert archives, "no archive was produced under an accepted mixer kernel"
+            first = archives[0]
+            for other, name in zip(archives[1:], accepted[1:]):
+                assert other == first, (
+                    f"archive under {name} differs from {accepted[0]} "
+                    f"(valid kernels must be bit-identical; {codec} effort {effort!r})"
+                )
         print(
             f"[F01] mixer accepted={accepted} refused={refused} "
             f"archives={len(archives)}",

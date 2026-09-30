@@ -1768,3 +1768,65 @@ def test_baro_height_ignores_gnss_vertical_on_fusion_gate():
             f"{kind}: GNSS-height north pull {gnss_n} m was not strictly smaller "
             f"than baro-height {baro_n} m; an over-limit vertical row was not graded"
         )
+
+
+def test_deadreckoning_age_published_exactly_while_initialized():
+    """L233 / Contract ``ins_deadreckoning_ms``: while INS is not initialized
+    (collecting before its bootstrap, or re-armed after a GNSS quality loss)
+    no age is published and both the C getter and the Python ``Ins`` reader
+    return -1. While it is initialized -- ready, coasting, or frozen after the
+    window expired -- they return an age of 0 ms or more. Checked on runs of
+    its own and on every gate snapshot parsed in this session; a violation
+    fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h, origin = _site()
+    pad = pad_ready(origin)
+    frozen = coast_imu(pad, duration_s=FREEZE_11S)
+    rearmed = append_stream(
+        pad,
+        duration_s=15.0,
+        origin=origin,
+        gnss_ecef=origin,
+        gnss_std=NAMED_10M_STD,
+    )
+    for label, epochs in (("coast into freeze", frozen), ("quality-loss re-arm", rearmed)):
+        for kind, run in gate_langs(_scen(lat, lon, h, epochs, origin)):
+            init = [s for s in run.snaps if s.pos_ok]
+            uninit = [s for s in run.snaps if not s.pos_ok]
+            print(
+                f"{kind} {label}: initialized={len(init)} uninitialized={len(uninit)} "
+                f"first/last raw age={run.snaps[0].dr_raw}/{run.snaps[-1].dr_raw}",
+                flush=True,
+            )
+            assert init and uninit, f"{kind} {label}: run must cover both states"
+            bad_u = [(s.t_us, s.dr_raw) for s in uninit if s.dr_raw != -1]
+            bad_i = [(s.t_us, s.dr_raw) for s in init if s.dr_ms is None]
+            assert not bad_u, (
+                f"{kind} {label}: not initialized, but the age reader did not return -1 "
+                f"(t_us, value): {bad_u[:4]}"
+            )
+            assert not bad_i, (
+                f"{kind} {label}: initialized, but no age of 0 ms or more (t_us, value): {bad_i[:4]}"
+            )
+        if label == "quality-loss re-arm":
+            assert not run.last().pos_ok, f"{kind}: re-arm scenario did not end uninitialized"
+    require_no_product_issues("F05.dr", "dead-reckoning age on F05 gate snapshots")
+
+
+def test_published_gate_snapshots_are_well_formed():
+    """While INS is initialized its position, velocity, and bias 1-sigma are
+    published (C: the published ``ins_t`` factors; Python: ``stddev``), every
+    published value is finite, ``ins_get_diag`` / ``diag`` are available, the
+    GNSS counters are non-negative and used never exceeds seen. Checked on a
+    coast of its own and on every gate snapshot parsed in this session; a
+    violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h, origin = _site()
+    epochs = coast_imu(pad_ready(origin), duration_s=3.0)
+    for kind, run in gate_langs(_scen(lat, lon, h, epochs, origin)):
+        assert any(s.pos_ok for s in run.snaps), f"{kind}: pad never initialized"
+    require_no_product_issues("F05", "F05 gate snapshots")

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from F01_helpers import (
-    place_vorbis,
     require_ok,
     require_refusal,
     run_product,
@@ -26,12 +25,11 @@ from F02_helpers import (
 from F03_helpers import (
     OPUS_MAX_PACKET,
     OPUS_TAGS_MAX,
-    dedicated_codec_mode_field,
     dedicated_kind_slot,
-    dump_stdout,
     opus_head_fields,
     place_opus_classified,
     replace_opus_tags,
+    require_codec_mode_field,
     rfc6716_config_kind,
     run_product_long,
     runtime_code3_target_below_cap,
@@ -46,7 +44,7 @@ from F03_helpers import (
     with_ogg_version,
     with_opus_head_padded,
 )
-from _harness import files_identical, workspace
+from _harness import files_identical, stored_copy, workspace
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +95,8 @@ def test_family0_silk_celt_hybrid_round_trip_byte_identical():
                 f"{kind} compress did not write a destination"
             )
             dest_bytes = ws.read_bytes(dest)
-            assert dest_bytes != src_bytes, (
-                f"{kind} compress destination bytes equal the source (copy stub)"
+            assert not stored_copy(dest_bytes, src_bytes), (
+                f"{kind} compress destination bytes carry the source verbatim (copy stub)"
             )
             dec = run_product(ws, ["d", dest, recovered])
             require_ok(dec)
@@ -220,89 +218,91 @@ def test_expand_raw_opus_is_refused():
 
 
 def test_two_opus_compress_invocations_write_identical_archives():
-    with workspace() as ws:
-        src = place_opus_classified(ws, "silk")
-        src_bytes = ws.read_bytes(src)
-        dest_a = unique_name("arc-a")
-        dest_b = unique_name("arc-b")
-        enc_a = run_product(ws, ["-1", "e", src, dest_a])
-        require_ok(enc_a)
-        enc_b = run_product(ws, ["-1", "e", src, dest_b])
-        require_ok(enc_b)
-        assert ws.path_is_file(dest_a), "first compress did not write a destination"
-        assert ws.path_is_file(dest_b), "second compress did not write a destination"
-        dest_a_bytes = ws.read_bytes(dest_a)
-        dest_b_bytes = ws.read_bytes(dest_b)
-        assert dest_a_bytes != src_bytes, (
-            "first compress destination bytes equal the source (copy stub)"
-        )
-        assert dest_b_bytes != src_bytes, (
-            "second compress destination bytes equal the source (copy stub)"
-        )
-        assert files_identical(ws.resolve(dest_a), ws.resolve(dest_b)), (
-            "the same input compressed twice at the same effort, including "
-            "in two process invocations, produces byte-identical archives"
-        )
-        dest_c = unique_name("arc-c")
-        dest_d = unique_name("arc-d")
-        enc_c = run_product(ws, ["-1", "--no-mmap", "e", src, dest_c])
-        require_ok(enc_c)
-        enc_d = run_product(ws, ["-1", "--no-mmap", "e", src, dest_d])
-        require_ok(enc_d)
-        assert ws.path_is_file(dest_c), (
-            "first --no-mmap compress did not write a destination"
-        )
-        assert ws.path_is_file(dest_d), (
-            "second --no-mmap compress did not write a destination"
-        )
-        dest_c_bytes = ws.read_bytes(dest_c)
-        dest_d_bytes = ws.read_bytes(dest_d)
-        assert dest_c_bytes != src_bytes, (
-            "first --no-mmap compress destination bytes equal the source"
-        )
-        assert dest_d_bytes != src_bytes, (
-            "second --no-mmap compress destination bytes equal the source"
-        )
-        assert files_identical(ws.resolve(dest_c), ws.resolve(dest_d)), (
-            "the same input compressed twice at the same effort, including "
-            "in two process invocations and with --no-mmap, produces "
-            "byte-identical archives"
-        )
-        assert files_identical(ws.resolve(dest_a), ws.resolve(dest_c)), (
-            "the same input compressed twice at the same effort, including "
-            "in two process invocations and with --no-mmap, produces "
-            "byte-identical archives versus two process invocations without "
-            "that option"
-        )
+    for effort in ("-1", "-9"):
+        with workspace() as ws:
+            src = place_opus_classified(ws, "silk")
+            src_bytes = ws.read_bytes(src)
+            dest_a = unique_name("arc-a")
+            dest_b = unique_name("arc-b")
+            enc_a = run_product(ws, [effort, "e", src, dest_a])
+            require_ok(enc_a)
+            enc_b = run_product(ws, [effort, "e", src, dest_b])
+            require_ok(enc_b)
+            assert ws.path_is_file(dest_a), "first compress did not write a destination"
+            assert ws.path_is_file(dest_b), "second compress did not write a destination"
+            dest_a_bytes = ws.read_bytes(dest_a)
+            dest_b_bytes = ws.read_bytes(dest_b)
+            assert not stored_copy(dest_a_bytes, src_bytes), (
+                "first compress destination bytes carry the source verbatim (copy stub)"
+            )
+            assert not stored_copy(dest_b_bytes, src_bytes), (
+                "second compress destination bytes carry the source verbatim (copy stub)"
+            )
+            assert files_identical(ws.resolve(dest_a), ws.resolve(dest_b)), (
+                "the same input compressed twice at the same effort, including "
+                "in two process invocations, produces byte-identical archives"
+            )
+            dest_c = unique_name("arc-c")
+            dest_d = unique_name("arc-d")
+            enc_c = run_product(ws, [effort, "--no-mmap", "e", src, dest_c])
+            require_ok(enc_c)
+            enc_d = run_product(ws, [effort, "--no-mmap", "e", src, dest_d])
+            require_ok(enc_d)
+            assert ws.path_is_file(dest_c), (
+                "first --no-mmap compress did not write a destination"
+            )
+            assert ws.path_is_file(dest_d), (
+                "second --no-mmap compress did not write a destination"
+            )
+            dest_c_bytes = ws.read_bytes(dest_c)
+            dest_d_bytes = ws.read_bytes(dest_d)
+            assert not stored_copy(dest_c_bytes, src_bytes), (
+                "first --no-mmap compress destination bytes carry the source verbatim"
+            )
+            assert not stored_copy(dest_d_bytes, src_bytes), (
+                "second --no-mmap compress destination bytes carry the source verbatim"
+            )
+            assert files_identical(ws.resolve(dest_c), ws.resolve(dest_d)), (
+                "the same input compressed twice at the same effort, including "
+                "in two process invocations and with --no-mmap, produces "
+                "byte-identical archives"
+            )
+            assert files_identical(ws.resolve(dest_a), ws.resolve(dest_c)), (
+                "the same input compressed twice at the same effort, including "
+                "in two process invocations and with --no-mmap, produces "
+                "byte-identical archives versus two process invocations without "
+                "that option"
+            )
 
 
 def test_opus_no_mmap_compress_matches_mapped_archive():
-    with workspace() as ws:
-        src = place_opus_classified(ws, "silk")
-        src_bytes = ws.read_bytes(src)
-        mapped = unique_name("mapped")
-        unmapped = unique_name("unmapped")
-        enc_m = run_product(ws, ["-1", "e", src, mapped])
-        require_ok(enc_m)
-        assert ws.path_is_file(mapped), "mapped compress did not write a destination"
-        mapped_bytes = ws.read_bytes(mapped)
-        assert mapped_bytes != src_bytes, (
-            "mapped compress destination bytes equal the source (copy stub)"
-        )
-        enc_u = run_product(ws, ["-1", "--no-mmap", "e", src, unmapped])
-        require_ok(enc_u)
-        assert ws.path_is_file(unmapped), (
-            "--no-mmap compress did not write a destination"
-        )
-        unmapped_bytes = ws.read_bytes(unmapped)
-        assert unmapped_bytes != src_bytes, (
-            "--no-mmap compress destination bytes equal the source (copy stub)"
-        )
-        assert files_identical(ws.resolve(mapped), ws.resolve(unmapped)), (
-            "the same input compressed twice at the same effort, including "
-            "with --no-mmap, produces byte-identical archives versus the "
-            "mapped invocation"
-        )
+    for effort in ("-1", "-9"):
+        with workspace() as ws:
+            src = place_opus_classified(ws, "silk")
+            src_bytes = ws.read_bytes(src)
+            mapped = unique_name("mapped")
+            unmapped = unique_name("unmapped")
+            enc_m = run_product(ws, [effort, "e", src, mapped])
+            require_ok(enc_m)
+            assert ws.path_is_file(mapped), "mapped compress did not write a destination"
+            mapped_bytes = ws.read_bytes(mapped)
+            assert not stored_copy(mapped_bytes, src_bytes), (
+                "mapped compress destination bytes carry the source verbatim (copy stub)"
+            )
+            enc_u = run_product(ws, [effort, "--no-mmap", "e", src, unmapped])
+            require_ok(enc_u)
+            assert ws.path_is_file(unmapped), (
+                "--no-mmap compress did not write a destination"
+            )
+            unmapped_bytes = ws.read_bytes(unmapped)
+            assert not stored_copy(unmapped_bytes, src_bytes), (
+                "--no-mmap compress destination bytes carry the source verbatim (copy stub)"
+            )
+            assert files_identical(ws.resolve(mapped), ws.resolve(unmapped)), (
+                "the same input compressed twice at the same effort, including "
+                "with --no-mmap, produces byte-identical archives versus the "
+                "mapped invocation"
+            )
 
 
 def test_opus_no_mmap_expand_recovers_original():
@@ -314,8 +314,8 @@ def test_opus_no_mmap_expand_recovers_original():
         require_ok(enc)
         assert ws.path_is_file(dest), "compress did not write a destination"
         dest_bytes = ws.read_bytes(dest)
-        assert dest_bytes != src_bytes, (
-            "compress destination bytes equal the source (copy stub)"
+        assert not stored_copy(dest_bytes, src_bytes), (
+            "compress destination bytes carry the source verbatim (copy stub)"
         )
         recovered = unique_name("out")
         dec = run_product(ws, ["--no-mmap", "d", dest, recovered])
@@ -379,7 +379,7 @@ def test_code3_padding_within_61440_round_trips_at_effort_1_and_9():
                 assert ws.path_is_file(dest), (
                     f"code-3 {label} compress at {effort} did not write dest"
                 )
-                assert ws.read_bytes(dest) != src_bytes, (
+                assert not stored_copy(ws.read_bytes(dest), src_bytes), (
                     f"code-3 {label} compress at {effort} destination equals source"
                 )
                 dec = run_product(ws, ["d", dest, recovered])
@@ -978,68 +978,22 @@ def test_nonzero_ogg_version_on_later_page_is_refused():
 
 def test_dump_opus_archive_distinguishable_from_vorbis_as_codec():
     with workspace() as ws:
-        src_a = place_opus_classified(ws, "silk")
-        original = ws.read_bytes(src_a)
-        vendor = f"suite-vendor-{token()}".encode("ascii")
-        field = f"NOTE={token()}".encode("ascii")
-        rewritten = replace_opus_tags(original, vendor=vendor, fields=(field,))
-        src_b = unique_name("silk-tags") + ".opus"
-        ws.write(src_b, rewritten)
-        vorbis_src = place_vorbis(ws, "a")
-        arc_a = unique_name("opus-a")
-        arc_b = unique_name("opus-b")
-        arc_v = unique_name("vorbis-arc")
-        for src, arc in ((src_a, arc_a), (src_b, arc_b), (vorbis_src, arc_v)):
-            enc = run_product(ws, ["-1", "e", src, arc])
-            require_ok(enc)
-            assert ws.path_is_file(arc), f"compress of {src!r} did not write {arc!r}"
-            assert ws.read_bytes(arc) != ws.read_bytes(src), (
-                f"compress of {src!r} destination bytes equal the source"
+        require_codec_mode_field(ws, "-9", what="F03 J effort 9")
+
+
+# ---------------------------------------------------------------------------
+# Expand needs only the archive (Opus)
+# ---------------------------------------------------------------------------
+
+
+def test_opus_archive_alone_expands_after_every_compress_trace_is_gone():
+    from F04_helpers import _opus_tags_variant, expand_from_archive_alone
+
+    for kind in ("silk", "hybrid"):
+        with workspace() as ws:
+            original = ws.read_bytes(place_opus_classified(ws, kind))
+        src_bytes = _opus_tags_variant(original)
+        for effort in ("-1", "-9"):
+            expand_from_archive_alone(
+                src_bytes, effort, ".opus", what=f"Opus {kind} {effort}"
             )
-        text_a = dump_stdout(ws, arc_a)
-        text_b = dump_stdout(ws, arc_b)
-        text_v = dump_stdout(ws, arc_v)
-        paths = [
-            src_a,
-            src_b,
-            vorbis_src,
-            arc_a,
-            arc_b,
-            arc_v,
-            str(ws.path),
-        ]
-        sizes = (
-            len(ws.read_bytes(src_a)),
-            len(ws.read_bytes(src_b)),
-            len(ws.read_bytes(vorbis_src)),
-            len(ws.read_bytes(arc_a)),
-            len(ws.read_bytes(arc_b)),
-            len(ws.read_bytes(arc_v)),
-        )
-        left_a = strip_paths_and_sizes(text_a, paths, sizes)
-        left_b = strip_paths_and_sizes(text_b, paths, sizes)
-        left_v = strip_paths_and_sizes(text_v, paths, sizes)
-        payloads = dedicated_codec_mode_field(
-            text_a, text_b, text_v, paths, sizes
-        )
-        print(
-            f"[F03] J leftover lens opus_a={len(left_a)} opus_b={len(left_b)} "
-            f"vorbis={len(left_v)} shared={sorted(payloads)!r}",
-            flush=True,
-        )
-        assert payloads, (
-            "On dump standard output, a dedicated codec-mode field — not "
-            "the archive path, not a byte size, not a leftover that varies "
-            "with the file — answers whether the archive is Opus or Vorbis: "
-            "two successful Opus archives share one payload of that field "
-            "and a successful Vorbis archive of a different input has a "
-            "distinguishable payload of the same field, independent of path "
-            "and size. The payload may be a number or a hex value; decimals "
-            "and hex-like runs were not deleted"
-        )
-        assert left_a != left_v and left_b != left_v, (
-            "On dump standard output, a successful Vorbis archive of a "
-            "different input has no distinguishable dedicated codec-mode "
-            "field payload from dump of the two successful Opus archives "
-            "after path and size strip"
-        )

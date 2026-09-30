@@ -1394,3 +1394,18 @@ def test_four_mode_values_are_pairwise_different():
     ]
     print(f"Python mode names={names}", flush=True)
     assert names == [MODE_FULL, MODE_COASTING, MODE_ATTITUDE_ONLY, MODE_NONE]
+
+
+def test_published_suite_snapshots_are_well_formed():
+    """The suite mode name is one of FULL, COASTING, ATTITUDE_ONLY, NONE, and
+    every published position, attitude and height value is finite -- on every
+    suite snapshot parsed in this session and on a pad of its own. A
+    violation fails this test only.
+    """
+    from _harness import require_no_product_issues
+
+    lat, lon, h, origin = _site()
+    pad = pad_full(lat, lon, h, origin, baro=False, mag=True)
+    for _kind, run in nav_langs(site_nav(lat, lon, h, pad)):
+        assert run.snaps, "pad produced no snapshots"
+    require_no_product_issues("F08", "suite snapshots (F08)")

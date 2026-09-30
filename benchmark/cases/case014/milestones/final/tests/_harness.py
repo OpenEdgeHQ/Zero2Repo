@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import math
 import os
 import random
 import shutil
@@ -100,6 +101,59 @@ def runtime_uuid_int() -> int:
 def runtime_hex(n: int) -> str:
     """*n* lowercase hex digits from the seeded runtime RNG."""
     return f"{_TEST_RNG.getrandbits(128):032x}"[:n]
+
+
+# ---------------------------------------------------------------------------
+# Product-behaviour invariants seen while parsing probe output
+# ---------------------------------------------------------------------------
+#
+# A parser raises HarnessError only for probe output it cannot read (a missing
+# token, text where a number belongs). A product value that breaks a published
+# invariant -- a non-finite published value, a counter below zero, a dead-
+# reckoning age published by an uninitialized INS -- is recorded here under
+# the feature group that parsed it. Each group has a dedicated test that fails
+# when anything was recorded, so one such value fails that test instead of
+# aborting every test whose run happens to contain the snapshot.
+
+_PRODUCT_ISSUES: dict[str, list[str]] = {}
+_PRODUCT_ISSUE_COUNTS: dict[str, int] = {}
+
+
+def note_product_issue(group: str, message: str) -> None:
+    """Record one product-invariant violation under *group* (never raises)."""
+    _PRODUCT_ISSUE_COUNTS[group] = _PRODUCT_ISSUE_COUNTS.get(group, 0) + 1
+    kept = _PRODUCT_ISSUES.setdefault(group, [])
+    if len(kept) < 25:
+        kept.append(message)
+
+
+def product_issues(group: str) -> tuple[int, list[str]]:
+    """(count, first messages) recorded under *group* in this pytest process."""
+    return _PRODUCT_ISSUE_COUNTS.get(group, 0), list(_PRODUCT_ISSUES.get(group, ()))
+
+
+def nonfinite_fields(fields: Mapping[str, str]) -> list[str]:
+    """``key=value`` of every snapshot token holding a NaN / infinite number."""
+    out: list[str] = []
+    for key, raw in fields.items():
+        for part in raw.split(","):
+            try:
+                value = float(part)
+            except ValueError:
+                continue
+            if not math.isfinite(value):
+                out.append(f"{key}={raw}")
+                break
+    return out
+
+
+def require_no_product_issues(group: str, what: str) -> None:
+    """Dedicated-test assertion: nothing was recorded under *group*."""
+    count, sample = product_issues(group)
+    assert count == 0, (
+        f"{what}: {count} snapshot value(s) broke a published invariant; "
+        f"first: {sample[:6]}"
+    )
 
 
 # ---------------------------------------------------------------------------

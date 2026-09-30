@@ -14,7 +14,15 @@ import math
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from _harness import HarnessError, invoke, product_identity, run_python, runtime_uuid_int
+from _harness import (
+    HarnessError,
+    invoke,
+    product_identity,
+    run_python,
+    runtime_uuid_int,
+    nonfinite_fields,
+    note_product_issue,
+)
 from F01_helpers import (
     require_probe_success as _require_probe_success,
     wgs84_ecef_from_geodetic as _wgs84_ecef_from_geodetic,
@@ -278,6 +286,21 @@ def parse_triple(token):
         raise SystemExit("non-finite triple " + token)
     return tuple(vals)
 
+def _cnt(diag, key):
+    # Contract ins_get_diag / diag: the mapping exists on every instance and
+    # names these counters. A missing mapping or key prints -1, which the
+    # parser records; it must not abort the run.
+    try:
+        value = diag[key]
+    except (KeyError, TypeError, IndexError):
+        return -1
+    if isinstance(value, bool):
+        return -1
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
 def emit(nav, t_us):
     ready = 1 if nav.is_ready() else 0
     ecef = nav.position_ecef()
@@ -297,23 +320,24 @@ def emit(nav, t_us):
     rpy_std = None
     if sd is not None:
         rpy_std = tuple(sd["rpy"])
-        if not all(math.isfinite(v) for v in rpy_std):
-            raise SystemExit("non-finite attitude uncertainty")
-    if rpy_ok and rpy_std is None:
-        raise SystemExit("attitude published without uncertainty")
+    # Attitude published without its 1-sigma (Contract rpy / stddev) is
+    # printed as attnostd=1 and recorded by the parser; it must not abort
+    # the run.
+    attnostd = 1 if (rpy_ok and rpy_std is None) else 0
     def fmt(ok, vec):
         if not ok:
             return "-"
         return "%.17g,%.17g,%.17g" % vec
     residual = "-"
-    n_used = int(diag["n_gnss_used"])
-    n_pred = int(diag["n_predict"])
-    n_seen = int(diag["n_gnss_seen"])
-    n_rej = int(diag["n_gnss_rejected_noise"])
+    n_used = _cnt(diag, "n_gnss_used")
+    n_pred = _cnt(diag, "n_predict")
+    n_seen = _cnt(diag, "n_gnss_seen")
+    n_rej = _cnt(diag, "n_gnss_rejected_noise")
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
         % (t_us, ready, pos, vel_ok, rpy_ok, ned_ok, bacc_ok, bgyr_ok)
     )
+    line += " attnostd=%d" % attnostd
     line += " ecef=" + (fmt(pos, tuple(ecef)) if pos else "-")
     line += " nedpos=" + (fmt(ned_ok, tuple(ned)) if ned_ok else "-")
     line += " velned=" + (fmt(vel_ok, tuple(vel)) if vel_ok else "-")
@@ -891,8 +915,6 @@ def _parse_vec(fields: dict[str, str], key: str, present: bool) -> tuple[float, 
         vals = (float(parts[0]), float(parts[1]), float(parts[2]))
     except ValueError as exc:
         raise HarnessError(f"{key} not floats: {raw!r}") from exc
-    if not all(math.isfinite(v) for v in vals):
-        raise HarnessError(f"{key} not finite: {raw!r}")
     if not present:
         raise HarnessError(f"{key} marked absent but a triple was printed")
     return vals
@@ -908,8 +930,6 @@ def _parse_optional_float(fields: dict[str, str], key: str) -> float | None:
         value = float(raw)
     except ValueError as exc:
         raise HarnessError(f"{key} not a float: {raw!r}") from exc
-    if not math.isfinite(value):
-        raise HarnessError(f"{key} not finite: {raw!r}")
     return value
 
 
@@ -950,6 +970,15 @@ def parse_snapshot_line(line: str) -> InsSnapshot:
     bacc = _parse_vec(fields, "biasacc", bacc_ok)
     bgyr = _parse_vec(fields, "biasgyr", bgyr_ok)
     residual = _parse_optional_float(fields, "residual")
+    for _tok in nonfinite_fields(fields):
+        note_product_issue('F02', f"non-finite published value {_tok}: {line}")
+    if fields.get("attnostd") == "1":
+        note_product_issue('F02', f"attitude published without its 1-sigma: {line}")
+    if fields.get("diag") == "0":
+        note_product_issue('F02', f"ins_get_diag returned NULL for a live instance: {line}")
+    for _key in ("n_used", "n_pred", "n_seen", "n_rej"):
+        if _parse_int(fields, _key) < 0:
+            note_product_issue("F02", f"diagnostic counter {_key}={fields[_key]} missing or negative: {line}")
     return InsSnapshot(
         t_us=t_us,
         ready=ready,
@@ -1095,13 +1124,13 @@ def happy_scenario(
 
 def require_finite_solution(snap: InsSnapshot) -> None:
     if not (snap.pos_ok and snap.vel_ok and snap.rpy_ok and snap.ned_ok):
-        raise HarnessError(
+        raise AssertionError(
             f"accessors not all successful at t={snap.t_us} "
             f"pos={snap.pos_ok} vel={snap.vel_ok} rpy={snap.rpy_ok} ned={snap.ned_ok}"
         )
     if snap.ecef is None or snap.ned is None or snap.vel_ned is None or snap.rpy is None:
-        raise HarnessError("successful accessors returned no vectors")
+        raise AssertionError("successful accessors returned no vectors")
     if not snap.bias_acc_ok or not snap.bias_gyr_ok:
-        raise HarnessError("bias accessors failed after initialization")
+        raise AssertionError("bias accessors failed after initialization")
     if snap.bias_acc is None or snap.bias_gyr is None:
-        raise HarnessError("bias accessors succeeded without values")
+        raise AssertionError("bias accessors succeeded without values")
