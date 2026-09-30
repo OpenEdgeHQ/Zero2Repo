@@ -45,9 +45,9 @@ _TAIL_LINES = 200
 # the model's turn was still open (the response stream was cut off).
 _OPEN_TURN_STOPS = frozenset({None, "tool_use", "pause_turn"})
 _THINKING_BLOCKS = frozenset({"thinking", "redacted_thinking"})
-# The CLI gave up on the provider: its retries ran out on an overload, a server
-# error, or a rate limit. A 4xx the request itself caused is not matched.
-_PROVIDER_ERROR = re.compile(r"^API Error:\s*(?:5\d\d|429|529)\b|overloaded", re.I)
+# An API error the request itself caused (bad request, too large). Any other
+# api_error is the provider's: an overload, a 5xx, a rate limit, a dropped connection.
+_CLIENT_ERROR = re.compile(r"^API Error:\s*4(?!29)\d\d\b", re.I)
 
 
 def scan_log_text(text: str) -> dict[str, int]:
@@ -97,7 +97,7 @@ def _provider_gave_up(tail: str) -> bool:
     """Claude Code stream-json whose session ended on the provider's error.
 
     The final ``result`` is an error the CLI raised after its own retries: an
-    ``api_error`` terminal reason with a 5xx, 429, or overload message.
+    ``api_error`` terminal reason that is not a 4xx the request caused.
     """
     results = [e for e in _events(tail) if e.get("type") == "result" and "subtype" in e]
     if not results:
@@ -106,7 +106,7 @@ def _provider_gave_up(tail: str) -> bool:
     if not last.get("is_error"):
         return False
     text = str(last.get("result") or "").strip()
-    return last.get("terminal_reason") == "api_error" and bool(_PROVIDER_ERROR.search(text))
+    return last.get("terminal_reason") == "api_error" and not _CLIENT_ERROR.search(text)
 
 
 def _truncated_stream(tail: str) -> bool:

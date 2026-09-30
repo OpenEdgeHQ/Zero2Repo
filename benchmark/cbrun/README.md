@@ -275,8 +275,9 @@ version when available, `reasoning_effort`, judge/agent timeouts, `host_arch`,
 `run_valid` is false only when there is **no** valid submit **and** the tail
 of `agent.log` shows a terminating infra signal (`invalid_api_key` /
 `Unauthorized` / `HTTP 401`, `exceeded retry limit`, `ECONNREFUSED`), a Claude
-Code session that ended on the provider's 5xx, 429, or overload error after its
-own retries (`infra:provider_error`), or a response stream cut off mid-turn
+Code session that ended on a provider error after its own retries (a 5xx, 429,
+overload, or dropped connection; not a 4xx the request caused;
+`infra:provider_error`), or a response stream cut off mid-turn
 (`infra:truncated_stream`).
 `content_filter` is counted but a recovered submit stays valid. Invalid
 trials appear as `INFRA(<signal>)` in the matrix; `aggregate.invalid_runs`
