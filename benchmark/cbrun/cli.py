@@ -114,6 +114,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Rebuild :deliverable (from recipe) and :agent images.",
     )
     parser.add_argument(
+        "--restage-deliverable",
+        action="store_true",
+        help="With --build-images, restage :deliverable from the current bundle. "
+        "Rebuild the env layer only when its recipe hash changed.",
+    )
+    parser.add_argument(
         "--allow-leakage",
         action="store_true",
         help="Skip public PRD/Contract sensitive-term leakage gate.",
@@ -203,7 +209,9 @@ def main(argv: list[str] | None = None) -> int:
         for case_dir in case_dirs:
             print(f"[cbrun] build-images {case_dir.name} ...", file=sys.stderr)
             try:
-                tag = ensure_deliverable_image(case_dir, force=args.force_image)
+                tag = ensure_deliverable_image(
+                    case_dir, force=args.force_image, restage=args.restage_deliverable,
+                )
             except Exception as exc:  # noqa: BLE001 - keep the matrix going
                 print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
                 failed += 1

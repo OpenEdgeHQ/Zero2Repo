@@ -19,6 +19,7 @@ no upstream tree to compile. The solving agent builds in ``/app``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -167,6 +168,53 @@ def _volume_mounts(case_dir: Path) -> list[str]:
         if cache_dir.is_dir():
             mounts.extend(["-v", f"{cache_dir.resolve()}:/opt/cb-cache"])
     return mounts
+
+
+def recipe_hash(case_dir: Path) -> str:
+    """Hash of the recipe lock and the manifest runner. Env-image identity."""
+    payload = json.dumps(
+        {"lock": load_lock(case_dir), "runner": _load_manifest_runner(case_dir)},
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _image_recipe_hash(tag: str) -> str:
+    proc = subprocess.run(
+        [
+            "docker", "image", "inspect", "--format",
+            '{{index .Config.Labels "codingbench.recipe_hash"}}', tag,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return ""
+    text = proc.stdout.strip()
+    if text in ("", "<no value>"):
+        return ""
+    return text
+
+
+def _stamp_recipe_hash(tag: str, digest: str) -> None:
+    name = f"z2r-recipe-stamp-{digest[:12]}"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+    created = subprocess.run(
+        ["docker", "create", "--name", name, tag], capture_output=True, text=True,
+    )
+    if created.returncode != 0:
+        raise RecipeLockError(f"docker create failed: {created.stderr.strip()}")
+    try:
+        commit = subprocess.run(
+            ["docker", "commit", "-c", f"LABEL codingbench.recipe_hash={digest}", name, tag],
+            capture_output=True,
+            text=True,
+        )
+        if commit.returncode != 0:
+            raise RecipeLockError(f"docker commit label failed: {commit.stderr.strip()}")
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
 
 
 def _load_manifest_runner(case_dir: Path) -> dict[str, Any]:
@@ -409,6 +457,7 @@ def _build_env_image(
     finally:
         subprocess.run(["docker", "rmi", "-f", pre_tag], capture_output=True, text=True)
     print(f"[cbrun] committed env image {tag}", flush=True)
+    _stamp_recipe_hash(tag, recipe_hash(case_dir))
     return tag
 
 
@@ -466,13 +515,18 @@ def ensure_deliverable_image(
     case_dir: Path | str,
     *,
     force: bool = False,
+    restage: bool = False,
 ) -> str:
     """Build or reuse ``codingbench-benchmark/<case>:deliverable``.
 
-    Idempotent when ``force`` is false and the tag already exists.
+    Idempotent when ``force`` and ``restage`` are false and the tag already
+    exists. ``restage`` always rebuilds the deliverable layer from the current
+    bundle, and rebuilds the env layer only when its recipe hash differs.
     """
     case_dir = Path(case_dir).resolve()
     tag = deliverable_tag(case_dir.name)
+    if restage and not force:
+        return _restage_deliverable(case_dir)
     if not force and image_exists(tag):
         if _image_probe_clean(tag, case_dir):
             print(f"[cbrun] reusing deliverable image {tag}", flush=True)
@@ -487,4 +541,23 @@ def ensure_deliverable_image(
     validate_lock_env_install(lock)
     runner = resolve_lock_runner(lock, _load_manifest_runner(case_dir))
     env_tag = _build_env_image(case_dir, lock, runner, force=force)
+    return _stage_deliverable(case_dir, env_tag, force=True)
+
+
+def _restage_deliverable(case_dir: Path) -> str:
+    lock = load_lock(case_dir)
+    validate_lock_env_install(lock)
+    runner = resolve_lock_runner(lock, _load_manifest_runner(case_dir))
+    env_tag = env_recipe_tag(case_dir.name)
+    current = recipe_hash(case_dir)
+    reusable = (
+        image_exists(env_tag)
+        and _image_recipe_hash(env_tag) == current
+        and _image_probe_clean(env_tag, case_dir)
+    )
+    if reusable:
+        print(f"[cbrun] reusing env image {env_tag}", flush=True)
+    else:
+        print(f"[cbrun] env image {env_tag} recipe hash changed; rebuilding", flush=True)
+        env_tag = _build_env_image(case_dir, lock, runner, force=True)
     return _stage_deliverable(case_dir, env_tag, force=True)
