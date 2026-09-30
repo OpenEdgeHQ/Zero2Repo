@@ -60,6 +60,7 @@ from .limits import (
     resolve_limits,
 )
 from .results import TrialResult
+from .source_access import scan_source_access, trial_log_paths
 from .steps import Step, discover_steps
 from .submit import CONTAINER_SUBMIT_PATH, NO_SUBMIT_ERROR, is_valid_submit
 from .pricing import trial_cost
@@ -259,6 +260,7 @@ def run_trial(
     finally:
         _archive_trial(container, out_dir=out_dir, result=result, invocation=invocation)
         _record_token_usage(out_dir, result)
+        _record_source_access(case_dir, out_dir, result)
         result.finished_at = utc_now()
 
     return result
@@ -284,6 +286,26 @@ def _harvest_usage_files(container: Container, invocation: AgentInvocation) -> s
     if res.exit_code != 0:
         return f"usage files: exit {res.exit_code}: {(res.tail or '').strip()[-200:]}"
     return None
+
+
+def _record_source_access(case_dir: Path, out_dir: Path, result: TrialResult) -> None:
+    """Fail the trial when the agent disassembled or decompiled a banned module."""
+    try:
+        result.source_access_flags = scan_source_access(case_dir, trial_log_paths(out_dir))
+    except Exception as exc:  # noqa: BLE001
+        result.artifact_errors.append(f"source access scan: {type(exc).__name__}: {exc}")
+        return
+    if not result.source_access_flags:
+        return
+    first = result.source_access_flags[0]
+    message = (
+        f"agent inspected the bytecode of banned module {first['root']!r} "
+        f"({first['signal']}); see source_access_flags"
+    )
+    print(f"[cbrun] denylist violation: {message}", flush=True)
+    result.denylist_violation = message
+    result.reward = 0.0
+    result.error = message
 
 
 def _record_token_usage(out_dir: Path, result: TrialResult) -> None:

@@ -53,7 +53,8 @@ def _environment_notes(*, has_hardware: bool) -> str:
   `pip install`, `npm install`, or `cargo add`). General-purpose libraries and
   tools are allowed.
 * Do not use a runtime- or toolchain-bundled implementation of the same kind of
-  product as a dependency or an oracle.
+  product as a dependency or an oracle, and do not read, disassemble, or
+  decompile one.
 * Hidden acceptance tests are not in this container. Do not look for them and
   do not special-case any test.
 

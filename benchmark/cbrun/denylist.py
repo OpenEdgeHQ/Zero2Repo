@@ -870,6 +870,7 @@ _STRIP_SCRIPT = r'''#!/usr/bin/env python3
 """Remove image artefacts whose names hash to the denylist set."""
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -880,6 +881,14 @@ import sys
 from pathlib import Path
 
 HASHES = Path(os.environ.get("CBRUN_DENYLIST_HASHES", "/opt/cbrun/denylist.hashes"))
+# Directories where packages ship private copies of their dependencies.
+VENDOR_DIRS = {"_vendor", "vendor", "_vendored", "_vendored_packages", "extern"}
+# Interpreters whose packages cannot be uninstalled (agent CLIs, extra envs).
+EXTRA_PYTHON_GLOBS = (
+    "/opt/conda/envs/*/bin/python3",
+    "/root/.local/share/uv/python/*/bin/python3",
+    "/root/.local/share/uv/tools/*/bin/python3",
+)
 
 
 def _norm(name: str) -> str:
@@ -977,6 +986,108 @@ def _scan_dir(path: Path) -> None:
         _maybe_rm(child)
 
 
+def _all_pythons() -> list[str]:
+    found = _pythons()
+    seen = {os.path.realpath(os.path.dirname(p)) for p in found}
+    for pattern in EXTRA_PYTHON_GLOBS:
+        for cand in sorted(glob.glob(pattern)):
+            # uv tool venvs symlink python3 to a shared base; keep both, they
+            # report different site-packages.
+            key = os.path.realpath(os.path.dirname(cand))
+            if os.path.isfile(cand) and key not in seen:
+                seen.add(key)
+                found.append(cand)
+    return found
+
+
+def _module_name(path: Path) -> str | None:
+    if path.is_symlink():
+        return None
+    if path.is_dir():
+        return path.name
+    if path.suffix == ".py":
+        return path.stem
+    return None
+
+
+_SOURCELESS_DONE: set[str] = set()
+
+
+def _sourceless(py: str, path: Path) -> None:
+    """Keep *path* importable by *py* but drop its readable source.
+
+    Stdlib modules, vendored copies and agent-runtime dependencies are still
+    imported by the toolchain, so they are compiled to legacy ``.pyc`` files
+    next to the source and the ``.py`` files are removed.
+    """
+    key = os.path.realpath(path)
+    if key in _SOURCELESS_DONE:
+        return
+    _SOURCELESS_DONE.add(key)
+    sources = [path] if path.is_file() else sorted(path.rglob("*.py"))
+    if not sources:
+        return
+    subprocess.run(
+        [py, "-m", "compileall", "-q", "-b", "-f", str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    kept = 0
+    for src in sources:
+        if src.with_suffix(".pyc").is_file():
+            src.unlink(missing_ok=True)
+        else:
+            kept += 1
+    if path.is_file():
+        for cached in path.parent.glob(f"__pycache__/{path.stem}.*.pyc"):
+            cached.unlink(missing_ok=True)
+    else:
+        for cache in sorted(path.rglob("__pycache__"), reverse=True):
+            shutil.rmtree(cache, ignore_errors=True)
+    note = f" ({kept} kept: compile failed)" if kept else ""
+    print(f"[cbrun] sourceless {_digest(path.name)[:8]}{note}", flush=True)
+
+
+def _sourceless_banned_children(py: str, parent: Path) -> None:
+    if not parent.is_dir():
+        return
+    try:
+        children = sorted(parent.iterdir())
+    except OSError:
+        return
+    for child in children:
+        name = _module_name(child)
+        if name and _banned(name):
+            _sourceless(py, child)
+
+
+def _sourceless_pass() -> None:
+    """Strip source from banned modules that must stay importable."""
+    for py in _all_pythons():
+        info = _run_json(
+            [
+                py,
+                "-c",
+                "import json, site, sysconfig; "
+                "print(json.dumps({'stdlib': sysconfig.get_path('stdlib'), "
+                "'sites': list(site.getsitepackages())}))",
+            ]
+        )
+        if not isinstance(info, dict):
+            continue
+        if info.get("stdlib"):
+            _sourceless_banned_children(py, Path(str(info["stdlib"])))
+        for site_dir in info.get("sites") or []:
+            root = Path(str(site_dir))
+            # Anything still here after uninstall is needed by an agent CLI.
+            _sourceless_banned_children(py, root)
+            for dirpath, dirnames, _files in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                if os.path.basename(dirpath) in VENDOR_DIRS:
+                    _sourceless_banned_children(py, Path(dirpath))
+
+
 def main() -> int:
     if not BAN:
         return 0
@@ -1043,6 +1154,8 @@ def main() -> int:
             scan_roots.append(Path(raw.strip()))
     for root in scan_roots:
         _scan_dir(root)
+
+    _sourceless_pass()
 
     npm = shutil.which("npm")
     if npm:
