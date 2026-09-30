@@ -342,8 +342,11 @@ def _resolve_env(
                 f"got {raw_timeout!r}"
             )
         out["LLM_TIMEOUT"] = raw_timeout
-        for key in ("LLM_MODEL", "OPENHANDS_SUPPRESS_BANNER", "LLM_TIMEOUT"):
-            if key not in keys:
+        effort = (environ.get("LLM_REASONING_EFFORT") or "").strip()
+        if effort:
+            out["LLM_REASONING_EFFORT"] = effort
+        for key in ("LLM_MODEL", "OPENHANDS_SUPPRESS_BANNER", "LLM_TIMEOUT", "LLM_REASONING_EFFORT"):
+            if key not in keys and key in out:
                 keys.append(key)
     if spec.run_as == "nonroot":
         home = _home_for(spec)
