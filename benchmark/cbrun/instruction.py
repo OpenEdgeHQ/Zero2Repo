@@ -53,8 +53,17 @@ def _environment_notes(*, has_hardware: bool) -> str:
   `pip install`, `npm install`, or `cargo add`). General-purpose libraries and
   tools are allowed.
 * Do not use a runtime- or toolchain-bundled implementation of the same kind of
-  product as a dependency or an oracle, and do not read, disassemble, or
-  decompile one.
+  product as a dependency or an oracle, and do not read, copy, disassemble, or
+  decompile one. This covers every copy already in this environment: standard
+  library modules, packages vendored inside other tools, and packages the
+  agent tooling itself installed. Package managers and build tools may load
+  them for their own work.
+* File access to such implementations is monitored for the whole session, by
+  file opens, whatever tool or language performs them. Do not interfere with
+  the monitoring: do not stop or pause its processes, change or remove its
+  files, or hide or disguise an access.
+* A first violation stops your session; you are told what was observed and
+  get one more session to continue. A second violation fails the attempt.
 * Hidden acceptance tests are not in this container. Do not look for them and
   do not special-case any test.
 

@@ -60,7 +60,9 @@ class TrialResult:
     host_arch: str | None = None
     emulated: bool | None = None
     infra_signals: dict[str, int] = field(default_factory=dict)
-    source_access_flags: list[dict] = field(default_factory=list)
+    # Opens of banned-implementation files and monitor interference, per round.
+    access_events: list[dict] = field(default_factory=list)
+    access_rounds_stopped: int = 0
     run_valid: bool = True
     invalid_reason: str | None = None
     substrates_missing: list[str] = field(default_factory=list)

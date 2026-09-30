@@ -38,7 +38,8 @@ __all__ = [
     "parse_usage_text",
 ]
 
-AGENT_LOG_NAMES = ("agent.log", "agent_fix.log")
+# Solve rounds in order: the first, then fix rounds after a denylist finding.
+AGENT_LOG_NAMES = ("agent.log", "agent_fix.log", "agent_fix_2.log")
 USAGE_ARCHIVE_DIR = "usage"
 
 _BUCKETS = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens")

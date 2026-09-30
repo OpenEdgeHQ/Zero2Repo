@@ -229,6 +229,61 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
   wins `PATH`; a failed canary is a hard `RuntimeError`, never a silent pass.
   Hidden harnesses must resolve `node` through `PATH`; a hardcoded
   interpreter path bypasses the gate.
+* Solve-time access monitor. One invariant replaces per-technique checks:
+  while the agent solves, only allowlisted toolchain processes may open the
+  files of a banned implementation. Importing it as a dependency or oracle,
+  reading, copying, grepping, or disassembling it all open those files first.
+  Writing an implementation from memory is allowed and not detected.
+  * Protected files are found in the container by name hash (no plaintext
+    names in any shipped script): banned modules in every interpreter's
+    stdlib and site-packages, vendored copies (`_vendor/`, `vendor/`, ...),
+    and banned package directories in global and nested `node_modules`.
+    Nothing under `/app` is protected. Banned modules the toolchain still
+    imports stay as sourceless `.pyc` so plain reads remain useless.
+  * `access_monitor.py` (baked into the `:agent` image) watches every
+    protected file with inotify `IN_OPEN` and streams one JSON event per line
+    over `docker exec`; the host reads it live and keeps the record in
+    `access_monitor_<round>.jsonl`. It also sends a heartbeat and watches its
+    own hook files and socket.
+  * Attribution: every interpreter imports `cbrun_access_hook` from the end
+    of stdlib `encodings/__init__.py` (read from disk even under `-S`/`-I`, and
+    reached by venvs and pip's isolated build envs, unlike `.pth` or
+    `sitecustomize`). A PEP 578 audit hook reports its own opens of protected
+    files over a Unix socket; the monitor takes the sender pid from
+    `SCM_CREDENTIALS` and argv from `/proc`.
+  * The host (`cbrun/access_monitor.py`) matches each open with a report.
+    Allowlisted openers are `-m pip`/pip entry scripts, pip's
+    `__pip-runner__.py`, `pyproject_hooks` `_in_process.py`, `-m build`,
+    ensurepip, uv's build-backend subprocesses, and the OpenHands runtime.
+    Tools may also load a banned module for their own work (pytest reads
+    `pyproject.toml` with the stdlib parser): that open is excused when the
+    process entry is a tool (bin-dir script or installed package) and the
+    code that caused the open is stdlib or installed-package code. The
+    agent's own code (`/app`, `/tmp` scripts, `-c`, packages installed from a
+    local path per `direct_url.json`) never qualifies.
+    A report from any other process, or an open with no report within 3 s
+    (a non-Python tool, or Python without the hook), is an access event.
+    A lost heartbeat, a monitor exit, a forged report, or a changed hook file
+    is interference and counts the same.
+  * The first event stops the round (same stop path as the stall watchdog)
+    and the next round's instruction states what was observed and why it is
+    forbidden. A second event fails the trial (`denylist_violation`,
+    `reward=0`). The count of allowed warnings is `--denylist-fix-retries`.
+    `summary.json` records `access_events` and `access_rounds_stopped`.
+  * If the monitor cannot start (no Python, no inotify, hook not installed),
+    the trial errors before solving (`run_valid=false`); no round runs
+    unmonitored.
+  * Known limitations: single-file bundled CLIs (e.g. Claude Code's
+    `cli.js`) and wheels such as ensurepip's bundled pip are not file-level
+    artefacts; interpreters or packages fetched during the solve are not
+    protected (downloading is already forbidden); a process that rewrites its
+    own `/proc/<pid>/cmdline` and forges hook reports, or plants code in
+    toolchain paths, can evade attribution. Once a tool has loaded a banned
+    module in its own process, later code in that process (e.g. a test file
+    pytest collects) can use it without a new open; tests in `/app` are
+    still caught by the import scan and the judge-time ban. Setup code from
+    `/app` running under pip is excused here and caught by the `/app` import
+    scan.
 * `--enforce-denylist` is on by default. Missing file or empty ban lists
   fail before any container starts. `--no-enforce-denylist` skips the scan
   and `summary.json` records `denylist_enforced=false` so a skipped scan is
