@@ -75,10 +75,13 @@ HINT_YAW_STD = math.radians(5.0)
 MAG_YEAR = 2025.0
 MAG_VAR = (1.0, 1.0, 1.0)
 ABSURD_NORTH_ACC = (3.2, 0.0, -G_MPS2)
-# Residual well inside any plausible stillness magnitude bound: the spec states
-# that bounds exist (L180) but not their defaults. Matches the F03 biased-IMU levels.
-STILL_Z_RATE_RPS = math.radians(0.5)
-STILL_VERT_ACC = (0.0, 0.0, -(G_MPS2 + 0.10))
+# The spec leaves the default stillness magnitude bounds to the implementer
+# (L180), so the standstill test sets them through the public INS options
+# (L327) and keeps its residual inside them.
+STILL_GYR_BOUND_RPS = math.radians(5.0)
+STILL_ACC_BOUND_MPS2 = 0.5
+STILL_Z_RATE_RPS = math.radians(2.3)
+STILL_VERT_ACC = (0.0, 0.0, -(G_MPS2 + 0.35))
 # Observe quality-loss after the named 10 s dwell, not on the exact boundary sample.
 QUALITY_LOSS_S = EXIT_DWELL_S + 1.0
 # Long enough that a runtime 8–15 deg/s z-rate splits INS yaw-aid from free-integrating ARS.
@@ -240,7 +243,7 @@ static void print_snap(const nav_suite_t *s, long long t_us)
 
 static int read_cfg(double *lat, double *lon, double *h, int *auto_init,
                     int *chi2, int *zupt_off, int *unlimited, double *yaw_hint,
-                    double *yaw_std)
+                    double *yaw_std, float *still_gyr, float *still_acc)
 {
     char line[4096];
     char *tok[16];
@@ -248,8 +251,11 @@ static int read_cfg(double *lat, double *lon, double *h, int *auto_init,
         return fail_read("cfg");
     }
     int n = split_ws(line, tok, 16);
-    if (n != 9) {
+    if (n != 11) {
         return fail_read("cfg fields");
+    }
+    if (!parse_f(tok[9], still_gyr) || !parse_f(tok[10], still_acc)) {
+        return fail_read("cfg stillness");
     }
     float auto_f, chi2_f, zupt_f, unl_f;
     if (!parse_d(tok[0], lat) || !parse_d(tok[1], lon) || !parse_d(tok[2], h) ||
@@ -267,7 +273,8 @@ static int read_cfg(double *lat, double *lon, double *h, int *auto_init,
 
 static int init_suite(nav_suite_t *s, double lat, double lon, double h,
                       int auto_init, int chi2, int zupt_off, int unlimited,
-                      double yaw_hint, double yaw_std)
+                      double yaw_hint, double yaw_std, float still_gyr,
+                      float still_acc)
 {
     memset(s, 0, sizeof *s);
     ins_init_t init;
@@ -279,6 +286,8 @@ static int init_suite(nav_suite_t *s, double lat, double lon, double h,
     opt.auto_init = auto_init ? true : false;
     opt.chi2_disable = chi2 ? true : false;
     opt.auto_zupt_disable = zupt_off ? true : false;
+    opt.auto_zupt_static_gyr_rps = still_gyr;
+    opt.auto_zupt_static_acc_mps2 = still_acc;
     opt.allow_unlimited_deadreckoning = unlimited ? true : false;
     int rc = nav_suite_init(s, &init, &opt);
     printf("INIT rc=%d\n", rc);
@@ -413,14 +422,15 @@ static int run_nav(void)
 {
     double lat = 0.0, lon = 0.0, h = 0.0, yaw_hint = 0.0, yaw_std = 0.0;
     int auto_init = 1, chi2 = 0, zupt_off = 0, unlimited = 0;
+    float still_gyr = 0.0f, still_acc = 0.0f;
     int cfg = read_cfg(&lat, &lon, &h, &auto_init, &chi2, &zupt_off, &unlimited,
-                       &yaw_hint, &yaw_std);
+                       &yaw_hint, &yaw_std, &still_gyr, &still_acc);
     if (cfg != 0) {
         return cfg;
     }
     static nav_suite_t s;
     int rc = init_suite(&s, lat, lon, h, auto_init, chi2, zupt_off, unlimited,
-                        yaw_hint, yaw_std);
+                        yaw_hint, yaw_std, still_gyr, still_acc);
     if (rc != 0) {
         return 0;
     }
@@ -431,14 +441,15 @@ static int run_unused(void)
 {
     double lat = 0.0, lon = 0.0, h = 0.0, yaw_hint = 0.0, yaw_std = 0.0;
     int auto_init = 1, chi2 = 0, zupt_off = 0, unlimited = 0;
+    float still_gyr = 0.0f, still_acc = 0.0f;
     int cfg = read_cfg(&lat, &lon, &h, &auto_init, &chi2, &zupt_off, &unlimited,
-                       &yaw_hint, &yaw_std);
+                       &yaw_hint, &yaw_std, &still_gyr, &still_acc);
     if (cfg != 0) {
         return cfg;
     }
     static nav_suite_t s;
     int rc = init_suite(&s, lat, lon, h, auto_init, chi2, zupt_off, unlimited,
-                        yaw_hint, yaw_std);
+                        yaw_hint, yaw_std, still_gyr, still_acc);
     if (rc != 0) {
         return 0;
     }
@@ -555,8 +566,11 @@ def read_cfg():
     if not header:
         raise SystemExit("missing cfg")
     parts = header.split()
-    if len(parts) != 9:
+    if len(parts) != 11:
         raise SystemExit("cfg fields")
+    # Config has no public stillness-bound keywords; only the C driver sets them.
+    if float(parts[9]) or float(parts[10]):
+        raise SystemExit("stillness bounds are C-only")
     lat, lon, h = [float(x) for x in parts[0:3]]
     auto_init = int(float(parts[3]))
     chi2 = int(float(parts[4]))
@@ -698,6 +712,9 @@ class NavScenario:
     unlimited: bool = False
     yaw_hint: float = 0.0
     yaw_std: float = 0.0
+    # Public ins_options_t stillness magnitude bounds; 0 keeps the default.
+    auto_zupt_static_gyr_rps: float = 0.0
+    auto_zupt_static_acc_mps2: float = 0.0
     timeout: float = NAV_TIMEOUT
 
 
@@ -786,7 +803,8 @@ def encode_nav(scen: NavScenario) -> str:
         f"{_tok(scen.lat_deg)} {_tok(scen.lon_deg)} {_tok(scen.h_m)} "
         f"{int(scen.auto_init)} {int(scen.chi2_disable)} "
         f"{int(scen.auto_zupt_disable)} {int(scen.unlimited)} "
-        f"{_tok(scen.yaw_hint)} {_tok(scen.yaw_std)}"
+        f"{_tok(scen.yaw_hint)} {_tok(scen.yaw_std)} "
+        f"{_tok(scen.auto_zupt_static_gyr_rps)} {_tok(scen.auto_zupt_static_acc_mps2)}"
     )
     if scen.kind == "unused":
         return f"UNUSED\n{cfg}\n"

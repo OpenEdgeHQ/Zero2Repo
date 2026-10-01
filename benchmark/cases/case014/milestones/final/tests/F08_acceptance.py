@@ -53,6 +53,8 @@ from F08_helpers import (
     OUTAGE_3S,
     QUALITY_LOSS_S,
     SPLIT_YAW_S,
+    STILL_ACC_BOUND_MPS2,
+    STILL_GYR_BOUND_RPS,
     STILL_VERT_ACC,
     STILL_Z_RATE_RPS,
     ZERO_VEL,
@@ -1332,7 +1334,17 @@ def test_standstill_definition_from_ins_options_reaches_ars_and_baro():
     )
 
     def _last(disable: bool, epochs):
-        run = c_nav_run(site_nav(lat, lon, h, epochs, auto_zupt_disable=disable))
+        run = c_nav_run(
+            site_nav(
+                lat,
+                lon,
+                h,
+                epochs,
+                auto_zupt_disable=disable,
+                auto_zupt_static_gyr_rps=STILL_GYR_BOUND_RPS,
+                auto_zupt_static_acc_mps2=STILL_ACC_BOUND_MPS2,
+            )
+        )
         last = run.last()
         assert not last.ready, "standstill arm: INS was still ready"
         return last
@@ -1364,7 +1376,7 @@ def test_standstill_definition_from_ins_options_reaches_ars_and_baro():
     assert d_ahrs > math.radians(1.5), (
         "disabling INS standstill still held AHRS yaw against the residual z-rate"
     )
-    assert abs(h_rel - h_held) > 0.01, (
+    assert abs(h_rel - h_held) > 0.04, (
         "disabling INS standstill still held unified local height against the vertical residual"
     )
 
