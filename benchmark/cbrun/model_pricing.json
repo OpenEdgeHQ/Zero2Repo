@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-28",
+  "fetched_at": "2026-10-01",
   "currency": "USD",
   "unit": "per_1M_tokens",
   "notes": "Standard-tier list prices of the first-party endpoint on OpenRouter. Long-context surcharges (GPT-6 Astra above 272K prompt tokens, Grok 4.7 above 200K) apply per request and are not applied to per-trial totals.",
@@ -21,6 +21,15 @@
       "cache_write_1h_per_m": 8.0,
       "output_per_m": 20.0,
       "source_url": "https://openrouter.ai/anthropic/claude-opus-5.5"
+    },
+    "anthropic/claude-sonnet-5.5": {
+      "aliases": ["claude-sonnet-5.5", "claude-sonnet-5-5"],
+      "input_per_m": 2.0,
+      "cache_read_per_m": 0.2,
+      "cache_write_per_m": 2.5,
+      "cache_write_1h_per_m": 4.0,
+      "output_per_m": 10.0,
+      "source_url": "https://openrouter.ai/anthropic/claude-sonnet-5.5#providers"
     },
     "x-ai/grok-4.7": {
       "aliases": ["grok-4.7", "grok-4-7"],

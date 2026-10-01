@@ -491,6 +491,9 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
             "cat {instruction_quoted} | claude --print --verbose --output-format stream-json "
             "--permission-mode bypassPermissions "
             "--model {model_quoted} "
+            # Stream thinking summaries: a gateway that forwards nothing while the
+            # model thinks otherwise outlasts Claude Code's stream idle timeout.
+            "--thinking-display summarized "
             "2>&1 | stdbuf -oL tee {log_quoted}"
         ),
     ),
