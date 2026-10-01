@@ -1364,7 +1364,7 @@ def test_standstill_definition_from_ins_options_reaches_ars_and_baro():
     assert d_ahrs > math.radians(1.5), (
         "disabling INS standstill still held AHRS yaw against the residual z-rate"
     )
-    assert abs(h_rel - h_held) > 0.04, (
+    assert abs(h_rel - h_held) > 0.01, (
         "disabling INS standstill still held unified local height against the vertical residual"
     )
 

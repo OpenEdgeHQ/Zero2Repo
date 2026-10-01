@@ -75,9 +75,10 @@ HINT_YAW_STD = math.radians(5.0)
 MAG_YEAR = 2025.0
 MAG_VAR = (1.0, 1.0, 1.0)
 ABSURD_NORTH_ACC = (3.2, 0.0, -G_MPS2)
-# Gyro z-rate still inside the 5 deg/s stillness magnitude bound (L180 instrument).
-STILL_Z_RATE_RPS = math.radians(2.3)
-STILL_VERT_ACC = (0.0, 0.0, -(G_MPS2 + 0.35))
+# Residual well inside any plausible stillness magnitude bound: the spec states
+# that bounds exist (L180) but not their defaults. Matches the F03 biased-IMU levels.
+STILL_Z_RATE_RPS = math.radians(0.5)
+STILL_VERT_ACC = (0.0, 0.0, -(G_MPS2 + 0.10))
 # Observe quality-loss after the named 10 s dwell, not on the exact boundary sample.
 QUALITY_LOSS_S = EXIT_DWELL_S + 1.0
 # Long enough that a runtime 8–15 deg/s z-rate splits INS yaw-aid from free-integrating ARS.
