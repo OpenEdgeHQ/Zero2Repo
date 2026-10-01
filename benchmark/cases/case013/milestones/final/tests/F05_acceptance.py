@@ -814,7 +814,7 @@ def test_log_reuses_existing_today_heading_without_duplicating_it():
         root = seed_bundle(ws, rel)
         today = utc_today_iso()
         (root / "log.md").write_text(
-            f"# {SEED_LOG_DATE}\n\n- seed\n\n## {today}\n\n- already\n",
+            f"## {today}\n\n- already\n\n## {SEED_LOG_DATE}\n\n- seed\n",
             encoding="utf-8",
         )
         before = utc_today_iso()

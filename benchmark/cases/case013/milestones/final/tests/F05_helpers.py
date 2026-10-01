@@ -132,7 +132,7 @@ def seed_bundle(
     """
     root = write_bundle(ws, rel, concepts, agents=agents)
     (root / "log.md").write_text(
-        f"# {log_date}\n\n- seed\n",
+        f"## {log_date}\n\n- seed\n",
         encoding="utf-8",
     )
     print(f"[F05] seeded bundle {root} log_date={log_date!r}", flush=True)
