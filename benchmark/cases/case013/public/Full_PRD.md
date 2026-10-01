@@ -60,7 +60,7 @@ These closed sets are part of the product, not examples:
 - **agents subcommands:** lint, init, link, check.
 - **MCP tools:** membundle_search, membundle_show, membundle_create, membundle_update, membundle_relate, membundle_validate.
 - **Governance values:** constraint, hold, context.
-- **Status values the validator accepts:** draft, stable, deprecated. Status is compared exactly as written (unlike governance), so `Draft` is not accepted.
+- **Status values the validator accepts:** draft, stable, deprecated.
 - **MBG lint rules:** MBG-001 (ASCII-only lines), MBG-002 (RFC 2119 modal verbs on invariant bullets), MBG-003 (balanced parentheses on tool-like invocations), MBG-004 (Mermaid mentioned in Domain Codex / section 0), MBG-005 (working-memory token budget).
 - **MBG modal prefixes accepted at the start of an invariant bullet:** MUST, MUST NOT, NEVER, PREFER, ALWAYS, SHOULD, MAY, and a leading exclamation mark.
 - **Domain codex profiles for agents init:** software, research, legal, coaching, books. An unrecognized profile is treated as software.

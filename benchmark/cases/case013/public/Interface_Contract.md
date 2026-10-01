@@ -115,7 +115,7 @@ The public surface is a **command-line tool plus a stdio protocol server**. Ther
 
 **Governance values.** The closed set is `constraint`, `hold`, and `context`. If the file omits governance, identities under `convention` default to `constraint` and all other identities default to `context`. Declared values are compared case-insensitively and normalized to lowercase.
 
-**Status values.** The validator accepts `draft`, `stable`, and `deprecated`. Unlike governance, status values are compared exactly as written: any other spelling or capitalization, such as `Draft`, is not an accepted status.
+**Status values.** The validator accepts `draft`, `stable`, and `deprecated`.
 
 **Actor strings.** Two forms are accepted: a producer-slash-version form whose two sides are both non-empty and contain neither spaces nor slashes (the product itself uses `agent/cli` for the command line, `agent/mcp` for the Model Context Protocol server, and `agent/membundle-tool` when the caller supplies an empty actor); or a prefix-colon-id form that starts with a letter, then zero or more letters, digits, underscores, dots, or hyphens, then a colon, then a remainder with no spaces.
 
@@ -135,7 +135,7 @@ The public surface is a **command-line tool plus a stdio protocol server**. Ther
 
 **MEMBUNDLE Agent Memory delimiters.** The HTML comments `<!-- BEGIN MEMBUNDLE AGENT MEMORY -->` and `<!-- END MEMBUNDLE AGENT MEMORY -->` that bound the working-memory block inside `AGENTS.md`.
 
-**Log date headings.** Dated sections in `log.md` use ISO 8601 calendar headings of the form year-month-day (four-digit year, two-digit month, two-digit day), taken from UTC, with newer days listed before older days. A dated section heading is a level-2 (`##`) heading whose text is the date; a new date heading goes above the first existing dated heading, or at the top of the file when there is none.
+**Log date headings.** Dated sections in `log.md` use ISO 8601 calendar headings of the form year-month-day (four-digit year, two-digit month, two-digit day), taken from UTC, with newer days listed before older days.
 
 ### Global observables an implementer must reproduce
 
