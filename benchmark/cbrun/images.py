@@ -252,7 +252,13 @@ def ensure_agent_image(
         require_denylist(case_dir)
 
     deliverable = deliverable_image or deliverable_tag(case_id)
-    if not image_exists(deliverable) or (force and case_dir is not None):
+    # With the case at hand, always go through ensure_deliverable_image: it
+    # reuses the tag only while its staged docs and hidden tests still match.
+    if case_dir is not None and deliverable_image is None:
+        from .recipe_image import ensure_deliverable_image
+
+        deliverable = ensure_deliverable_image(case_dir, force=force)
+    elif not image_exists(deliverable) or (force and case_dir is not None):
         if case_dir is None:
             raise RuntimeError(
                 f"deliverable image not found: {deliverable}. Pass case_dir so "
