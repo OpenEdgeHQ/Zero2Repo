@@ -318,7 +318,9 @@ _MD_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _MD_FENCE_LINE = re.compile(r"^```.*$", re.MULTILINE)
 _MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _MD_BACKTICK = re.compile(r"`+")
-_MD_EMPHASIS = re.compile(r"[*_~]{1,3}")
+# An intraword underscore is not emphasis (CommonMark), so tool names such as
+# membundle_validate keep their underscore and stay matchable.
+_MD_EMPHASIS = re.compile(r"[*~]{1,3}|(?<![A-Za-z0-9])_{1,3}|_{1,3}(?![A-Za-z0-9])")
 _MD_HEADING = re.compile(r"^#{1,6}[ \t]*", re.MULTILINE)
 _MD_QUOTE = re.compile(r"^[ \t]*>+[ \t]?", re.MULTILINE)
 _MD_LIST = re.compile(r"^[ \t]*(?:[*+\-]|\d+[.)])[ \t]+", re.MULTILINE)
