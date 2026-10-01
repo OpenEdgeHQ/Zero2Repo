@@ -51,7 +51,7 @@ The public surface is a **command-line tool plus a stdio protocol server**. Ther
 ```
 
 - `<identity>` — required first positional concept identity.
-- `[path]` — optional second positional bundle path. Omit-path uses the default bundle path rule below. A named path is the write root: writes do not follow the nested-load redirect, but the existing concept is loaded from the named path under the named-load rule below.
+- `[path]` — optional second positional bundle path. Omit-path uses the default bundle path rule below. A named path is the write root: writes do not follow the nested-load redirect, but the existing concept is still loaded through it.
 - `--title`, `--desc`, `--body`, `--actor` — optional. Each is followed by one value token. `--desc` supplies the description; it is not spelled `description` as a command-line flag.
 - `--no-log` and `--no-index` — independent skip flags. Each takes no value token. `--no-log` skips the Update bullet in `log.md`. `--no-index` skips parent-index bookkeeping, leaving an existing parent listing un-updated.
 - `--json` — optional. Takes no value token. On `update` this is structured success output: structured success still rewrites the concept, the parent listing, and the Update bullet. It is not the structured inspect record of `show`.
@@ -74,7 +74,7 @@ The public surface is a **command-line tool plus a stdio protocol server**. Ther
 
 - `<source>` — required first positional source identity.
 - `<target>` — required second positional target identity.
-- `[path]` — optional third positional bundle path. Omit-path uses the default bundle path rule below. A named path is the write root: writes do not follow the nested-load redirect, but the existing concepts are loaded from the named path under the named-load rule below.
+- `[path]` — optional third positional bundle path. Omit-path uses the default bundle path rule below. A named path is the write root: writes do not follow the nested-load redirect, but the existing concepts are still loaded through it.
 - `--desc`, `--actor` — optional. Each is followed by one value token. `--desc` supplies relationship prose; it is not spelled `description` as a command-line flag.
 - `--json` — optional. Takes no value token. On `relate` this is structured success output: structured success still rewrites the source link and the Update bullet. It is not the structured inspect record of `show`.
 
