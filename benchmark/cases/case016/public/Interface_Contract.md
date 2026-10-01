@@ -10,7 +10,7 @@ The score is a triage heuristic on the writing in front of the detector, not a c
 
 Exact argv spellings of optional detector switches, per-finding label strings, per-hook JSON field names, and per-subcommand reply shapes belong with those symbols, not here.
 
-**Layout.** Callers do not import a Python module to reach the product. They spawn the host Python interpreter against `scripts/detect.py`, and they fire plugin hooks by spawning Node against the shipped files under `hooks/`.
+**Layout.** Callers do not import a Python module to reach the product. They spawn the host Python interpreter against `scripts/detect.py`, and they fire plugin hooks by spawning Node against the shipped files under `hooks/`. When a hook runs the detector, it finds the host Python interpreter by looking up `python3`, then `python`, then `py` on the `PATH` it was given, not by a fixed absolute path.
 
 ### Shape of the public surface
 

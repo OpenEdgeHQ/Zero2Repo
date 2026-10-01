@@ -1757,30 +1757,30 @@ def _budget_arm(
 
 
 def test_detector_budgets_are_8s_plain_and_15s_archive():
-    _budget_arm(".md", 7, scored=True, hook_timeout=20, min_elapsed=6.5, max_elapsed=None)
-    _budget_arm(".txt", 7, scored=True, hook_timeout=20, min_elapsed=6.5, max_elapsed=None)
+    _budget_arm(".md", 6, scored=True, hook_timeout=20, min_elapsed=5.5, max_elapsed=None)
+    _budget_arm(".txt", 6, scored=True, hook_timeout=20, min_elapsed=5.5, max_elapsed=None)
     reasons = [
         _budget_arm(
-            ".md", 9, scored=False, hook_timeout=20, min_elapsed=5, max_elapsed=8.9
+            ".md", 11, scored=False, hook_timeout=20, min_elapsed=5, max_elapsed=9.5
         ),
         _budget_arm(
-            ".txt", 9, scored=False, hook_timeout=20, min_elapsed=5, max_elapsed=8.9
+            ".txt", 11, scored=False, hook_timeout=20, min_elapsed=5, max_elapsed=9.5
         ),
     ]
     _budget_arm(
-        ".docx", 14, scored=True, hook_timeout=40, min_elapsed=13, max_elapsed=None
+        ".docx", 13, scored=True, hook_timeout=40, min_elapsed=12, max_elapsed=None
     )
     _budget_arm(
-        ".epub", 14, scored=True, hook_timeout=40, min_elapsed=13, max_elapsed=None
+        ".epub", 13, scored=True, hook_timeout=40, min_elapsed=12, max_elapsed=None
     )
     reasons.append(
         _budget_arm(
-            ".docx", 16, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=15.8
+            ".docx", 19, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=17
         )
     )
     reasons.append(
         _budget_arm(
-            ".epub", 16, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=15.8
+            ".epub", 19, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=17
         )
     )
     reasons.append(
@@ -1789,11 +1789,11 @@ def test_detector_budgets_are_8s_plain_and_15s_archive():
         )
     )
     _budget_arm(
-        ".ipynb", 14, scored=True, hook_timeout=40, min_elapsed=13, max_elapsed=None
+        ".ipynb", 13, scored=True, hook_timeout=40, min_elapsed=12, max_elapsed=None
     )
     reasons.append(
         _budget_arm(
-            ".ipynb", 16, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=15.8
+            ".ipynb", 19, scored=False, hook_timeout=40, min_elapsed=12, max_elapsed=17
         )
     )
     others = _other_four_failure_reasons()

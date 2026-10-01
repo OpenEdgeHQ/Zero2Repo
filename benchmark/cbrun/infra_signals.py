@@ -37,9 +37,14 @@ _COUNT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("retry_exhausted", re.compile(r"exceeded retry limit", re.I)),
     ("conn_refused", re.compile(r"ECONNREFUSED", re.I)),
+    # The CLI gave up on a server-side API failure (Claude Code stream-json).
+    (
+        "api_error",
+        re.compile(r'"terminal_reason"\s*:\s*"api_error"|"api_error_status"\s*:\s*5\d\d'),
+    ),
 )
 
-_TERMINATING = frozenset({"auth", "retry_exhausted", "conn_refused"})
+_TERMINATING = frozenset({"auth", "retry_exhausted", "conn_refused", "api_error"})
 _TAIL_LINES = 200
 # A final ``result`` with one of these stop reasons means the CLI exited while
 # the model's turn was still open (the response stream was cut off).
