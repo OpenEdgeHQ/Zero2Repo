@@ -1,14 +1,14 @@
 # feature: F01
 """Observation helpers for the detector-command report (FP-01).
 
-Every public observation goes through ``_harness.invoke``. Helpers locate
-score, band, confidence, and character-layer counts by structure and
-contrast, never by this checkout's metric key spellings.
+Every public observation goes through ``_harness.invoke``. Helpers read
+the report, error, usage, and switch forms the Interface Contract states
+for ``scripts/detect.py`` (``_metrics`` member names, ``<N>_<slug>`` finding
+keys, the ``error`` object, exit statuses, literal switch spellings).
 """
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 import socket
@@ -102,57 +102,6 @@ CATALOGUE_TITLES: dict[int, str] = {
     71: "degenerate repetition",
 }
 
-# Extra recognizers taken from the same PRD sentences that name the number
-# (L99 parentheticals, L108 constructable names). Not product key spellings.
-_CATALOGUE_ALIASES: dict[int, tuple[str, ...]] = {
-    3: ("promotional language", "imperative marketing"),
-    4: ("hyphenated cliché pairs", "hyphenated cliché", "hyphenated cliche"),
-    5: ("simple yet X cliché", "simple yet"),
-    13: ("article-title-as-proper-noun", "article-titles-as-proper-nouns"),
-    15: ("false range", "false ranges"),
-    16: ("superficial -ing tail clauses", "ing tail"),
-    17: (
-        "negative parallelism",
-        "tailing negation",
-        "tailing-negation",
-        "negative parallelisms and tailing negations",
-    ),
-    18: ("Not X, just Y", "No X, just Y", "not x just y", "not x just y framing"),
-    20: ("empty pivot phrase", "empty pivot phrases"),
-    21: ("outcome speculation tail", "outcome-speculation tails"),
-    22: ("persuasive authority tropes", "persuasive authority trope"),
-    26: ("concrete evidence", "concrete-evidence"),
-    27: ("compulsive intro hook", "compulsive intro hooks"),
-    31: ("signposting and announcements", "signposting"),
-    32: (
-        "cataloguing lead-in",
-        "cataloguing pivot",
-        "cataloguing lead-ins",
-        "definitional metaphor",
-    ),
-    33: ("inline-header vertical lists", "inline-header list", "inline-header"),
-    36: ("formulaic challenges sections", "faux-insight"),
-    37: ("transition cluster overuse", "colon reveal"),
-    38: ("compulsive conclusion phrases", "compulsive conclusion phrase"),
-    39: ("generic positive conclusion", "generic positive conclusions"),
-    41: ("mechanical sentence-length alternation", "mechanical alternation"),
-    47: ("chatbot artifacts", "chat residue"),
-    48: ("sycophantic tone", "sycophantic / servile tone"),
-    50: ("knowledge-cutoff disclaimer", "knowledge-cutoff disclaimers", "privacy filler"),
-    54: ("hedge stacking", "excessive hedging"),
-    55: ("contraction absence",),
-    58: ("em-dash overuse",),
-    60: ("curly quotation marks", "curly quotes"),
-    61: ("hyphen-for-en-dash in numeric ranges", "hyphen-for-en-dash"),
-    62: ("invisible / zero-width characters", "invisible character"),
-    63: ("placeholder / Mad-Libs text", "placeholder text"),
-    64: ("chatbot reference-markup leak",),
-    65: ("AI tracking params",),
-    66: ("homoglyph / mixed-script confusables", "mixed-script"),
-    67: ("non-standard spaces",),
-    68: ("trailing / stray whitespace", "trailing whitespace"),
-    69: ("canonical marketing-slop phrases", "canonical marketing-slop phrase"),
-}
 
 NO_DETECTOR: frozenset[int] = frozenset({7, 9, 28, 29, 43, 45, 49, 52, 53})
 WRITING_ADVICE: frozenset[int] = frozenset(
@@ -194,56 +143,70 @@ _STOP = frozenset(
     }
 )
 
-# Paths into a metrics object, bound by contrast (never hardcoded spellings).
-_PATHS: dict[str, tuple] = {}
-# Two-valued longer-than-window tokens, bound with the window-mark path.
-_WINDOW_TOKENS: dict[str, Any] = {}
-# Slots whose module-setup binding failed, with the reason. A test that reads
-# such a slot fails with that reason; a test that never reads it is unaffected.
-_BIND_FAILURES: dict[str, str] = {}
-# Members of one finding object, bound by a known-multiplicity contrast.
-_FINDING_KEYS: dict[str, Any] = {}
+# ---------------------------------------------------------------------------
+# Stated shell of the detector command (Interface Contract, scripts/detect.py)
+# ---------------------------------------------------------------------------
+
+METRICS_KEY = "_metrics"
+SCORE_KEY = "ai_tell_score"
+BAND_KEY = "ai_tell_band"
+CONFIDENCE_KEY = "confidence"
+REASON_KEY = "confidence_reason"
+SCANNED_KEY = "scanned_chars"
+TRUNCATED_KEY = "truncated"
+FLAGGED_KEY = "patterns_flagged"
+INVISIBLE_KEY = "invisible_chars"
+SPACE_KEY = "nonstandard_spaces"
+MIXED_KEY = "homoglyphs"
+INTERVAL_KEY = "score_ci"
+INTERVAL_NOTE_KEY = "score_ci_note"
+FINDING_KEY_RE = re.compile(r"^([1-9][0-9]*)_(.+)$")
+FINDING_LABEL = "label"
+FINDING_COUNT = "count"
+FINDING_SAMPLES = "samples"
+
+CLEANUP_FLAG = "--clean"
+INTERVAL_FLAG = "--ci"
+HELP_FLAG = "--help"
+HELP_SHORT = "-h"
+END_OF_OPTIONS = "--"
+USAGE_SYNOPSIS = "usage: detect.py [--clean] [--ci] [--] [FILE]"
+
+ERROR_KEY = "error"
+EMPTY_INPUT_ERROR = "empty input"
+UNREADABLE_ERROR_PREFIX = "cannot read input:"
+UNKNOWN_OPTION_WORDS = "unknown option"
+EXIT_EMPTY_INPUT = 1
+EXIT_UNREADABLE = 1
+EXIT_UNKNOWN_OPTION = 2
+
+# Stated member paths (kept for helpers in other features that address a
+# metric by path).
+_PATHS: dict[str, tuple] = {
+    "score": (SCORE_KEY,),
+    "band": (BAND_KEY,),
+    "confidence": (CONFIDENCE_KEY,),
+    "scanned": (SCANNED_KEY,),
+    "truncated": (TRUNCATED_KEY,),
+    "window_mark": (TRUNCATED_KEY,),
+    "invisible": (INVISIBLE_KEY,),
+    "space": (SPACE_KEY,),
+    "mixed": (MIXED_KEY,),
+}
 
 CORE_SLOTS: tuple[str, ...] = ("score", "band", "confidence", "scanned")
 
 
-def _clear_bind_failures(*slots: str) -> None:
-    for slot in slots:
-        _BIND_FAILURES.pop(slot, None)
-
-
-def _require_not_failed(*slots: str) -> None:
-    """Fail the calling test when a slot it reads could not be bound.
-
-    Raised inside the test body, so the test is reported as failed, never
-    as passed, skipped, or a module-wide setup error.
-    """
-    for slot in slots:
-        if slot in _BIND_FAILURES:
-            raise HarnessError(
-                f"{slot} could not be located at module setup: {_BIND_FAILURES[slot]}"
-            )
-
-
 @contextmanager
 def binding(*slots: str) -> Iterator[None]:
-    """Run one module-setup binding step for *slots*.
-
-    A failure is recorded against those slots (and their stale bindings are
-    dropped) instead of erroring every test in the module. Every helper that
-    reads a failed slot then raises, so each dependent test fails.
-    """
-    _clear_bind_failures(*slots)
+    """Former module-setup binding step. Members are stated by name now, so a
+    validation failure here is only logged; every reader checks its member
+    directly inside the test that reads it."""
     try:
         yield
-    except Exception as exc:  # noqa: BLE001 - recorded, re-raised per reader
-        reason = f"{type(exc).__name__}: {exc}"
-        for slot in slots:
-            _PATHS.pop(slot, None)
-            _BIND_FAILURES[slot] = reason
-        if "window_mark" in slots:
-            _WINDOW_TOKENS.clear()
-        print(f"[bind] {slots!r} not bound: {reason[:600]}", flush=True)
+    except Exception as exc:  # noqa: BLE001 - readers re-check per test
+        print(f"[bind] {slots!r} validation: {type(exc).__name__}: {str(exc)[:600]}", flush=True)
+
 
 
 # ---------------------------------------------------------------------------
@@ -384,60 +347,13 @@ STACKED_VOCAB_FIRE = "They delve tapestry pivotal showcase seamless in one line.
 
 
 # ---------------------------------------------------------------------------
-# Structure walking
+# Small text utilities
 # ---------------------------------------------------------------------------
-
-
-def _walk(obj: Any) -> Iterator[Any]:
-    yield obj
-    if isinstance(obj, Mapping):
-        for value in obj.values():
-            yield from _walk(value)
-    elif isinstance(obj, (list, tuple)):
-        for value in obj:
-            yield from _walk(value)
-
-
-def _int_paths(obj: Any, prefix: tuple = ()) -> Iterator[tuple[tuple, int]]:
-    if isinstance(obj, bool):
-        return
-    if isinstance(obj, int):
-        yield prefix, obj
-        return
-    if isinstance(obj, Mapping):
-        for key, value in obj.items():
-            yield from _int_paths(value, prefix + (key,))
-    elif isinstance(obj, (list, tuple)):
-        for index, value in enumerate(obj):
-            yield from _int_paths(value, prefix + (index,))
-
-
-def _str_paths(obj: Any, prefix: tuple = ()) -> Iterator[tuple[tuple, str]]:
-    if isinstance(obj, str):
-        yield prefix, obj
-        return
-    if isinstance(obj, Mapping):
-        for key, value in obj.items():
-            yield from _str_paths(value, prefix + (key,))
-    elif isinstance(obj, (list, tuple)):
-        for index, value in enumerate(obj):
-            yield from _str_paths(value, prefix + (index,))
-
-
-def _get_path(obj: Any, path: tuple) -> Any:
-    cur = obj
-    for part in path:
-        try:
-            cur = cur[part]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise HarnessError(f"metrics path {path!r} missing: {exc}") from exc
-    return cur
 
 
 def _norm(text: str) -> str:
     text = text.lower()
     text = re.sub(r"\([^)]*\)", " ", text)
-    text = text.replace("'", "'").replace("'", "'")
     text = re.sub(r'["“”/_,:;!.?()\[\]{}]', " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -451,268 +367,117 @@ def _tokens(text: str) -> tuple[str, ...]:
     )
 
 
-def catalogue_of(label: str) -> int | None:
-    """Map a finding label to a catalogue number, or None if unrecognized."""
-    if not isinstance(label, str) or not label.strip():
-        return None
-    nlab = _norm(label)
-    ltoks = set(_tokens(label))
-    hits: list[int] = []
-    for number, title in CATALOGUE_TITLES.items():
-        names = (title,) + _CATALOGUE_ALIASES.get(number, ())
-        for name in names:
-            nname = _norm(name)
-            if not nname:
-                continue
-            if nlab == nname or nname in nlab or nlab in nname:
-                hits.append(number)
-                break
-            ntoks = set(_tokens(name))
-            if not ntoks or not ltoks:
-                continue
-            # Distinctive overlap: the shorter token set is covered by the longer.
-            shorter, longer = (ntoks, ltoks) if len(ntoks) <= len(ltoks) else (ltoks, ntoks)
-            if shorter <= longer and any(len(t) >= 4 for t in shorter):
-                hits.append(number)
-                break
-    uniq = list(dict.fromkeys(hits))
-    if len(uniq) == 1:
-        return uniq[0]
-    if not uniq:
-        return None
-    # Prefer the longest-title match when several numbers overlap.
-    uniq.sort(key=lambda n: len(_norm(CATALOGUE_TITLES[n])), reverse=True)
-    return uniq[0]
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 # ---------------------------------------------------------------------------
-# Findings
+# Findings (Contract: one top-level member per fired finding, key
+# ``<N>_<slug>``; value {label, count, samples})
 # ---------------------------------------------------------------------------
+
+
+def _check(cond: bool, message: str) -> None:
+    """Reader failure: the stated member is missing or not of its stated type."""
+    if not cond:
+        raise HarnessError(message)
+
+
+def finding_number(key: Any) -> int:
+    """Catalogue number named by a finding member's key (``<N>_<slug>``)."""
+    match = FINDING_KEY_RE.match(str(key))
+    _check(match is not None, (
+        f"report member {key!r} is neither {METRICS_KEY!r} nor a finding key "
+        f"of the form <N>_<slug>"
+    ))
+    return int(match.group(1))
 
 
 def _finding_entries(findings: Any) -> list[Any]:
     if isinstance(findings, Mapping):
         return list(findings.values())
-    if isinstance(findings, list):
-        return list(findings)
-    raise HarnessError(
-        f"findings are {type(findings).__name__}, not an object or list"
-    )
+    raise HarnessError(f"findings are {type(findings).__name__}, not an object")
 
 
-def _finding_label(item: Any) -> str:
-    if not isinstance(item, Mapping):
-        raise HarnessError(f"finding is {type(item).__name__}, not an object")
-    strings = [v for v in item.values() if isinstance(v, str)]
-    mapped = [s for s in strings if catalogue_of(s) is not None]
-    if len(mapped) == 1:
-        label = mapped[0]
-    elif len(strings) == 1:
-        label = strings[0]
-    elif mapped:
-        label = mapped[0]
-    else:
-        raise HarnessError(f"finding has no human-readable label: {item!r}")
-    if catalogue_of(label) is None:
-        raise HarnessError(
-            f"unrecognized finding label {label!r}; not a catalogue title"
-        )
-    return label
-
-
-def _positive_int_keys(item: Mapping[str, Any]) -> dict[Any, int]:
+def _as_finding(item: Any, key: Any = None) -> dict[str, Any]:
+    """Read one finding value by its stated member names."""
+    if isinstance(item, Mapping) and "raw" in item and "hit" in item:
+        return dict(item)
+    _check(isinstance(item, Mapping), f"finding is {type(item).__name__}, not an object")
+    label = item.get(FINDING_LABEL)
+    _check(isinstance(label, str) and bool(label.strip()), (
+        f"finding {key!r} has no non-empty {FINDING_LABEL!r} string: {item!r}"
+    ))
+    count = item.get(FINDING_COUNT)
+    _check(_is_int(count) and count >= 1, (
+        f"finding {key!r} {FINDING_COUNT!r} is not a positive integer: {item!r}"
+    ))
+    samples = item.get(FINDING_SAMPLES)
+    _check(isinstance(samples, list) and all(isinstance(s, str) for s in samples), (
+        f"finding {key!r} {FINDING_SAMPLES!r} is not an array of strings: {item!r}"
+    ))
+    _check(len(samples) <= 3, (
+        f"finding {key!r} sample list length {len(samples)} exceeds the cap of 3"
+    ))
+    number = finding_number(key) if key is not None else None
     return {
-        key: value
-        for key, value in item.items()
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 1
+        "number": number,
+        "key": key,
+        "label": label,
+        "hit": count,
+        "samples": list(samples),
+        "raw": item,
     }
-
-
-def _str_list_keys(item: Mapping[str, Any]) -> dict[Any, list]:
-    return {
-        key: value
-        for key, value in item.items()
-        if isinstance(value, list) and all(isinstance(x, str) for x in value)
-    }
-
-
-# L101: “delve” plus “tapestry” are two hits of AI vocabulary (1). L108: the
-# five-word stack fires the same family. More listed words, more hits.
-_HIT_ARM_FEW = "They delve into the tapestry of the old parish records."
-_HIT_ARM_MANY = (
-    "They delve into the tapestry, a pivotal showcase of seamless parish records."
-)
-_HIT_ARM_FEW_HITS = 2
-_HIT_ARM_MANY_HITS = 5
-
-
-def _vocabulary_finding(text: str) -> Mapping[str, Any]:
-    result = scan_stdin(text)
-    if result.returncode != 0:
-        raise HarnessError(
-            f"hit-count probe failed: exit={result.returncode} "
-            f"stderr={result.stderr_text[:300]!r}"
-        )
-    report = structured_report(result)
-    metrics = metrics_from_report(report)
-    matched = [
-        item
-        for item in _finding_entries(findings_from_report(report, metrics))
-        if isinstance(item, Mapping) and catalogue_of(_finding_label(item)) == 1
-    ]
-    if len(matched) != 1:
-        raise HarnessError(
-            f"hit-count probe did not fire exactly one AI-vocabulary finding; "
-            f"text={text!r} matched={matched!r}"
-        )
-    return matched[0]
-
-
-def _bind_finding_keys() -> None:
-    """Locate the hit-count member (and, if needed, the sample list) of a finding.
-
-    Two AI-vocabulary probes differ only in how many listed words they hold.
-    The hit count is the integer member that grows with that multiplicity; a
-    catalogue number, a weight, or any other constant member does not.
-    Encoding stays open: no member name is required.
-    """
-    if "hit" in _FINDING_KEYS:
-        return
-    if "error" in _FINDING_KEYS:
-        raise HarnessError(_FINDING_KEYS["error"])
-    try:
-        few = _vocabulary_finding(_HIT_ARM_FEW)
-        many = _vocabulary_finding(_HIT_ARM_MANY)
-        few_ints = _positive_int_keys(few)
-        many_ints = _positive_int_keys(many)
-        grew = [k for k, v in many_ints.items() if k in few_ints and v > few_ints[k]]
-        if len(grew) > 1:
-            exact = [
-                k
-                for k in grew
-                if few_ints[k] == _HIT_ARM_FEW_HITS and many_ints[k] == _HIT_ARM_MANY_HITS
-            ]
-            if exact:
-                grew = exact
-        if len(grew) > 1 and len({(few_ints[k], many_ints[k]) for k in grew}) == 1:
-            grew = grew[:1]
-        if len(grew) != 1:
-            raise HarnessError(
-                "cannot locate the finding hit count by contrast: members that grew "
-                f"from {_HIT_ARM_FEW_HITS} to {_HIT_ARM_MANY_HITS} listed words: "
-                f"{grew!r}; few={few!r} many={many!r}"
-            )
-        few_lists = _str_list_keys(few)
-        many_lists = _str_list_keys(many)
-        drawn = [
-            k
-            for k in many_lists
-            if k in few_lists
-            and many_lists[k] != few_lists[k]
-            and all(
-                set(_tokens(s)) & set(_tokens(_HIT_ARM_FEW)) for s in few_lists[k] if s.strip()
-            )
-            and all(
-                set(_tokens(s)) & set(_tokens(_HIT_ARM_MANY)) for s in many_lists[k] if s.strip()
-            )
-        ]
-        _FINDING_KEYS["hit"] = grew[0]
-        if len(drawn) == 1:
-            _FINDING_KEYS["samples"] = drawn[0]
-        print(
-            f"[F01] bound finding hit member={grew[0]!r} "
-            f"sample member={_FINDING_KEYS.get('samples')!r}",
-            flush=True,
-        )
-    except HarnessError as exc:
-        _FINDING_KEYS["error"] = str(exc)
-        raise
-
-
-def _as_finding(item: Any) -> dict[str, Any]:
-    label = _finding_label(item)
-    str_lists = _str_list_keys(item)
-    if len(str_lists) > 1:
-        _bind_finding_keys()
-        key = _FINDING_KEYS.get("samples")
-        if key is None or key not in str_lists:
-            raise HarnessError(
-                f"finding has several string lists and none is bound as samples: {item!r}"
-            )
-        samples = str_lists[key]
-    else:
-        samples = next(iter(str_lists.values())) if str_lists else []
-    if len(samples) > 3:
-        raise HarnessError(
-            f"sample list length {len(samples)} exceeds the cap of 3: {samples!r}"
-        )
-    positive = _positive_int_keys(item)
-    if not positive:
-        raise HarnessError(f"finding has no positive hit count: {item!r}")
-    # The hit count is always the member bound by the multiplicity contrast,
-    # so a lone catalogue number or weight is never read as a hit count.
-    _bind_finding_keys()
-    key = _FINDING_KEYS["hit"]
-    if key not in positive:
-        raise HarnessError(
-            f"finding has no positive hit count at the bound member {key!r}: {item!r}"
-        )
-    hit = positive[key]
-    return {"label": label, "hit": hit, "samples": samples, "raw": item}
 
 
 def hit_count(finding: Any) -> int:
-    if isinstance(finding, Mapping) and "hit" in finding and "raw" in finding:
-        return int(finding["hit"])
     return int(_as_finding(finding)["hit"])
 
 
 def sample_list(finding: Any) -> list[str]:
-    if isinstance(finding, Mapping) and "samples" in finding and "raw" in finding:
-        samples = finding["samples"]
-        if not isinstance(samples, list) or len(samples) > 3:
-            raise HarnessError(f"bad sample list: {samples!r}")
-        return list(samples)
     return list(_as_finding(finding)["samples"])
 
 
+def _strip_cut_marks(sample: str) -> str:
+    out = sample.strip()
+    for mark in ("...", "…"):
+        if out.startswith(mark):
+            out = out[len(mark):]
+        if out.endswith(mark):
+            out = out[: -len(mark)]
+    return out.strip()
+
+
 def samples_drawn_from(samples: Sequence[str], text: str) -> None:
-    """Each non-empty sample shares a content token with *text* after stripping
-    ellipsis/punctuation. Not a contiguous-substring pin. An empty list is
-    within the 'up to three' cap and is not a failure.
-    """
-    if not samples:
-        return
-    folded_tokens = set(_tokens(text))
+    """Contract: an AI-vocabulary (1) sample is a contiguous excerpt of the
+    scanned text; line breaks may appear as spaces, and either end may carry
+    a ``...`` / ``…`` cut mark. An empty list is within "up to three"."""
+    flat = re.sub(r"\s+", " ", text)
     for sample in samples:
         assert isinstance(sample, str) and sample.strip(), f"sample is empty: {sample!r}"
-        cleaned = sample.replace("\u2026", " ").replace("...", " ")
-        toks = _tokens(cleaned)
-        assert toks, (
-            f"sample has no content tokens after stripping ellipsis/punctuation: {sample!r}"
+        core = re.sub(r"\s+", " ", _strip_cut_marks(sample))
+        assert core, f"sample has no text besides cut marks: {sample!r}"
+        assert core in flat, (
+            f"sample {sample!r} is not an excerpt of the scanned text"
         )
-        assert any(tok in folded_tokens for tok in toks), (
-            f"sample {sample!r} has no content token in the scanned text"
-        )
-
-
-def catalogue_numbers(findings: Any) -> set[int]:
-    numbers: set[int] = set()
-    for item in _finding_entries(findings):
-        rec = _as_finding(item)
-        number = catalogue_of(rec["label"])
-        if number is None:
-            raise HarnessError(f"unrecognized finding label {rec['label']!r}")
-        numbers.add(number)
-    return numbers
 
 
 def _records(findings: Any) -> list[dict[str, Any]]:
-    return [_as_finding(item) for item in _finding_entries(findings)]
+    if not isinstance(findings, Mapping):
+        raise HarnessError(f"findings are {type(findings).__name__}, not an object")
+    return [_as_finding(value, key) for key, value in findings.items()]
+
+
+def catalogue_numbers(findings: Any) -> set[int]:
+    return {rec["number"] for rec in _records(findings)}
 
 
 def require_finding(findings: Any, number: int) -> dict[str, Any]:
-    matched = [rec for rec in _records(findings) if catalogue_of(rec["label"]) == number]
+    matched = [rec for rec in _records(findings) if rec["number"] == number]
     assert matched, (
         f"catalogue {number} ({CATALOGUE_TITLES[number]}) did not fire; "
         f"present={sorted(catalogue_numbers(findings))}"
@@ -721,135 +486,81 @@ def require_finding(findings: Any, number: int) -> dict[str, Any]:
 
 
 def require_absent_finding(findings: Any, number: int) -> None:
-    matched = [rec for rec in _records(findings) if catalogue_of(rec["label"]) == number]
+    matched = [rec for rec in _records(findings) if rec["number"] == number]
     assert not matched, (
         f"catalogue {number} ({CATALOGUE_TITLES[number]}) fired unexpectedly: "
-        f"{matched[0]['label']!r}"
+        f"{matched[0]['key']!r}"
     )
 
 
+# Contract: catalogue 17's two forms are reported as their own members.
+PARALLELISM_17_KEY = "17_negative_parallelism"
+TAILING_17_KEY = "17_tailing_negation"
+
+
+def require_member(findings: Any, key: str) -> dict[str, Any]:
+    """The finding member with this stated key is present."""
+    if not isinstance(findings, Mapping):
+        raise HarnessError(f"findings are {type(findings).__name__}, not an object")
+    assert key in findings, f"finding member {key!r} absent; present={sorted(findings)}"
+    return _as_finding(findings[key], key)
+
+
+def require_absent_member(findings: Any, key: str) -> None:
+    """The finding member with this stated key is absent."""
+    if not isinstance(findings, Mapping):
+        raise HarnessError(f"findings are {type(findings).__name__}, not an object")
+    assert key not in findings, f"finding member {key!r} present unexpectedly"
+
+
 def finding_records(findings: Any) -> list[dict[str, Any]]:
-    """Public wrapper over finding records (label / hit / samples)."""
+    """Finding records: number (from the key), label, hit (count), samples."""
     return _records(findings)
 
 
-def is_parallelism_form_17(label: str) -> bool:
-    """True when *label* is the parallelism form of catalogue 17 (L99).
-
-    L99 names that form as negative parallelism (writing advice). The
-    tailing-negation form is a distinct label. A combined title that
-    names both forms is not this form alone. Do not pin a sentence.
-    """
-    nlab = _norm(label)
-    if not nlab:
-        return False
-    if "tailing" in nlab:
-        return False
-    if "negative parallelism" in nlab:
-        return True
-    if "negative parallelisms" in nlab and "tailing" not in nlab:
-        return True
-    return False
-
-
 def score_moving_numbers(findings: Any) -> set[int]:
-    """Catalogue numbers outside the twelve writing-advice numbers (L99).
-
-    Catalogue 17 is not classified by label wording. Its two forms are
-    told apart by which named input produced the finding and by whether
-    the score moved.
-    """
+    """Catalogue numbers outside the twelve writing-advice numbers."""
     return catalogue_numbers(findings) - WRITING_ADVICE
 
 
 # ---------------------------------------------------------------------------
-# Metrics: locate by type, range, and contrast
+# Metrics (Contract: ``_metrics`` members by name)
 # ---------------------------------------------------------------------------
 
 
+def _member(metrics: Mapping[str, Any], name: str) -> Any:
+    _check(isinstance(metrics, Mapping), f"metrics are not an object: {metrics!r}")
+    _check(name in metrics, f"{METRICS_KEY} has no member {name!r}")
+    return metrics[name]
+
+
 def band_of(metrics: Mapping[str, Any]) -> str:
-    _require_not_failed("band")
-    path = _PATHS.get("band")
-    if path is not None:
-        value = _get_path(metrics, path)
-        if value not in BAND_RANGES:
-            raise HarnessError(f"bound band path is not a band name: {value!r}")
-        return str(value)
-    found = [
-        value
-        for value in _walk(metrics)
-        if isinstance(value, str) and value in BAND_RANGES
-    ]
-    uniq = list(dict.fromkeys(found))
-    if len(uniq) != 1:
-        raise HarnessError(f"band name not unique in metrics: {uniq!r}")
-    return uniq[0]
+    value = _member(metrics, BAND_KEY)
+    _check(value in BAND_RANGES, f"{BAND_KEY} is not a band name: {value!r}")
+    return str(value)
 
 
 def confidence_of(metrics: Mapping[str, Any]) -> str:
-    _require_not_failed("confidence")
-    path = _PATHS.get("confidence")
-    if path is not None:
-        value = _get_path(metrics, path)
-        if value not in CONFIDENCE_LABELS:
-            raise HarnessError(f"bound confidence path is not a label: {value!r}")
-        return str(value)
-    found = [
-        value
-        for value in _walk(metrics)
-        if isinstance(value, str) and value in CONFIDENCE_LABELS
-    ]
-    uniq = list(dict.fromkeys(found))
-    if len(uniq) != 1:
-        raise HarnessError(f"confidence label not unique in metrics: {uniq!r}")
-    return uniq[0]
+    value = _member(metrics, CONFIDENCE_KEY)
+    _check(value in CONFIDENCE_LABELS, f"{CONFIDENCE_KEY} is not a confidence word: {value!r}")
+    return str(value)
 
 
 def reason_of(metrics: Mapping[str, Any]) -> str:
-    """Readable reason when confidence is not high. Do not pin wording."""
+    """``confidence_reason``: non-empty when confidence is not high (wording free)."""
     conf = confidence_of(metrics)
-    strings = [
-        value
-        for value in _walk(metrics)
-        if isinstance(value, str)
-        and value not in BAND_RANGES
-        and value not in CONFIDENCE_LABELS
-        and value.strip()
-    ]
-    if conf == "high":
-        return strings[0] if strings else ""
-    nonempty = [s for s in strings if s.strip()]
-    if not nonempty:
-        raise HarnessError(
-            f"confidence {conf!r} has no readable reason in metrics"
-        )
-    return nonempty[0]
+    value = _member(metrics, REASON_KEY)
+    _check(isinstance(value, str), f"{REASON_KEY} is not a string: {value!r}")
+    if conf != "high":
+        _check(value.strip(), f"confidence {conf!r} has an empty {REASON_KEY}")
+    return value
 
 
 def scanned_of(metrics: Mapping[str, Any], *, chars: int | None = None) -> int:
-    _require_not_failed("scanned")
-    path = _PATHS.get("scanned")
-    if path is not None:
-        value = _get_path(metrics, path)
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise HarnessError(f"bound scanned path is not an integer: {value!r}")
-        if value > SCAN_CAP:
-            raise HarnessError(f"scanned {value} exceeds the 262,144 cap")
-        return value
-    if chars is not None:
-        expected = min(chars, SCAN_CAP)
-        matches = [v for _, v in _int_paths(metrics) if v == expected]
-        if not matches:
-            raise HarnessError(
-                f"metrics have no scanned count equal to {expected}"
-            )
-        return expected
-    capped = [v for _, v in _int_paths(metrics) if v == SCAN_CAP]
-    if capped:
-        return SCAN_CAP
-    raise HarnessError(
-        "cannot locate scanned count without an input length or a bound path"
-    )
+    value = _member(metrics, SCANNED_KEY)
+    _check(_is_int(value), f"{SCANNED_KEY} is not an integer: {value!r}")
+    _check(0 <= value <= SCAN_CAP, f"{SCANNED_KEY} {value} is outside 0..{SCAN_CAP}")
+    return value
 
 
 def score_of(
@@ -857,50 +568,20 @@ def score_of(
     *,
     findings: Any | None = None,
 ) -> int:
-    _require_not_failed("score")
-    path = _PATHS.get("score")
-    if path is not None:
-        value = _get_path(metrics, path)
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise HarnessError(f"bound score path is not an integer: {value!r}")
-        if not 0 <= value <= 100:
-            raise HarnessError(f"score {value} is outside 0–100")
-        return value
-    band = band_of(metrics)
-    lo, hi = BAND_RANGES[band]
-    excluded: set[int] = set()
-    if findings is not None:
-        excluded.add(len(_finding_entries(findings)))
-        for rec in _records(findings):
-            excluded.add(rec["hit"])
-    candidates = []
-    for _, value in _int_paths(metrics):
-        if lo <= value <= hi and value not in excluded:
-            candidates.append(value)
-    uniq = set(candidates)
-    if len(uniq) == 1:
-        return next(iter(uniq))
-    if not uniq and findings is not None:
-        # Score may equal the finding count (both zero on a clean document).
-        retry = [
-            v for _, v in _int_paths(metrics) if lo <= v <= hi
-        ]
-        if set(retry) == {len(_finding_entries(findings))}:
-            return len(_finding_entries(findings))
-    raise HarnessError(
-        f"cannot uniquely identify the 0–100 score in band {band!r}; "
-        f"candidates={sorted(uniq)}"
-    )
+    value = _member(metrics, SCORE_KEY)
+    _check(_is_int(value), f"{SCORE_KEY} is not an integer: {value!r}")
+    _check(0 <= value <= 100, f"{SCORE_KEY} {value} is outside 0-100")
+    return value
 
 
 def finding_count_of(metrics: Mapping[str, Any], findings: Any) -> int:
-    n = len(_finding_entries(findings))
-    matches = [v for _, v in _int_paths(metrics) if v == n]
-    if not matches:
-        raise HarnessError(
-            f"metrics have no fired-finding count equal to {n}"
-        )
-    return n
+    value = _member(metrics, FLAGGED_KEY)
+    _check(_is_int(value), f"{FLAGGED_KEY} is not an integer: {value!r}")
+    assert value == len(_finding_entries(findings)), (
+        f"{FLAGGED_KEY}={value} but the report has "
+        f"{len(_finding_entries(findings))} finding members"
+    )
+    return value
 
 
 def assert_band_agrees_with_score(
@@ -910,168 +591,71 @@ def assert_band_agrees_with_score(
     score = score_of(metrics, findings=findings)
     lo, hi = BAND_RANGES[band]
     assert lo <= score <= hi, (
-        f"band {band!r} does not contain score {score} (range {lo}–{hi})"
+        f"band {band!r} does not contain score {score} (range {lo}-{hi})"
     )
 
 
-def _bind_changed_int(
-    slot: str,
-    baseline: Mapping[str, Any],
-    extra: Mapping[str, Any],
-    *,
-    exclude_values: Sequence[int] = (),
-) -> None:
-    """Bind the integer metric that counts the marks the extra arm adds.
-
-    The two arms carry the same prose; only the extra arm holds the marks
-    (L97 character layer). That count is 0 on the baseline, which has none of
-    those marks, and positive on the extra arm. A word, sentence, or length
-    tally is never 0 on non-empty prose, so a mark that also changes how
-    words split cannot be taken for the count.
-    """
-    base = dict(_int_paths(baseline))
-    nxt = dict(_int_paths(extra))
-    skip = set(exclude_values)
-    skip_paths = {
-        _PATHS[name]
-        for name in ("score", "scanned", "band", "confidence", "window_mark",
-                     "invisible", "space", "mixed")
-        if name in _PATHS and name != slot
-    }
-    moved: list[tuple] = []
-    for path, extra_val in nxt.items():
-        if path in skip_paths:
-            continue
-        base_val = base.get(path, 0)
-        if not isinstance(extra_val, int) or isinstance(extra_val, bool):
-            continue
-        if extra_val in skip:
-            continue
-        if isinstance(base_val, bool) or base_val != 0:
-            continue
-        if extra_val > base_val:
-            moved.append(path)
-    uniq = list(dict.fromkeys(moved))
-    if len(uniq) != 1:
-        extra_vals = {nxt[path] for path in uniq}
-        # Inserted marks can be counted on more than one integer field
-        # (for example an in-word zero-width run). Same extra value is
-        # still a unique observation of that count.
-        if len(uniq) > 1 and len(extra_vals) == 1:
-            uniq = [uniq[0]]
-        else:
-            raise HarnessError(
-                f"cannot uniquely locate {slot} count by contrast; movers={uniq!r}"
-            )
-    _PATHS[slot] = uniq[0]
-    _clear_bind_failures(slot)
-
-
-def _count_from_path(slot: str, metrics: Mapping[str, Any]) -> int:
-    _require_not_failed(slot)
-    path = _PATHS.get(slot)
-    if path is None:
-        raise HarnessError(
-            f"{slot} count is not bound; run the named contrast first"
-        )
-    value = _get_path(metrics, path)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise HarnessError(f"{slot} count is not an integer: {value!r}")
+def _count_member(metrics: Mapping[str, Any], name: str) -> int:
+    value = _member(metrics, name)
+    _check(_is_int(value) and value >= 0, f"{name} is not a non-negative integer: {value!r}")
     return value
 
 
 def invisible_count_of(metrics: Mapping[str, Any]) -> int:
-    return _count_from_path("invisible", metrics)
+    return _count_member(metrics, INVISIBLE_KEY)
 
 
 def nonstandard_space_count_of(metrics: Mapping[str, Any]) -> int:
-    return _count_from_path("space", metrics)
+    return _count_member(metrics, SPACE_KEY)
 
 
 def mixed_script_count_of(metrics: Mapping[str, Any]) -> int:
-    return _count_from_path("mixed", metrics)
+    return _count_member(metrics, MIXED_KEY)
 
 
 def require_character_layer_counts(
     metrics: Mapping[str, Any],
 ) -> tuple[int, int, int]:
-    """L97: metrics include the three character-layer counts.
-
-    Counts are read from paths bound by the named K/J/I contrasts, not
-    from this checkout's key names. Presence as integers is the pin;
-    values are not compared across arms here (no sibling-count equality).
-    """
-    invisible = invisible_count_of(metrics)
-    space = nonstandard_space_count_of(metrics)
-    mixed = mixed_script_count_of(metrics)
-    return invisible, space, mixed
-
-
-def bind_invisible_count(
-    baseline_metrics: Mapping[str, Any], extra_metrics: Mapping[str, Any]
-) -> None:
-    _bind_changed_int(
-        "invisible",
-        baseline_metrics,
-        extra_metrics,
-        exclude_values=_exclude_score_scanned(baseline_metrics, extra_metrics),
+    """Metrics always include the three character-layer counts."""
+    return (
+        invisible_count_of(metrics),
+        nonstandard_space_count_of(metrics),
+        mixed_script_count_of(metrics),
     )
 
 
-def bind_nonstandard_space_count(
-    baseline_metrics: Mapping[str, Any], extra_metrics: Mapping[str, Any]
-) -> None:
-    _bind_changed_int(
-        "space",
-        baseline_metrics,
-        extra_metrics,
-        exclude_values=_exclude_score_scanned(baseline_metrics, extra_metrics),
-    )
+def truncated_of(metrics: Mapping[str, Any]) -> bool:
+    """``truncated``: false = not longer than the window, true = longer."""
+    value = _member(metrics, TRUNCATED_KEY)
+    _check(isinstance(value, bool), f"{TRUNCATED_KEY} is not a boolean: {value!r}")
+    return value
 
 
-def bind_mixed_script_count(
-    baseline_metrics: Mapping[str, Any], extra_metrics: Mapping[str, Any]
-) -> None:
-    _bind_changed_int(
-        "mixed",
-        baseline_metrics,
-        extra_metrics,
-        exclude_values=_exclude_score_scanned(baseline_metrics, extra_metrics),
-    )
+def window_mark_of(metrics: Mapping[str, Any]) -> Any:
+    return truncated_of(metrics)
 
 
-def _exclude_score_scanned(
-    baseline: Mapping[str, Any], extra: Mapping[str, Any]
-) -> list[int]:
-    out: list[int] = []
-    for blob in (baseline, extra):
-        # A bound score / scanned path is skipped by path; its value is only
-        # excluded while the path is unknown.
-        if "score" not in _PATHS:
-            try:
-                out.append(score_of(blob))
-            except HarnessError:
-                pass
-        # Finding counts on these arms are small; character-layer tests insert
-        # enough marks that the named count is larger than this band.
-        out.extend(range(0, 4))
-    return [n for n in out if n >= 0]
+def window_is_longer(metrics: Mapping[str, Any]) -> bool:
+    return truncated_of(metrics) is True
 
 
-def _same_values(paths: Sequence[tuple], *blobs: Mapping[str, Any]) -> bool:
-    """True when every path holds the same value in each of *blobs*."""
-    for blob in blobs:
-        try:
-            values = {repr(_get_path(blob, path)) for path in paths}
-        except HarnessError:
-            return False
-        if len(values) != 1:
-            return False
-    return True
+def window_is_not_longer(metrics: Mapping[str, Any]) -> bool:
+    return truncated_of(metrics) is False
 
 
-def _band_strings(metrics: Mapping[str, Any]) -> set[str]:
-    return {v for v in _walk(metrics) if isinstance(v, str) and v in BAND_RANGES}
+def _require_core_members(metrics: Mapping[str, Any]) -> None:
+    score_of(metrics)
+    band_of(metrics)
+    confidence_of(metrics)
+    reason_of(metrics)
+    scanned_of(metrics)
+    truncated_of(metrics)
+    require_character_layer_counts(metrics)
+
+
+# Former contrast "binding" steps. The member names are stated in the
+# Interface Contract, so these only validate that the stated members are
+# present on the reports they are given.
 
 
 def bind_core_metric_paths(
@@ -1084,601 +668,81 @@ def bind_core_metric_paths(
     scanned_chars: int | None = None,
     scanned_over_metrics: Mapping[str, Any] | None = None,
 ) -> None:
-    """Locate score / band / confidence / scanned by PRD-named contrasts.
-
-    A metric repeated under a second spelling (the same value in every arm)
-    is one observation, not an ambiguity. Encoding stays open.
-    """
-    low_ints = dict(_int_paths(low_metrics))
-    high_ints = dict(_int_paths(high_metrics))
-    score_hits = []
-    for path, high_val in high_ints.items():
-        low_val = low_ints.get(path)
-        if (
-            isinstance(low_val, int)
-            and isinstance(high_val, int)
-            and not isinstance(low_val, bool)
-            and 0 <= low_val <= 100
-            and 0 <= high_val <= 100
-            and high_val >= low_val + 20
-        ):
-            score_hits.append(path)
-    if len(score_hits) > 1:
-        # L98: the score sits inside the range of the band the same report names.
-        in_band = []
-        for path in score_hits:
-            ok = True
-            for blob, ints in ((low_metrics, low_ints), (high_metrics, high_ints)):
-                bands = _band_strings(blob)
-                if len(bands) != 1:
-                    ok = False
-                    break
-                lo, hi = BAND_RANGES[next(iter(bands))]
-                if not lo <= ints[path] <= hi:
-                    ok = False
-                    break
-            if ok:
-                in_band.append(path)
-        if in_band:
-            score_hits = in_band
-    if len(score_hits) > 1 and _same_values(score_hits, low_metrics, high_metrics):
-        score_hits = score_hits[:1]
-    if len(score_hits) != 1:
-        raise HarnessError(
-            f"cannot uniquely locate the point score by the 20-point gap; "
-            f"paths={score_hits!r}"
-        )
-    _PATHS["score"] = score_hits[0]
-
-    low_band = band_of(low_metrics)
-    # band_of without a path uses uniqueness; bind the path that differs.
-    low_strs = dict(_str_paths(low_metrics))
-    high_strs = dict(_str_paths(high_metrics))
-    band_hits = []
-    for path, high_val in high_strs.items():
-        low_val = low_strs.get(path)
-        if (
-            low_val in BAND_RANGES
-            and high_val in BAND_RANGES
-            and low_val != high_val
-        ):
-            band_hits.append(path)
-    if len(band_hits) > 1 and _same_values(band_hits, low_metrics, high_metrics):
-        band_hits = band_hits[:1]
-    if len(band_hits) != 1:
-        # Same-band gap is allowed to leave a unique band string path.
-        same = [
-            path
-            for path, val in high_strs.items()
-            if val in BAND_RANGES and low_strs.get(path) in BAND_RANGES
-        ]
-        if len(same) > 1 and _same_values(same, low_metrics, high_metrics):
-            same = same[:1]
-        if len(same) == 1:
-            band_hits = same
-        else:
-            raise HarnessError(f"cannot uniquely locate the band path: {band_hits!r}")
-    _PATHS["band"] = band_hits[0]
-    if low_band not in ("clean", "light tells"):
-        raise HarnessError(f"factual arm band {low_band!r} is not clean/light tells")
-
-    if none_metrics is not None and high_conf_metrics is not None:
-        none_strs = dict(_str_paths(none_metrics))
-        highc_strs = dict(_str_paths(high_conf_metrics))
-        conf_hits = []
-        for path, high_val in highc_strs.items():
-            low_val = none_strs.get(path)
-            if low_val == "none" and high_val == "high":
-                conf_hits.append(path)
-        if len(conf_hits) > 1 and _same_values(
-            conf_hits, none_metrics, high_conf_metrics, low_metrics, high_metrics
-        ):
-            conf_hits = conf_hits[:1]
-        if len(conf_hits) != 1:
-            raise HarnessError(
-                f"cannot uniquely locate confidence (none vs high): {conf_hits!r}"
-            )
-        _PATHS["confidence"] = conf_hits[0]
-
-    if scanned_metrics is not None and scanned_chars is not None:
-        expected = min(scanned_chars, SCAN_CAP)
-        hits = [p for p, v in _int_paths(scanned_metrics) if v == expected]
-        if len(hits) > 1 and scanned_over_metrics is not None:
-            # L97 / L120: the scanned count is capped at 262,144 on an
-            # over-window file; an uncapped length is not that count.
-            over = dict(_int_paths(scanned_over_metrics))
-            hits = [p for p in hits if over.get(p) == SCAN_CAP]
-            if len(hits) > 1 and _same_values(hits, scanned_over_metrics):
-                hits = hits[:1]
-        if len(hits) > 1 and scanned_over_metrics is None:
-            # Without an over-window arm the capped count cannot be told from
-            # an uncapped length; scanned_of() then checks by value.
-            _PATHS.pop("scanned", None)
-            print(
-                f"[F01] scanned count left unbound; candidates={hits!r}",
-                flush=True,
-            )
-        elif len(hits) != 1:
-            raise HarnessError(
-                f"cannot uniquely locate scanned count {expected}: {hits!r}"
-            )
-        else:
-            _PATHS["scanned"] = hits[0]
-    _clear_bind_failures(*CORE_SLOTS)
+    for blob in (low_metrics, high_metrics, none_metrics, high_conf_metrics,
+                 scanned_metrics, scanned_over_metrics):
+        if blob is not None:
+            _require_core_members(blob)
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def bind_invisible_count(baseline_metrics, extra_metrics) -> None:
+    invisible_count_of(baseline_metrics)
+    invisible_count_of(extra_metrics)
 
 
-def _consider_bounds(lo: Any, hi: Any, score: int) -> tuple[float, float] | None:
-    if not _is_number(lo) or not _is_number(hi):
+def bind_nonstandard_space_count(baseline_metrics, extra_metrics) -> None:
+    nonstandard_space_count_of(baseline_metrics)
+    nonstandard_space_count_of(extra_metrics)
+
+
+def bind_mixed_script_count(baseline_metrics, extra_metrics) -> None:
+    mixed_script_count_of(baseline_metrics)
+    mixed_script_count_of(extra_metrics)
+
+
+def bind_truncated_mark(at_metrics, over_metrics) -> None:
+    truncated_of(at_metrics)
+    truncated_of(over_metrics)
+
+
+def bind_window_mark(at_metrics, over_metrics, extra_over_metrics, not_longer_metrics) -> None:
+    for blob in (at_metrics, over_metrics, extra_over_metrics, not_longer_metrics):
+        truncated_of(blob)
+
+
+# ---------------------------------------------------------------------------
+# Interval (Contract: ``score_ci`` only with ``--ci``)
+# ---------------------------------------------------------------------------
+
+
+def interval_pair(metrics: Mapping[str, Any], score: int | None = None) -> tuple[float, float] | None:
+    """``score_ci`` as (low, high), or None when absent or null."""
+    if INTERVAL_KEY not in metrics or metrics[INTERVAL_KEY] is None:
         return None
-    a, b = (float(lo), float(hi)) if lo <= hi else (float(hi), float(lo))
-    if a <= score <= b:
-        return (a, b)
-    return None
+    value = metrics[INTERVAL_KEY]
+    _check(
+        isinstance(value, list)
+        and len(value) == 2
+        and all(_is_number(v) for v in value),
+        f"{INTERVAL_KEY} is not [low, high]: {value!r}",
+    )
+    low, high = float(value[0]), float(value[1])
+    _check(0 <= low <= high <= 100, f"{INTERVAL_KEY} is not an ordered 0-100 pair: {value!r}")
+    return (low, high)
 
 
-def interval_pair(metrics: Mapping[str, Any], score: int) -> tuple[float, float] | None:
-    """Return normalized low/high bounds that contain *score*, or None if omitted.
-
-    The PRD names a low/high interval on the score, not a two-element sequence.
-    Named numeric bounds are an interval. A nested mapping of two numbers is an
-    interval. A numeric sequence is one encoding among those, not the required
-    product shape. The returned 2-tuple is this helper's observation, not a pin
-    on how the product spells the bounds.
-    """
-    named: list[tuple[float, float]] = []
-    other: list[tuple[float, float]] = []
-    bound_tokens_low = ("low", "min", "start", "lower", "lo")
-    bound_tokens_high = ("high", "max", "end", "upper", "hi")
-
-    def add(dest: list, pair: tuple[float, float] | None) -> None:
-        if pair is not None:
-            dest.append(pair)
-
-    for value in _walk(metrics):
-        if isinstance(value, Mapping):
-            nums = {
-                str(k): v
-                for k, v in value.items()
-                if _is_number(v)
-            }
-            lows = [
-                v
-                for k, v in nums.items()
-                if any(tok in k.lower() for tok in bound_tokens_low)
-            ]
-            highs = [
-                v
-                for k, v in nums.items()
-                if any(tok in k.lower() for tok in bound_tokens_high)
-            ]
-            for lo in lows:
-                for hi in highs:
-                    add(named, _consider_bounds(lo, hi, score))
-            if not lows and not highs and len(nums) == 2:
-                a, b = list(nums.values())
-                add(other, _consider_bounds(a, b, score))
-        if isinstance(value, (list, tuple)):
-            nums_seq = [x for x in value if _is_number(x)]
-            if len(nums_seq) >= 2:
-                add(other, _consider_bounds(min(nums_seq), max(nums_seq), score))
-    for group in (named, other):
-        uniq = list(dict.fromkeys(group))
-        if not uniq:
-            continue
-        if len(uniq) == 1:
-            return uniq[0]
-        uniq.sort(key=lambda p: (p[1] - p[0], p[0], p[1]))
-        return uniq[0]
-    return None
-
-
-def interval_present(metrics: Mapping[str, Any], score: int) -> bool:
-    """True when metrics carry a low/high interval containing *score*."""
+def interval_present(metrics: Mapping[str, Any], score: int | None = None) -> bool:
     return interval_pair(metrics, score) is not None
 
 
-def _yesno_value(value: Any) -> bool | None:
-    """Interpret a truncated / yes-no mark. Encoding is open (L97, L120).
-
-    A JSON/Python boolean counts. So does a string or other structured
-    yes/no. Do not require this checkout's ``true``/``false`` spelling.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        n = value.strip().lower()
-        if n in {"true", "yes", "on", "y", "1"}:
-            return True
-        if n in {"false", "no", "off", "n", "0"}:
-            return False
-        return None
-    if isinstance(value, int) and not isinstance(value, bool):
-        if value == 1:
-            return True
-        if value == 0:
-            return False
-    return None
-
-
-def _yesno_paths(obj: Any, prefix: tuple = ()) -> Iterator[tuple[tuple, bool]]:
-    yn = _yesno_value(obj)
-    if yn is not None and not isinstance(obj, (Mapping, list, tuple)):
-        yield prefix, yn
-        return
-    if isinstance(obj, Mapping):
-        for key, value in obj.items():
-            yield from _yesno_paths(value, prefix + (key,))
-    elif isinstance(obj, (list, tuple)):
-        for index, value in enumerate(obj):
-            yield from _yesno_paths(value, prefix + (index,))
-
-
-def bind_truncated_mark(
-    at_metrics: Mapping[str, Any], over_metrics: Mapping[str, Any]
-) -> None:
-    """Locate the truncated mark by at-cap vs one-past contrast. Do not pin a key.
-
-    The mark may be a boolean, a string, or another structured yes/no.
-    """
-    skip_paths = {
-        _PATHS[name]
-        for name in ("score", "scanned", "band", "confidence")
-        if name in _PATHS
-    }
-    at_marks = {
-        path: val
-        for path, val in _yesno_paths(at_metrics)
-        if path not in skip_paths
-    }
-    over_marks = {
-        path: val
-        for path, val in _yesno_paths(over_metrics)
-        if path not in skip_paths
-    }
-    moved: list[tuple] = []
-    for path, over_val in over_marks.items():
-        at_val = at_marks.get(path, False)
-        if over_val is True and at_val is not True:
-            moved.append(path)
-    uniq = list(dict.fromkeys(moved))
-    if len(uniq) == 1:
-        _PATHS["truncated"] = uniq[0]
-        return
-    if len(uniq) > 1:
-        extra_vals = {over_marks[path] for path in uniq}
-        if extra_vals == {True}:
-            _PATHS["truncated"] = uniq[0]
-            return
-    at_rest = truncated_remainder(at_metrics)
-    over_rest = truncated_remainder(over_metrics)
-    if at_rest == over_rest:
-        raise HarnessError(
-            "metrics have no truncated mark when extracted prose exceeds 262,144"
-        )
-    _PATHS["truncated"] = ("__remainder__",)
-
-
-def truncated_of(metrics: Mapping[str, Any]) -> bool:
-    """Whether the bound truncated mark reads as yes (over-window) or no (at-cap).
-
-    Encoding is open: boolean, string, or other structured yes/no. Not a
-    JSON/Python-boolean pin.
-    """
-    path = _PATHS.get("truncated")
-    if path is None:
-        raise HarnessError(
-            "truncated mark is not bound; run the at-cap vs one-past contrast first"
-        )
-    if path == ("__remainder__",):
-        raise HarnessError(
-            "truncated mark was bound only as a remainder; compare remainders instead"
-        )
-    value = _get_path(metrics, path)
-    yn = _yesno_value(value)
-    if yn is None:
-        raise HarnessError(f"truncated mark is not a yes/no flag: {value!r}")
-    return yn
-
-
-def _scalar_paths(obj: Any, prefix: tuple = ()) -> Iterator[tuple[tuple, Any]]:
-    """Leaf scalar paths. Mappings and sequences are walked, not yielded."""
-    if isinstance(obj, Mapping):
-        for key, value in obj.items():
-            yield from _scalar_paths(value, prefix + (key,))
-        return
-    if isinstance(obj, (list, tuple)):
-        for index, value in enumerate(obj):
-            yield from _scalar_paths(value, prefix + (index,))
-        return
-    yield prefix, obj
-
-
-def _is_two_class_token(value: Any) -> bool:
-    """True when *value* can be one side of a two-valued mark (L97).
-
-    Booleans, yes/no-shaped strings, and 0/1 flags count. Growing leftover
-    lengths and other unconstrained numbers do not.
-    """
-    if isinstance(value, bool):
-        return True
-    if isinstance(value, str) and value.strip():
-        return True
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value in (0, 1)
-    return False
-
-
-def bind_window_mark(
-    at_metrics: Mapping[str, Any],
-    over_metrics: Mapping[str, Any],
-    extra_over_metrics: Mapping[str, Any],
-    not_longer_metrics: Mapping[str, Any],
-) -> None:
-    """Locate the two-valued longer-than-window indication (L97 / L120 / L126).
-
-    At-cap carries the “not longer” token; one character past carries the
-    “longer” token. A second over-window file (different leftover length)
-    must share that “longer” token, and a short file must share the
-    “not longer” token. That is input-independence, not leftover inequality
-    of other metrics, and not a required field name.
-    """
-    skip_paths = {
-        _PATHS[name]
-        for name in (
-            "score",
-            "scanned",
-            "band",
-            "confidence",
-            "invisible",
-            "space",
-            "mixed",
-        )
-        if name in _PATHS
-    }
-    at_vals = {p: v for p, v in _scalar_paths(at_metrics) if p not in skip_paths}
-    over_vals = {p: v for p, v in _scalar_paths(over_metrics) if p not in skip_paths}
-    extra_vals = {
-        p: v for p, v in _scalar_paths(extra_over_metrics) if p not in skip_paths
-    }
-    short_vals = {
-        p: v for p, v in _scalar_paths(not_longer_metrics) if p not in skip_paths
-    }
-    candidates: list[tuple] = []
-    for path, over_val in over_vals.items():
-        if path not in at_vals or path not in extra_vals or path not in short_vals:
-            continue
-        at_val = at_vals[path]
-        extra_val = extra_vals[path]
-        short_val = short_vals[path]
-        if at_val == over_val:
-            continue
-        # Leftover-length (0 vs 1 vs 2) is not two-valued.
-        if extra_val != over_val:
-            continue
-        if short_val != at_val:
-            continue
-        distinct = [at_val, over_val]
-        if extra_val not in distinct or short_val not in distinct:
-            continue
-        if extra_val == at_val or short_val == over_val:
-            continue
-        if not _is_two_class_token(at_val) or not _is_two_class_token(over_val):
-            continue
-        if not _is_two_class_token(extra_val) or not _is_two_class_token(short_val):
-            continue
-        candidates.append(path)
-    uniq = list(dict.fromkeys(candidates))
-    if not uniq:
-        raise HarnessError(
-            "metrics have no two-valued longer-than-window indication; "
-            "leftover inequality of other metrics is not that mark"
-        )
-    path = uniq[0]
-    _PATHS["window_mark"] = path
-    _WINDOW_TOKENS["not_longer"] = at_vals[path]
-    _WINDOW_TOKENS["longer"] = over_vals[path]
-    _clear_bind_failures("window_mark")
-    print(
-        f"[F01] bound two-valued window mark path={path!r} "
-        f"not_longer={at_vals[path]!r} longer={over_vals[path]!r} "
-        f"n_candidates={len(uniq)}",
-        flush=True,
-    )
-
-
-def window_mark_of(metrics: Mapping[str, Any]) -> Any:
-    """Raw two-valued longer-than-window token. Encoding is open."""
-    _require_not_failed("window_mark")
-    path = _PATHS.get("window_mark")
-    if path is None:
-        raise HarnessError(
-            "window mark is not bound; run the at-cap vs over-window contrast first"
-        )
-    return _get_path(metrics, path)
-
-
-def window_is_longer(metrics: Mapping[str, Any]) -> bool:
-    """True when *metrics* carry the bound “longer than window” token."""
-    if "longer" not in _WINDOW_TOKENS:
-        raise HarnessError("window mark tokens are not bound")
-    return window_mark_of(metrics) == _WINDOW_TOKENS["longer"]
-
-
-def window_is_not_longer(metrics: Mapping[str, Any]) -> bool:
-    """True when *metrics* carry the bound “not longer than window” token."""
-    if "not_longer" not in _WINDOW_TOKENS:
-        raise HarnessError("window mark tokens are not bound")
-    return window_mark_of(metrics) == _WINDOW_TOKENS["not_longer"]
-
-
-def truncated_remainder(metrics: Mapping[str, Any]) -> Any:
-    """Metrics with score, band, confidence, and scanned stripped (form-open)."""
-    drop_paths = [
-        _PATHS[name]
-        for name in ("score", "band", "confidence", "scanned")
-        if name in _PATHS
-    ]
-    drop_vals: list[Any] = []
-    try:
-        drop_vals.append(score_of(metrics))
-    except HarnessError:
-        pass
-    try:
-        drop_vals.append(band_of(metrics))
-    except HarnessError:
-        pass
-    try:
-        drop_vals.append(confidence_of(metrics))
-    except HarnessError:
-        pass
-    try:
-        drop_vals.append(scanned_of(metrics))
-    except HarnessError:
-        pass
-
-    def strip(obj: Any, path: tuple = ()) -> Any:
-        if path in drop_paths:
-            return None
-        if obj in drop_vals and not isinstance(obj, (list, dict)):
-            return None
-        if isinstance(obj, Mapping):
-            return {k: strip(v, path + (k,)) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [strip(v, path + (i,)) for i, v in enumerate(obj)]
-        return obj
-
-    return strip(metrics)
-
-
-def interval_omission_remainder(
-    metrics: Mapping[str, Any], score: int | None = None
-) -> Any:
-    """Strip scanned / score / band / confidence and the interval pair.
-
-    Leftover is the form-open too-few-sentences statement versus the
-    present-interval statement. Do not search for the letters of 'sentence'.
-    """
-    rest = truncated_remainder(metrics)
-    pair = interval_pair(metrics, score) if score is not None else None
-    drop_nums: set[float] = set(pair) if pair is not None else set()
-
-    def strip_pair(obj: Any) -> Any:
-        if pair is not None and isinstance(obj, (list, tuple)):
-            nums = [x for x in obj if _is_number(x)]
-            if len(nums) >= 2:
-                lo, hi = min(nums), max(nums)
-                if (float(lo), float(hi)) == pair:
-                    return None
-        if _is_number(obj) and obj in drop_nums:
-            return None
-        if isinstance(obj, Mapping):
-            return {k: strip_pair(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [strip_pair(v) for v in obj]
-        return obj
-
-    return strip_pair(rest)
-
-
-def _string_states_too_few_sentences(text: str) -> bool:
-    """True when *text* states that there are too few sentences (L111).
-
-    Wording is open: do not pin this checkout's note. The statement's
-    content is a scarcity of sentences, not any leftover string.
-    """
-    n = _norm(text)
-    if not n:
-        return False
-    toks = set(n.split())
-    scarcity = bool(
-        toks
-        & {
-            "few",
-            "fewer",
-            "insufficient",
-            "least",
-            "short",
-            "enough",
-            "under",
-        }
-    ) or ("too few" in n) or ("not enough" in n) or ("less than" in n)
-    unit = "sentence" in n
-    return scarcity and unit
-
-
-def _metrics_state_too_few_sentences(metrics: Mapping[str, Any]) -> bool:
-    """True when metrics state there are too few sentences.
-
-    Form is open: a readable string, or a nested structured mark
-    (boolean, key spelling, serialized object) that carries that
-    statement. A leftover inequality against other arms is not this
-    statement. Interval-omitted (null bounds) is not this statement
-    either.
-    """
-    skip = set(BAND_RANGES) | set(CONFIDENCE_LABELS)
-    for value in _walk(metrics):
-        if isinstance(value, str) and value.strip() and value not in skip:
-            if _string_states_too_few_sentences(value):
-                return True
-    try:
-        blob = json.dumps(metrics, default=str)
-    except (TypeError, ValueError):
-        blob = str(metrics)
-    if _string_states_too_few_sentences(blob):
-        return True
-
-    def walk_kv(obj: Any) -> bool:
-        if isinstance(obj, Mapping):
-            for key, value in obj.items():
-                joined = f"{key} {value}"
-                if _string_states_too_few_sentences(joined):
-                    return True
-                if walk_kv(value):
-                    return True
-        elif isinstance(obj, list):
-            for item in obj:
-                if walk_kv(item):
-                    return True
-        return False
-
-    return walk_kv(metrics)
-
-
 def too_few_sentences_stated(metrics: Mapping[str, Any]) -> None:
-    """L111: when the interval is omitted, metrics state there are too few sentences.
-
-    Assert the statement on the omitted-interval arm. Do not treat a
-    leftover-string inequality against the switch-off or ≥4-sentence
-    arms as that statement. Encoding of the statement is open (string
-    or other structured mark).
-    """
-    stated = _metrics_state_too_few_sentences(metrics)
-    assert stated, (
-        "metrics do not state that there are too few sentences when the "
-        "interval is omitted"
+    """With ``--ci`` and fewer than four sentences: ``score_ci`` is null and
+    ``score_ci_note`` is a string (its wording is free)."""
+    assert INTERVAL_KEY in metrics, (
+        f"interval switch was given but {METRICS_KEY} has no {INTERVAL_KEY!r} member"
     )
-    print("[F01] omitted-interval arm states too few sentences", flush=True)
+    assert metrics[INTERVAL_KEY] is None, (
+        f"{INTERVAL_KEY} is not null on a document with too few sentences: "
+        f"{metrics[INTERVAL_KEY]!r}"
+    )
+    note = metrics.get(INTERVAL_NOTE_KEY)
+    assert isinstance(note, str), f"{INTERVAL_NOTE_KEY} is not a string: {note!r}"
 
 
 def advice_does_not_move_score(base: str, extra: str, number: int) -> set[int]:
-    """Extra arm reports writing-advice *number* and does not move the score.
-
-    *number* must appear on the extra arm (positive carrier). Score-moving
-    families stay equal to the base, and the point score is unchanged.
-    Returns the writing-advice numbers that fired on the extra arm.
-    """
+    """Extra arm reports writing-advice *number* and does not move the score."""
     b_f, b_m = require_success_report(scan_stdin(base), input_chars=unicode_len(base))
     e_f, e_m = require_success_report(scan_stdin(extra), input_chars=unicode_len(extra))
     require_finding(e_f, number)
-    present = sorted(catalogue_numbers(e_f))
-    print(
-        f"[F01] advice {number} extra fired={present}",
-        flush=True,
-    )
     moving_b = score_moving_numbers(b_f)
     moving_e = score_moving_numbers(e_f)
     print(
@@ -1697,197 +761,52 @@ def advice_does_not_move_score(base: str, extra: str, number: int) -> set[int]:
     return catalogue_numbers(e_f) & WRITING_ADVICE
 
 
-def hold_parallelism_form_17_as_advice(findings: Any) -> bool:
-    """Parallelism form of catalogue 17 is writing advice (L99).
-
-    The form is identified by the finding label (negative parallelism,
-    not tailing negation). This does not pin a sentence as the fire.
-    When that form is present and no tailing-form 17 finding is also
-    present, it must not be treated as score-moving. Returns True when
-    the parallelism form was among *findings*.
-    """
-    recs = [
-        rec
-        for rec in finding_records(findings)
-        if is_parallelism_form_17(rec["label"])
-    ]
-    if not recs:
-        return False
-    moving = score_moving_numbers(findings)
-    tailing = [
-        rec
-        for rec in finding_records(findings)
-        if catalogue_of(rec["label"]) == 17 and not is_parallelism_form_17(rec["label"])
-    ]
-    print(
-        f"[F01] parallelism-form 17 labels={[rec['label'] for rec in recs]!r} "
-        f"moving={sorted(moving)} tailing_also={bool(tailing)}",
-        flush=True,
-    )
-    if 17 in moving and not tailing:
-        raise AssertionError("parallelism form of 17 is treated as score-moving")
-    return True
-
-
-def writing_advice_findings_do_not_move_score(
-    findings: Any, metrics: Mapping[str, Any], *, base_score: int, base_moving: set[int]
-) -> set[int]:
-    """Writing-advice findings appear and count for nothing (L19, L99).
-
-    Every fired writing-advice number is excluded from the score-moving
-    set. If the extra arm added no score-moving family, the point score
-    is unchanged. Does not pin which listed number must fire.
-    """
-    advice = catalogue_numbers(findings) & WRITING_ADVICE
-    moving = score_moving_numbers(findings)
-    extra_moving = moving - base_moving
-    if extra_moving:
-        raise AssertionError(
-            f"writing-advice extra added score-moving families {sorted(extra_moving)}"
-        )
-    score = score_of(metrics, findings=findings)
-    if score != base_score:
-        raise AssertionError(
-            f"writing-advice findings moved the score from {base_score} to {score}"
-        )
-    for rec in finding_records(findings):
-        number = catalogue_of(rec["label"])
-        if number in WRITING_ADVICE and number in moving:
-            raise AssertionError(
-                f"writing-advice {number} is treated as score-moving"
-            )
-    return advice
-
-
-def hold_advice_if_present(base: str, extra: str) -> set[int]:
-    """L19 / L99: leftover writing-advice numbers, when they fire, do not move the score.
-
-    Not a must-fire table: *extra* may use an L99-named kind without
-    requiring that catalogue number. Observation is the point score, not
-    set-membership in ``score_moving_numbers`` (that set already excludes
-    the twelve). If *extra* added a score-moving family, the arm is
-    skipped rather than pinned as that family's fire.
-    """
-    b_f, b_m = require_success_report(scan_stdin(base), input_chars=unicode_len(base))
-    e_f, e_m = require_success_report(scan_stdin(extra), input_chars=unicode_len(extra))
-    extra_moving = score_moving_numbers(e_f) - score_moving_numbers(b_f)
-    advice = catalogue_numbers(e_f) & WRITING_ADVICE
-    present = sorted(catalogue_numbers(e_f))
-    print(
-        f"[F01] advice-if-present fired={present} extra_moving={sorted(extra_moving)}",
-        flush=True,
-    )
-    if extra_moving:
-        return set()
-    b_score = score_of(b_m, findings=b_f)
-    e_score = score_of(e_m, findings=e_f)
-    if b_score != e_score:
-        raise AssertionError(
-            f"writing-advice extra moved the score from {b_score} to {e_score} "
-            f"with no added score-moving family; advice={sorted(advice)}"
-        )
-    return advice
-
-
 # ---------------------------------------------------------------------------
 # Success / failure carriers
 # ---------------------------------------------------------------------------
 
 
 def parse_structured_mapping(text: str, *, source: str) -> dict[str, Any]:
-    """Read *text* as a structured mapping. Encoding is the implementer's.
-
-    Raises :class:`HarnessError` if *text* is empty or is not a mapping.
-    Never returns ``{}`` to mean the parse failed.
-    """
+    """Read *text* as one JSON object (the Contract's report encoding)."""
     stripped = text.strip()
     if not stripped:
-        raise HarnessError(f"{source} is empty; expected a structured record")
-    candidates: list[Any] = []
+        raise HarnessError(f"{source} is empty; expected one JSON object")
     try:
-        candidates.append(json.loads(stripped))
-    except json.JSONDecodeError:
-        pass
-    try:
-        candidates.append(ast.literal_eval(stripped))
-    except (ValueError, SyntaxError, MemoryError):
-        pass
-    for obj in candidates:
-        if isinstance(obj, dict):
-            return obj
-    excerpt = stripped if len(stripped) <= 500 else stripped[:500] + "…"
-    raise HarnessError(
-        f"{source} is not a structured object; text={excerpt!r}"
-    )
-
-
-def _has_band_or_confidence(obj: Mapping[str, Any]) -> bool:
-    for value in _walk(obj):
-        if isinstance(value, str) and value in BAND_RANGES:
-            return True
-        if isinstance(value, str) and value in CONFIDENCE_LABELS:
-            return True
-    return False
-
-
-def _is_finding_like(item: Any) -> bool:
-    if not isinstance(item, Mapping):
-        return False
-    strings = [v for v in item.values() if isinstance(v, str)]
-    if any(catalogue_of(s) is not None for s in strings):
-        return True
-    lists = [v for v in item.values() if isinstance(v, list)]
-    ints = [v for v in item.values() if _is_number(v) and int(v) == v]
-    str_lists = [lst for lst in lists if lst and all(isinstance(x, str) for x in lst)]
-    return bool(str_lists) and bool(ints)
+        obj = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        excerpt = stripped if len(stripped) <= 500 else stripped[:500] + "…"
+        raise HarnessError(f"{source} is not one JSON object ({exc}); text={excerpt!r}") from exc
+    if not isinstance(obj, dict):
+        raise HarnessError(f"{source} is JSON {type(obj).__name__}, not an object")
+    return obj
 
 
 def metrics_from_report(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Locate the metrics object by band/confidence content, not by a key spelling."""
+    """The report's ``_metrics`` member."""
     if not isinstance(report, Mapping):
-        raise HarnessError(
-            f"structured report is {type(report).__name__}, not an object"
-        )
-    nested = [v for v in report.values() if isinstance(v, Mapping)]
-    with_labels = [m for m in nested if _has_band_or_confidence(m)]
-    if len(with_labels) == 1:
-        return with_labels[0]
-    if _has_band_or_confidence(report) and not with_labels:
-        return dict(report)
-    if len(with_labels) > 1:
-        # Prefer the nested mapping that is not itself a finding.
-        not_findings = [m for m in with_labels if not _is_finding_like(m)]
-        if len(not_findings) == 1:
-            return not_findings[0]
-        raise HarnessError("structured report has several metrics objects")
-    if len(nested) == 1:
-        return nested[0]
-    raise HarnessError("structured report has no metrics object")
+        raise HarnessError(f"structured report is {type(report).__name__}, not an object")
+    metrics = report.get(METRICS_KEY)
+    _check(isinstance(metrics, Mapping), (
+        f"report has no {METRICS_KEY!r} object; members={sorted(report)!r}"
+    ))
+    return metrics  # type: ignore[return-value]
 
 
-def findings_from_report(report: Mapping[str, Any], metrics: Mapping[str, Any]) -> Any:
-    """Locate finding entries by catalogue labels, not by a key-prefix rule."""
+def findings_from_report(report: Mapping[str, Any], metrics: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Every report member other than ``_metrics``; each key is ``<N>_<slug>``."""
     if not isinstance(report, Mapping):
-        raise HarnessError(
-            f"structured report is {type(report).__name__}, not an object"
-        )
+        raise HarnessError(f"structured report is {type(report).__name__}, not an object")
     entries: dict[str, Any] = {}
     for key, value in report.items():
-        if value is metrics:
+        if key == METRICS_KEY:
             continue
-        if isinstance(value, Mapping) and value == metrics and not _is_finding_like(value):
-            continue
-        if _is_finding_like(value):
-            entries[str(key)] = value
-            continue
-        if isinstance(value, list) and value and all(_is_finding_like(x) for x in value):
-            for index, item in enumerate(value):
-                entries[f"{key}:{index}"] = item
+        finding_number(key)
+        entries[str(key)] = value
     return entries
 
 
 def structured_report(result: RunResult) -> dict[str, Any]:
-    """Parse detector stdout as a structured report (findings plus metrics)."""
+    """Parse detector stdout as the JSON report."""
     try:
         return parse_structured_mapping(result.stdout_text, source="detector stdout")
     except HarnessError as exc:
@@ -1897,72 +816,38 @@ def structured_report(result: RunResult) -> dict[str, Any]:
 
 
 def structured_error_mapping(result: RunResult) -> dict[str, Any]:
-    """The error stream as a structured mapping (L115–L117).
-
-    A nonempty unstructured line is not this carrier. Do not require
-    JSON or a field named ``error``: any structured mapping counts.
-    Raises ``AssertionError`` so a missing structure fails the test,
-    not the harness.
-    """
-    text = result.stderr_text
-    assert text.strip(), (
-        f"error stream is empty; expected a structured error; "
+    """The last non-empty stderr line, read as ``{"error": <string>}``."""
+    lines = [ln for ln in result.stderr_text.splitlines() if ln.strip()]
+    assert lines, (
+        f"error stream is empty; expected a JSON error object; "
         f"exit={result.returncode}; stdout={result.stdout_text!r}"
     )
     try:
-        obj = parse_structured_mapping(text, source="detector stderr")
-        parse_err = None
-    except HarnessError as exc:
-        obj = None
-        parse_err = exc
-    assert parse_err is None, f"error stream is not a structured error: {parse_err}"
-    assert isinstance(obj, dict), (
-        f"error stream is not a structured mapping: {type(obj).__name__}"
+        obj = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"last error-stream line is not a JSON object: {lines[-1]!r} ({exc})"
+        ) from exc
+    assert isinstance(obj, dict), f"error line is JSON {type(obj).__name__}, not an object"
+    assert isinstance(obj.get(ERROR_KEY), str), (
+        f"error object has no string {ERROR_KEY!r} member: {obj!r}"
     )
     return obj
 
 
 def failure_record(result: RunResult) -> str:
-    """Return the structured error-stream record.
-
-    L115–L117 require a structured error on the error stream. A nonempty
-    unstructured line is not that record. Do not require JSON or a field
-    named ``error``: any structured mapping is the carrier.
-    """
-    obj = structured_error_mapping(result)
-    parts: list[str] = []
-    for value in _walk(obj):
-        if isinstance(value, str) and value.strip():
-            parts.append(value)
-    if parts:
-        return " ".join(parts)
-    return str(obj)
+    """The ``error`` string of the structured error."""
+    return str(structured_error_mapping(result)[ERROR_KEY])
 
 
-def error_points_toward_help(record: str, usage: str) -> None:
-    """Unknown-option errors point at help (L117). Do not require the letters 'help'.
-
-    Usage is not required to list ``--help`` / ``-h`` (L118 names cleanup,
-    interval, the double-dash, and the file operand). If usage happens to
-    name a help request and the error echoes it, that is one carrier; the
-    fallback is token overlap with the usage message.
-    """
-    tokens: tuple[str, ...] = ()
-    try:
-        tokens = help_requests_from_usage(usage)
-    except HarnessError:
-        tokens = ()
-    rec_toks = set(_tokens(record))
-    use_toks = set(_tokens(usage))
-    overlap = {t for t in (rec_toks & use_toks) - _STOP if len(t) >= 4}
-    echoed = any(token and token in record for token in tokens)
-    assert echoed or overlap, (
-        "unknown-option structured error does not point at help / usage"
+def error_points_toward_help(record: str, usage: str = "") -> None:
+    """Unknown-option error text contains ``--help``."""
+    assert HELP_FLAG in record, (
+        f"unknown-option error does not point at {HELP_FLAG}: {record!r}"
     )
 
 
 def _looks_like_frames(text: str) -> bool:
-    """True when the stream carries a multi-frame dump. Do not search 'Traceback'."""
     lines = text.splitlines()
     frameish = 0
     for line in lines:
@@ -1972,32 +857,19 @@ def _looks_like_frames(text: str) -> bool:
             frameish += 1
         elif re.match(r"\s+\^+\s*$", line):
             frameish += 1
-    return frameish >= 2
+    return frameish >= 2 or "Traceback (most recent call last)" in text
 
 
 def require_no_traceback(result: RunResult) -> None:
-    """The entire error stream must not be a traceback / multi-frame dump."""
+    """The error stream carries no traceback / multi-frame dump."""
     text = result.stderr_text
-    stripped = text.strip()
-    obj: Any = None
-    if stripped:
-        try:
-            obj = parse_structured_mapping(stripped, source="detector stderr")
-        except HarnessError:
-            obj = None
-        if isinstance(obj, dict):
-            assert not _looks_like_frames(text), (
-                f"error stream mixes a dump with a structured object: {text!r}"
-            )
-            return
-    assert not _looks_like_frames(text), (
-        f"error stream is a multi-frame dump: {text!r}"
-    )
+    assert not _looks_like_frames(text), f"error stream carries a traceback: {text!r}"
 
 
 def require_success_report(
     result: RunResult, *, input_chars: int | None = None
 ) -> tuple[Any, dict[str, Any]]:
+    """Exit 0 and one JSON report whose stated members all read correctly."""
     assert result.returncode == 0, (
         f"expected success, got exit {result.returncode}; "
         f"stderr={result.stderr_text!r}"
@@ -2005,52 +877,40 @@ def require_success_report(
     report = structured_report(result)
     metrics = metrics_from_report(report)
     findings = findings_from_report(report, metrics)
+    records = _records(findings)
     band = band_of(metrics)
     conf = confidence_of(metrics)
-    if conf != "high":
-        reason = reason_of(metrics)
-        assert str(reason).strip(), "non-high confidence has an empty reason"
-    scanned = scanned_of(metrics, chars=input_chars)
-    if scanned > SCAN_CAP:
-        raise HarnessError(f"scanned {scanned} exceeds the cap")
+    reason_of(metrics)
+    scanned = scanned_of(metrics)
+    if input_chars is not None:
+        assert scanned == min(input_chars, SCAN_CAP), (
+            f"{SCANNED_KEY}={scanned}, expected {min(input_chars, SCAN_CAP)} "
+            f"for {input_chars} characters"
+        )
     finding_count_of(metrics, findings)
-    score: int | None = None
-    if "score" in _PATHS:
-        score = score_of(metrics, findings=findings)
-        assert_band_agrees_with_score(metrics, findings=findings)
-    # L97: once the three character-layer counts are located by contrast,
-    # every later success report must still include them.
-    if {"invisible", "space", "mixed"} <= set(_PATHS):
-        require_character_layer_counts(metrics)
+    score = score_of(metrics, findings=findings)
+    assert_band_agrees_with_score(metrics, findings=findings)
+    require_character_layer_counts(metrics)
+    truncated_of(metrics)
     print(
         f"[F01] success score={score} band={band!r} confidence={conf!r} "
-        f"scanned={scanned} n_findings={len(_finding_entries(findings))}",
+        f"scanned={scanned} findings={sorted(r['number'] for r in records)}",
         flush=True,
     )
-    assert findings is not None
-    assert metrics is not None
     return findings, metrics
 
 
 def require_structured_failure(result: RunResult) -> str:
+    """Non-zero exit, empty stdout, JSON error object on stderr, no traceback."""
     assert result.returncode != 0, (
         f"expected failing status, got success; stdout={result.stdout_text!r}"
     )
     require_no_traceback(result)
     err = failure_record(result)
-    if result.stdout.strip():
-        printed_success = True
-        try:
-            structured_report(result)
-        except HarnessError:
-            printed_success = False
-        assert not printed_success, (
-            "failure printed a structured success report on stdout"
-        )
-    print(
-        f"[F01] failure exit={result.returncode} error={err!r}",
-        flush=True,
+    assert not result.stdout.strip(), (
+        f"failure printed on standard output: {result.stdout_text[:300]!r}"
     )
+    print(f"[F01] failure exit={result.returncode} error={err!r}", flush=True)
     return err
 
 
@@ -2074,42 +934,35 @@ def strip_paths_from_stderr(text: str, *paths: str) -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+def is_empty_input_error(record: str) -> bool:
+    return record.strip() == EMPTY_INPUT_ERROR
+
+
+def is_unreadable_error(record: str) -> bool:
+    return record.strip().startswith(UNREADABLE_ERROR_PREFIX)
+
+
 def empty_input_identity(
     empty_records: Sequence[str], contrast_records: Sequence[str]
 ) -> None:
-    """Structured errors identify empty input as a kind (L115). Wording open.
-
-    Do not require the letters 'empty input', JSON, or a field named error.
-    The N arms share one remaining kind after stripping paths; that kind
-    differs from other named failure kinds (unknown option, unreadable path).
-    """
-    empties = [re.sub(r"\s+", " ", rec).strip() for rec in empty_records]
-    assert all(empties), (
-        "structured error does not identify empty input (empty remainder)"
-    )
-    kinds = set(empties)
-    assert len(kinds) == 1, (
-        f"empty-input arms do not share one identifying kind: {sorted(kinds)!r}"
-    )
-    kind = empties[0]
+    """Empty extracted prose: ``error`` is exactly ``empty input``; the other
+    failure kinds are not."""
+    for rec in empty_records:
+        assert is_empty_input_error(rec), (
+            f"empty-input error is {rec!r}, not {EMPTY_INPUT_ERROR!r}"
+        )
     for other in contrast_records:
-        other_n = re.sub(r"\s+", " ", other).strip()
-        assert other_n != kind, (
-            "empty-input structured error is not distinct from another "
-            "failure kind"
+        assert not is_empty_input_error(other), (
+            f"a non-empty-input failure reports {EMPTY_INPUT_ERROR!r}: {other!r}"
         )
 
 
 def require_stdout_utf8(result: RunResult) -> str:
-    """Standard output uses UTF-8 (L122). A decode failure is a failed assertion."""
+    """Standard output uses UTF-8. A decode failure is a failed assertion."""
     try:
         decoded = result.stdout.decode("utf-8")
     except UnicodeDecodeError as exc:
-        decoded = None
-        decode_err = exc
-    else:
-        decode_err = None
-    assert decoded is not None, f"standard output is not UTF-8: {decode_err}"
+        raise AssertionError(f"standard output is not UTF-8: {exc}") from exc
     return decoded
 
 
@@ -2137,14 +990,8 @@ def unicode_len(text: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Usage / switches (discover, do not freeze argv spellings)
+# Usage / switches (Contract: literal spellings)
 # ---------------------------------------------------------------------------
-
-
-def looks_like_usage_text(text: str) -> bool:
-    """Bootstrap discovery only. Not the L118 usage-message assertion."""
-    low = text.lower()
-    return "usage" in low or "--" in text
 
 
 def fold_ws(text: str) -> str:
@@ -2160,48 +1007,20 @@ def padding_of_length(n: int, unit: str = "bridge ") -> str:
     return text
 
 
-def _looks_like_usage(text: str) -> bool:
-    return looks_like_usage_text(text)
-
-
-def usage_from_help() -> str:
-    errors: list[str] = []
-    for token in ("--help", "-h", "-?", "help", "--usage"):
-        result = invoke([token])
-        if result.returncode == 0 and result.stdout.strip():
-            text = result.stdout_text
-            if _looks_like_usage(text):
-                print(f"[F01] usage via bootstrap token {token!r}", flush=True)
-                return text
-        errors.append(
-            f"{token!r} exit={result.returncode} stdout={result.stdout_text[:200]!r}"
-        )
-    raise HarnessError(
-        "could not obtain a usage message; tried help-shaped argv: "
-        + "; ".join(errors)
+def usage_from_help(token: str = "--help") -> str:
+    """Usage printed by a help switch (exit 0, stdout)."""
+    result = invoke([token])
+    assert result.returncode == 0, (
+        f"{token} exited {result.returncode}; stderr={result.stderr_text[:300]!r}"
     )
-
-
-def help_requests_from_usage(usage: str) -> tuple[str, ...]:
-    found: list[str] = []
-    for match in re.finditer(r"(--h(?:elp)?)\b", usage, re.I):
-        found.append(match.group(1))
-    if re.search(r"(?<![\w-])-h(?![\w-])", usage):
-        found.append("-h")
-    uniq = tuple(dict.fromkeys(found))
-    if not uniq:
-        raise HarnessError("usage does not name a help request")
-    return uniq
+    text = result.stdout_text
+    require_usage_message(text)
+    return text
 
 
 def _usage_line_flags(line: str) -> list[str]:
     flags = re.findall(r"--[A-Za-z][\w-]*", line)
     return [f for f in flags if f.lower() not in {"--help"}]
-
-
-def _talks_interval_or_resample(text: str) -> bool:
-    low = text.lower()
-    return "interval" in low or "resample" in low
 
 
 def _strip_usage_flags(line: str) -> str:
@@ -2212,215 +1031,76 @@ def _is_usage_synopsis_line(line: str) -> bool:
     return line.strip().lower().startswith("usage")
 
 
-def switch_from_usage(usage: str, talks, concept: str) -> str:
-    """Discover one optional switch from the usage message (Contract: discovered
-    from usage, not from a required flag spelling).
-
-    A usage line whose description talks about *concept* associates the
-    switches on that line. Several switches on one such line are aliases of
-    one switch (for example a long name and a synonym), so any of them is that
-    switch; the first one is returned. Switches whose own spelling talks about
-    the concept are preferred on that line. Lines that associate different,
-    unrelated switches are still an ambiguity.
-    """
-    groups: list[list[str]] = []
-    for line in usage.splitlines():
-        if _is_usage_synopsis_line(line):
-            continue
-        flags = _usage_line_flags(line)
-        if not flags:
-            continue
-        remainder = _strip_usage_flags(line)
-        named = [f for f in flags if talks(f)]
-        if talks(remainder):
-            groups.append(named or flags)
-        elif named:
-            groups.append(named)
-    merged: list[list[str]] = []
-    for group in groups:
-        for existing in merged:
-            if set(existing) & set(group):
-                existing.extend(f for f in group if f not in existing)
-                break
-        else:
-            merged.append(list(dict.fromkeys(group)))
-    if len(merged) == 1:
-        return merged[0][0]
-    if len(merged) > 1:
-        raise HarnessError(
-            f"usage associates several unrelated {concept} switches: {merged!r}"
-        )
-    # Synopsis-only fallback: tokens whose own spelling talks about the
-    # concept. Several such tokens in one synopsis are alternatives of one
-    # switch. Neighbouring synopsis flags are not associated.
-    for line in usage.splitlines():
-        if not _is_usage_synopsis_line(line):
-            continue
-        named = [f for f in _usage_line_flags(line) if talks(f)]
-        if named:
-            return named[0]
-    raise HarnessError(f"usage does not name a {concept} switch")
+_CONCEPT_FLAGS = {
+    "cleanup": CLEANUP_FLAG,
+    "clean": CLEANUP_FLAG,
+    "scrub": CLEANUP_FLAG,
+    "interval": INTERVAL_FLAG,
+    "resample": INTERVAL_FLAG,
+}
 
 
-def interval_flag_from_usage(usage: str) -> str:
-    """Discover the resampled-interval switch from usage (L91, L111, L118).
-
-    Association is the description that talks about an interval or
-    resample, not a required ``--ci`` spelling, and not every flag on
-    the same synopsis line as a token that happens to contain
-    ``resample``.
-    """
-    return switch_from_usage(usage, _talks_interval_or_resample, "interval / resample")
+def switch_from_usage(usage: str, talks=None, concept: str = "") -> str:
+    """The Contract's literal switch for *concept* (no discovery from usage)."""
+    low = concept.lower()
+    for word, flag in _CONCEPT_FLAGS.items():
+        if word in low:
+            return flag
+    raise HarnessError(f"no stated switch for concept {concept!r}")
 
 
-def usage_names_end_of_options_double_dash(usage: str) -> None:
-    """Usage names the double-dash that stops option parsing (L118).
+def interval_flag_from_usage(usage: str = "") -> str:
+    return INTERVAL_FLAG
 
-    A help switch such as ``--help`` or ``-h`` is not that name: those
-    tokens contain dashes but do not document end-of-options.
-    """
-    assert re.search(r"(?<![\w-])--(?![\w-])", usage), (
-        "usage does not name the double-dash that stops option parsing"
+
+def usage_synopsis_line(usage: str) -> str:
+    lines = usage.splitlines()
+    assert lines, "usage message is empty"
+    return lines[0].rstrip("\r")
+
+
+def require_usage_message(text: str) -> None:
+    """The usage message's first line is exactly the stated synopsis."""
+    assert str(text).strip(), "usage message is empty"
+    first = usage_synopsis_line(text)
+    assert first == USAGE_SYNOPSIS, (
+        f"usage first line is {first!r}, expected {USAGE_SYNOPSIS!r}"
     )
 
 
 def usage_names_concepts(usage: str) -> None:
-    low = usage.lower()
-    assert "clean" in low or "scrub" in low, (
-        "usage does not name a cleanup / scrub switch"
-    )
-    assert "interval" in low or "resample" in low, (
-        "usage does not name an interval / resample switch"
-    )
-    usage_names_end_of_options_double_dash(usage)
+    require_usage_message(usage)
 
 
-_OPTION_PLACEHOLDERS = frozenset(
-    {
-        "options",
-        "option",
-        "opts",
-        "opt",
-        "flags",
-        "flag",
-        "switches",
-        "switch",
-        "args",
-        "arguments",
-    }
-)
-
-# L118 names the single-file operand, not the letters 'file'. A path or
-# document placeholder is that operand. The word 'operand' itself is not,
-# and neither is the word 'input' (including inside 'standard input').
-_FILE_OPERAND_MARKS = frozenset(
-    {
-        "file",
-        "files",
-        "path",
-        "paths",
-        "document",
-        "documents",
-        "filename",
-        "filepath",
-    }
-)
+def usage_names_end_of_options_double_dash(usage: str) -> None:
+    require_usage_message(usage)
 
 
 def usage_names_single_file_operand(usage: str) -> None:
-    """Usage names the single-file operand. Do not require the word 'file'.
+    require_usage_message(usage)
 
-    Only the usage synopsis is searched. An ``[options]`` / ``<options>``
-    placeholder is not that operand. The word ``input`` — including
-    inside ``standard input`` / ``stdin`` — is not that operand. The
-    word ``operand`` is not that operand. A sentence that only mentions
-    standard input, a path, or a document is not that operand. A
-    two-token usage line (command name plus any extra word) is not the
-    operand unless that leftover token, after options are stripped, is
-    a file / path / document name.
-    """
 
-    def _is_file_operand_name(name: str) -> bool:
-        low = name.lower().replace("_", "").replace("-", "")
-        if not low or low in _OPTION_PLACEHOLDERS:
-            return False
-        if low in {"input", "operand", "operands"}:
-            return False
-        return low in _FILE_OPERAND_MARKS
+def _is_json_object_line(line: str) -> bool:
+    try:
+        return isinstance(json.loads(line), dict)
+    except (ValueError, TypeError):
+        return False
 
-    syn_lines: list[str] = []
-    for line in usage.splitlines() or [usage]:
-        stripped = line.strip()
-        if not stripped:
-            if syn_lines:
-                break
-            continue
-        if stripped.lower().startswith("usage"):
-            syn_lines.append(stripped)
-            continue
-        if not syn_lines:
-            syn_lines.append(stripped)
-        break
-    assert syn_lines, "usage does not name the single-file operand"
-    syn = " ".join(syn_lines)
-    syn = re.sub(r"standard[\s-]+input", " ", syn, flags=re.I)
-    syn = re.sub(r"\bstdin\b", " ", syn, flags=re.I)
 
-    placeholders = re.findall(r"[\[<]([A-Za-z][-A-Za-z0-9_]*)[\]>]", syn)
-    named = any(_is_file_operand_name(name) for name in placeholders)
-
-    # Drop "usage: command" then option groups/tokens. Leftover must be
-    # the operand name, not a prose sentence that happens to contain
-    # "path" / "document" / "input". An [options] placeholder is not
-    # the file operand. A leftover word that is only "input" is not.
-    work = re.sub(r"^usage\s*:?\s*\S+\s*", " ", syn, flags=re.I)
-    work = re.sub(r"\[[^\]]*\]", " ", work)
-    work = re.sub(r"<[^>]*>", " ", work)
-    work = re.sub(r"--[A-Za-z][\w-]*", " ", work)
-    work = re.sub(r"(?<![\w-])--(?![\w-])", " ", work)
-    work = re.sub(r"(?<![\w-])-\w+", " ", work)
-    skip = {"or", "and"} | _OPTION_PLACEHOLDERS
-    leftover = [
-        tok
-        for tok in re.findall(r"[A-Za-z][-A-Za-z0-9_]*", work)
-        if tok.lower() not in skip
+def multi_file_notice_lines(text: str, operand: str) -> list[str]:
+    """Contract: the multi-file notice is a stderr line, not a JSON object,
+    that contains the first operand exactly as given."""
+    return [
+        ln for ln in text.splitlines()
+        if ln.strip() and operand in ln and not _is_json_object_line(ln.strip())
     ]
-    file_toks = [tok for tok in leftover if _is_file_operand_name(tok)]
-    other = [tok for tok in leftover if not _is_file_operand_name(tok)]
-    if file_toks and not other:
-        named = True
-    assert named, "usage does not name the single-file operand"
 
 
-def require_usage_message(text: str) -> None:
-    """*text* is an actual usage message (L118), not the letters 'usage' or a '--' substring.
+def stderr_states_one_file_at_a_time(text: str, scanned: str) -> None:
+    """The stated multi-file notice line names the scanned (first) operand."""
+    hits = multi_file_notice_lines(text, scanned)
+    assert hits, f"error stream has no notice line naming {scanned!r}: {text!r}"
 
-    Names the cleanup switch, the interval switch, the end-of-options
-    double-dash, and the single-file operand.
-    """
-    assert str(text).strip(), "usage message is empty"
-    usage_names_concepts(text)
-    usage_names_single_file_operand(text)
-
-
-def stderr_states_one_file_at_a_time(remainder: str) -> None:
-    """After paths are stripped, *remainder* still states the one-file limit (L119).
-
-    Wording is open: do not require this checkout's sentence. A generic nonempty
-    leftover is not that statement. The statement is recognizable as a
-    one/only/single-file (or operand/path/document) limit.
-    """
-    low = re.sub(r"\s+", " ", remainder).strip().lower()
-    assert low, (
-        "error stream does not state that only one file at a time is supported"
-    )
-    has_one = bool(re.search(r"\b(only|single|one)\b", low))
-    has_file = bool(
-        re.search(r"\b(file|files|operand|operands|path|document)\b", low)
-    )
-    assert has_one and has_file, (
-        "error stream does not state that only one file at a time is supported"
-    )
 
 
 def band_named_for_score(score: int) -> str:

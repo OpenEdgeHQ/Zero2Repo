@@ -25,7 +25,6 @@ from F02_helpers import (
 from F03_helpers import (
     OPUS_MAX_PACKET,
     OPUS_TAGS_MAX,
-    dedicated_kind_slot,
     opus_head_fields,
     place_opus_classified,
     replace_opus_tags,
@@ -38,11 +37,12 @@ from F03_helpers import (
     runtime_ogg_version,
     set_opus_head_channels,
     set_opus_head_family,
-    strip_paths_and_sizes,
+    states_decimal,
     with_first_audio_code3_padding,
     with_later_audio_code3_padding,
     with_ogg_version,
     with_opus_head_padded,
+    without_paths,
 )
 from _harness import files_identical, stored_copy, workspace
 
@@ -540,7 +540,6 @@ def test_channel_mapping_family_nonzero_is_refused():
             neither_dest,
             str(ws.path),
         ]
-        sizes = (len(mutated_a), len(mutated_b), len(ws.read_bytes(neither_src)))
         enc_a = run_product(ws, ["e", src_a, dest_a])
         require_refusal(enc_a)
         assert enc_a.returncode == 1, (
@@ -572,43 +571,16 @@ def test_channel_mapping_family_nonzero_is_refused():
             f"neither-ident compress left stderr empty; stdout={neither_enc.stdout!r}"
         )
         require_no_usable_compress_dest(ws, neither_dest)
-        left_a = strip_paths_and_sizes(enc_a.stderr_text, paths, sizes)
-        left_b = strip_paths_and_sizes(enc_b.stderr_text, paths, sizes)
-        neither_left = strip_paths_and_sizes(
-            neither_enc.stderr_text, paths, sizes
-        )
-        payloads = dedicated_kind_slot(
-            enc_a.stderr_text,
-            enc_b.stderr_text,
-            neither_enc.stderr_text,
-            paths,
-            sizes,
-        )
+        said_a = states_decimal(without_paths(enc_a.stderr_text, paths), family)
+        said_b = states_decimal(without_paths(enc_b.stderr_text, paths), family)
         print(
-            f"[F03] G family={family} shared={sorted(payloads)!r}",
+            f"[F03] G family={family} stated_a={said_a} stated_b={said_b}",
             flush=True,
         )
-        assert left_a != neither_left, (
-            "On compress standard error, a dedicated kind slot — not the "
-            "input path, not a size or offset that varies with the file — "
-            "does not distinguish recognized-as-Opus-then-rejected-for-"
-            f"mapping versus never recognized as Ogg Vorbis or Ogg Opus; "
-            f"family={family}"
-        )
-        assert left_b != neither_left, (
-            "On compress standard error, a dedicated kind slot does not "
-            "distinguish a second mapping-family refusal from never "
-            f"recognized as Ogg Vorbis or Ogg Opus; family={family}"
-        )
-        assert payloads, (
-            "On compress standard error, a dedicated kind slot — not the "
-            "input path, not a size or offset that varies with the file — "
-            "answers whether the input was recognized as Opus and then "
-            "rejected for mapping, versus never recognized as Ogg Vorbis "
-            "or Ogg Opus; those two answers are two distinguishable "
-            "payloads of that same slot. Channel mapping family other "
-            f"than 0 is refused; family={family}. A numeric payload is "
-            "valid; decimals and hex-like runs were not deleted"
+        assert said_a and said_b, (
+            "the diagnostic of a mapping-family refusal states the rejected "
+            f"family value as a decimal number; family={family} "
+            f"stderr_a={enc_a.stderr_text!r} stderr_b={enc_b.stderr_text!r}"
         )
 
 
@@ -655,7 +627,6 @@ def test_family0_channel_count_other_than_1_or_2_is_refused():
             neither_dest,
             str(ws.path),
         ]
-        sizes = (len(mutated_a), len(mutated_b), len(ws.read_bytes(neither_src)))
         enc_a = run_product(ws, ["e", src_a, dest_a])
         require_refusal(enc_a)
         assert enc_a.returncode == 1, (
@@ -688,43 +659,16 @@ def test_family0_channel_count_other_than_1_or_2_is_refused():
             f"neither-ident compress left stderr empty; stdout={neither_enc.stdout!r}"
         )
         require_no_usable_compress_dest(ws, neither_dest)
-        left_a = strip_paths_and_sizes(enc_a.stderr_text, paths, sizes)
-        left_b = strip_paths_and_sizes(enc_b.stderr_text, paths, sizes)
-        neither_left = strip_paths_and_sizes(
-            neither_enc.stderr_text, paths, sizes
-        )
-        payloads = dedicated_kind_slot(
-            enc_a.stderr_text,
-            enc_b.stderr_text,
-            neither_enc.stderr_text,
-            paths,
-            sizes,
-        )
+        said_a = states_decimal(without_paths(enc_a.stderr_text, paths), count)
+        said_b = states_decimal(without_paths(enc_b.stderr_text, paths), count)
         print(
-            f"[F03] G count={count} shared={sorted(payloads)!r}",
+            f"[F03] G count={count} stated_a={said_a} stated_b={said_b}",
             flush=True,
         )
-        assert left_a != neither_left, (
-            "On compress standard error, a dedicated kind slot — not the "
-            "input path, not a size or offset that varies with the file — "
-            "does not distinguish recognized-then-rejected-for-channel-"
-            "count versus never recognized as Ogg Vorbis or Ogg Opus; "
-            f"count={count}"
-        )
-        assert left_b != neither_left, (
-            "On compress standard error, a dedicated kind slot does not "
-            "distinguish a second channel-count refusal from never "
-            f"recognized as Ogg Vorbis or Ogg Opus; count={count}"
-        )
-        assert payloads, (
-            "On compress standard error, a dedicated kind slot — not the "
-            "input path, not a size or offset that varies with the file — "
-            "answers whether the input was recognized as Opus and then "
-            "rejected for channel count, versus never recognized as Ogg "
-            "Vorbis or Ogg Opus, with the same two-payload contrast. "
-            "Channel count other than 1 or 2 under family 0 is refused; "
-            f"count={count}. A numeric payload is valid; decimals and "
-            "hex-like runs were not deleted"
+        assert said_a and said_b, (
+            "the diagnostic of a channel-count refusal states the rejected "
+            f"channel count as a decimal number; count={count} "
+            f"stderr_a={enc_a.stderr_text!r} stderr_b={enc_b.stderr_text!r}"
         )
 
 

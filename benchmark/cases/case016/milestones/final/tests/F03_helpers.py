@@ -6,7 +6,6 @@ New names for this slice only. Sealed F01/F02 helpers are imported, not copied.
 
 from __future__ import annotations
 
-import os
 import secrets
 import subprocess
 import time
@@ -23,11 +22,10 @@ from F01_helpers import (
     require_success_report,
     scan_stdin,
     unicode_len,
-    usage_from_help,
 )
 from F02_helpers import (
+    CLEANUP_FLAG,
     _stdout_is_report,
-    cleanup_flag_from_usage,
     runtime_token,
 )
 
@@ -60,18 +58,12 @@ ENGLAND_FLAG = (
 # TAG payload letters that are not in the England-flag tag run.
 _TAG_AFTER_FLAG = chr(0xE0041) + chr(0xE0042)
 
-_SWITCH: str | None = None
-
 _ZIP_MAGIC = b"PK"
 
 
 def cleanup_switch() -> str:
-    """Discover the cleanup switch from usage (not a required argv spelling)."""
-    global _SWITCH
-    if _SWITCH is None:
-        _SWITCH = cleanup_flag_from_usage(usage_from_help())
-        print(f"[F03] cleanup switch from usage: {_SWITCH!r}", flush=True)
-    return _SWITCH
+    """The cleanup switch the Contract states (``--clean``)."""
+    return CLEANUP_FLAG
 
 
 def tag_payload() -> str:
@@ -397,6 +389,5 @@ def ordinary_space_twin(text: str) -> str:
 
 
 def named_file_in_stderr(stderr: str, path: str) -> bool:
-    """The scanned file is named (path is enough; stem is not required)."""
-    base = os.path.basename(path)
-    return path in stderr or (base and base in stderr)
+    """The scanned (first) operand, as given on argv, is named on stderr."""
+    return path in stderr

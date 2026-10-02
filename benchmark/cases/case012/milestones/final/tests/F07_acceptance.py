@@ -9,9 +9,9 @@ from _harness import DEFAULT_COPY_DEST, workspace
 from F01_helpers import (
     EFFECT_RULE_NAMES,
     lint_policy_findings,
-    copied_effect_specifier,
+    copied_effect_entry,
     lint_generic,
-    require_copy_success,
+    require_copied_layout,
     snippet_manual_tag_comparison,
 )
 from F07_helpers import (
@@ -108,9 +108,8 @@ from F07_helpers import (
 def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
-        generic = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
-        dest = ws.resolve(DEFAULT_COPY_DEST)
-        effect = copied_effect_specifier(ws, dest, generic)
+        generic = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        effect = str(copied_effect_entry(DEFAULT_COPY_DEST, cwd=ws.path).resolve())
         print(f"F07 copied generic={generic} effect={effect}", flush=True)
         yield ws, generic, effect
 

@@ -6,20 +6,18 @@ Model Context Protocol tool. Observations go through the sealed harness
 ``workspace`` / ``invoke`` / ``mcp_batch`` path. These tests do not
 import Go packages, do not call internal Validate helpers, and do not
 use ``membundle show`` / ``membundle search`` / ``membundle create`` / ``membundle init`` /
-``membundle agents`` as an oracle.
+``membundle agents`` to judge results.
 """
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from _harness import utc_today_iso, workspace
-from F01_helpers import combined_report, tz_offset_where_local_date_differs
+from F01_helpers import tz_offset_where_local_date_differs
 from F03_helpers import (
     assert_snapshot_helper_sees_write,
     markdown_link,
-    path_tokens_for,
     unique_tokens,
 )
 from F08_helpers import (
@@ -35,15 +33,14 @@ from F08_helpers import (
     assert_nonconformant,
     assert_numbers_later_greater,
     assert_numbers_not_greater,
-    assert_report_differs_after_strip,
+    assert_finding_concerns,
+    assert_more_findings,
     assert_report_includes_path_token,
     assert_requested_structured_validate_is_machine_readable,
-    assert_string_values_differ_after_strip,
-    assert_warning_absent_after_strip,
+    assert_warning_absent,
     fact_concept,
     mcp_validate,
     plant_ssot_links,
-    report_remainder,
     require_cli_status_0,
     require_cli_status_1,
     require_cli_status_2,
@@ -63,14 +60,24 @@ from F08_helpers import (
     utc_yesterday,
 )
 
+def _gen_hex(n: int = 6) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+
+# Generated per test process: a missing link target, and a concept
+# description with an index listing text that contains it.
+SAMPLE_MISSING_HREF = f"m{_gen_hex(7)}.md"
+SAMPLE_DRIFT_DESC = f"Use K{_gen_hex(6)}"
+SAMPLE_DRIFT_LISTING = f"{SAMPLE_DRIFT_DESC} for O{_gen_hex(5)}2."
+
+
+
 
 def _rel() -> str:
     return unique_tokens("kb")[0]
-
-
-def _paths(ws, bundle: str | Path, *extra: str) -> list[str]:
-    root = ws.path / bundle if not Path(bundle).is_absolute() else Path(bundle)
-    return path_tokens_for(ws.path, bundle, root, *extra)
 
 
 def _seed_facts(ws, rel: str, identities: list[str], **kwargs):
@@ -128,8 +135,8 @@ def test_missing_or_empty_type_is_nonconformant_without_strict():
         rel_ok = unique_tokens("ok")[0]
         seed_validatable_bundle(ws, rel_ok, [fact_concept(ident, body=body)])
         repaired, repaired_payload = run_validate_structured(ws, rel_ok)
-        require_hard_error_class(omit, repaired, structured_defective=omit_payload)
-        require_hard_error_class(empty, repaired, structured_defective=empty_payload)
+        require_hard_error_class(omit, repaired, structured_defective=omit_payload, concerns=f"{ident}.md")
+        require_hard_error_class(empty, repaired, structured_defective=empty_payload, concerns=f"{ident}.md")
         assert_both_pass(repaired_payload)
         print("[F08] missing and empty type are nonconformant", flush=True)
 
@@ -153,7 +160,7 @@ def test_type_fact_with_no_other_fields_is_conformant():
         assert_numbers_later_greater(empty_payload, strict_payload)
 
 
-def test_type_fact_public_sample_has_runtime_twin():
+def test_type_fact_generated_sample_has_runtime_twin():
     with workspace() as ws:
         sample, twin = unique_tokens("sm", "tw")
         rel_a = unique_tokens("a")[0]
@@ -187,7 +194,9 @@ def test_missing_yaml_frontmatter_is_hard_error():
         rel_ok = unique_tokens("ok")[0]
         seed_validatable_bundle(ws, rel_ok, [fact_concept(ident, body=token)])
         repaired, repaired_payload = run_validate_structured(ws, rel_ok)
-        require_hard_error_class(bad, repaired, structured_defective=bad_payload)
+        require_hard_error_class(
+            bad, repaired, structured_defective=bad_payload, concerns=f"{ident}.md"
+        )
         assert_both_pass(repaired_payload)
 
 
@@ -204,7 +213,9 @@ def test_readme_without_frontmatter_is_hard_error():
         rel_ok = unique_tokens("ok")[0]
         seed_validatable_bundle(ws, rel_ok, [fact_concept("README", body=token)])
         repaired, _ = run_validate_structured(ws, rel_ok)
-        require_hard_error_class(bad, repaired, structured_defective=bad_payload)
+        require_hard_error_class(
+            bad, repaired, structured_defective=bad_payload, concerns="README.md"
+        )
 
 
 def test_readme_with_type_is_conformant():
@@ -240,7 +251,9 @@ def test_whitespace_only_title_is_hard_error():
         rel_ok = unique_tokens("ok")[0]
         seed_validatable_bundle(ws, rel_ok, [fact_concept(ident)])
         repaired, _ = run_validate_structured(ws, rel_ok)
-        require_hard_error_class(bad, repaired, structured_defective=bad_payload)
+        require_hard_error_class(
+            bad, repaired, structured_defective=bad_payload, concerns=f"{ident}.md"
+        )
 
 
 def test_mcp_missing_type_is_nonconformant_not_mixed_gate_fail():
@@ -258,7 +271,7 @@ def test_mcp_missing_type_is_nonconformant_not_mixed_gate_fail():
         ok = mcp_validate(ws, rel_ok)
         bad_payload = require_mcp_validate_report(bad)
         ok_payload = require_mcp_validate_report(ok)
-        assert_nonconformant(bad_payload)
+        assert_nonconformant(bad_payload, concerns=f"{ident}.md")
         assert_both_pass(ok_payload)
 
 
@@ -382,13 +395,15 @@ def test_hidden_node_modules_and_non_markdown_are_not_loaded():
         result, payload = run_validate_structured(ws, rel)
         require_cli_status_0(md_run)
         require_cli_status_0(result)
-        blob = combined_report(result) + str(payload)
         assert_identity_listed(payload, visible)
         assert_identity_listed(payload, other)
-        assert hid_file not in blob, blob
-        assert hid_dir not in blob, blob
-        assert nm_root not in blob, blob
-        assert nm_nest not in blob, blob
+        for skipped in (
+            f".{hid_file}",
+            f".hidden/{hid_dir}",
+            f"node_modules/{nm_root}",
+            f"vendor/node_modules/{nm_nest}",
+        ):
+            assert_identity_not_listed(payload, skipped)
         assert_absent_from_loaded_concept_set(
             payload, txt_name, markdown_only=md_payload
         )
@@ -408,14 +423,13 @@ def test_declared_version_0_2_is_reported_versus_undeclared():
         undeclared, u_payload = run_validate_structured(ws, rel_u)
         require_cli_status_0(declared)
         require_cli_status_0(undeclared)
-        tokens = _paths(ws, rel_d, ident) + _paths(ws, rel_u, ident)
-        d_rep = combined_report(declared)
-        u_rep = combined_report(undeclared)
-        assert_report_differs_after_strip(d_rep, u_rep, path_tokens=tokens)
-        d_rem = report_remainder(d_rep, path_tokens=tokens, extra_tokens=[ident])
-        assert "0.2" in d_rep or "0.2" in str(d_payload)
-        assert "0.2" in d_rem or "0.2" in str(d_payload)
-        print(f"[F08] undeclared payload={u_payload!r}", flush=True)
+        print(f"[F08] declared={d_payload!r} undeclared={u_payload!r}", flush=True)
+        assert d_payload.get("declared_version") == "0.2", (
+            f"declared_version is not '0.2' for a 0.2 bundle: {d_payload!r}"
+        )
+        assert "declared_version" not in u_payload, (
+            f"undeclared bundle reports a declared_version: {u_payload!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -437,14 +451,12 @@ def test_nested_index_with_frontmatter_is_warning_under_strict():
         (ws.path / rel_ok / "dir" / "index.md").write_text("# nested\n", encoding="utf-8")
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        tokens = _paths(ws, rel_bad, ident) + _paths(ws, rel_ok, ident)
-        require_warning_class(defective, repaired, path_tokens=tokens, extra_tokens=[ident])
-        assert_warning_absent_after_strip(
-            combined_report(repaired),
-            combined_report(repaired),
-            path_tokens=tokens,
-            extra_tokens=[ident],
+        require_warning_class(
+            defective,
+            repaired,
+            concerns="dir/index.md",
         )
+        assert_warning_absent(repaired, repaired, concerns="dir/index.md")
 
 
 def test_two_hash_non_iso_log_heading_is_warning_single_hash_is_not():
@@ -462,21 +474,12 @@ def test_two_hash_non_iso_log_heading_is_warning_single_hash_is_not():
         defective = run_validate(ws, rel_bad, strict=True)
         iso = run_validate(ws, rel_iso, strict=True)
         single = run_validate(ws, rel_hash, strict=True)
-        tokens = (
-            _paths(ws, rel_bad, ident)
-            + _paths(ws, rel_iso, ident)
-            + _paths(ws, rel_hash, ident)
-            + ["Monday", "2020-01-01", ident]
-        )
         require_warning_class(
-            defective, iso, path_tokens=tokens, extra_tokens=["Monday", ident]
+            defective,
+            iso,
+            concerns="log.md",
         )
-        assert_warning_absent_after_strip(
-            combined_report(single),
-            combined_report(iso),
-            path_tokens=tokens,
-            extra_tokens=["Monday", ident, "2020-01-01"],
-        )
+        assert_warning_absent(single, iso, concerns="log.md")
 
 
 def test_unmatched_footnote_warns_only_when_a_sources_id_is_listed():
@@ -514,15 +517,12 @@ def test_unmatched_footnote_warns_only_when_a_sources_id_is_listed():
         warn = run_validate(ws, rel_warn, strict=True)
         none = run_validate(ws, rel_none, strict=True)
         match = run_validate(ws, rel_match, strict=True)
-        extra = [ident, src_id, fn_key, resource]
-        tokens = _paths(ws, rel_warn) + _paths(ws, rel_none) + _paths(ws, rel_match)
-        require_warning_class(warn, match, path_tokens=tokens, extra_tokens=extra)
-        assert_warning_absent_after_strip(
-            combined_report(none),
-            combined_report(match),
-            path_tokens=tokens,
-            extra_tokens=extra,
+        require_warning_class(
+            warn,
+            match,
+            concerns=f"{ident}.md",
         )
+        assert_warning_absent(none, match, concerns=f"{ident}.md")
 
 
 def test_fenced_footnote_is_not_an_unmatched_warning():
@@ -566,16 +566,13 @@ def test_fenced_footnote_is_not_an_unmatched_warning():
         fenced = run_validate(ws, rel_fence, strict=True)
         live = run_validate(ws, rel_live, strict=True)
         ok = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, src_id, fn_key, resource]
-        tokens = _paths(ws, rel_fence) + _paths(ws, rel_live) + _paths(ws, rel_ok)
         require_cli_status_0(fenced)
-        require_warning_class(live, ok, path_tokens=tokens, extra_tokens=extra)
-        assert_warning_absent_after_strip(
-            combined_report(fenced),
-            combined_report(ok),
-            path_tokens=tokens,
-            extra_tokens=extra,
+        require_warning_class(
+            live,
+            ok,
+            concerns=f"{ident}.md",
         )
+        assert_warning_absent(fenced, ok, concerns=f"{ident}.md")
 
 
 def test_invalid_actor_on_generated_verified_and_sources_author_is_warning():
@@ -626,12 +623,12 @@ def test_invalid_actor_on_generated_verified_and_sources_author_is_warning():
             )
             defective = run_validate(ws, rel_bad, strict=True)
             repaired = run_validate(ws, rel_ok, strict=True)
-            extra = [ident, invalid, resource, "agent/cli", "human:alice"]
-            tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
             print(f"[F08] invalid actor field={label}", flush=True)
             require_warning_class(
-                defective, repaired, path_tokens=tokens, extra_tokens=extra
-            )
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
+        )
 
 
 def test_verified_without_by_is_warning():
@@ -662,33 +659,31 @@ def test_verified_without_by_is_warning():
         )
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, "human:alice", stamp, gen_stamp]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok) + _paths(ws, rel_gate)
         print("[F08] verified entry with no by is a warning", flush=True)
-        require_warning_class(defective, repaired, path_tokens=tokens, extra_tokens=extra)
+        require_warning_class(
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
+        )
         bad_st, bad_payload = run_validate_structured(ws, rel_bad, strict=True)
         ok_st, ok_payload = run_validate_structured(ws, rel_ok, strict=True)
         require_cli_status_0(bad_st)
         assert_both_pass(bad_payload)
         require_cli_status_0(ok_st)
         assert_both_pass(ok_payload)
-        assert_string_values_differ_after_strip(
-            bad_payload, ok_payload, path_tokens=tokens, extra_tokens=extra
-        )
+        assert_more_findings(bad_payload, ok_payload, "warnings", f"{ident}.md")
         gate, gate_payload = run_validate_structured(ws, rel_gate, strict=True)
         require_cli_status_1(gate)
         assert_conformant_gate_fail(gate_payload)
+        assert_finding_concerns(gate_payload, "gate_findings", f"{ident}.md")
         mcp_bad = mcp_validate(ws, rel_bad)
         mcp_ok = mcp_validate(ws, rel_ok)
         mcp_bad_payload = require_mcp_validate_report(mcp_bad)
         mcp_ok_payload = require_mcp_validate_report(mcp_ok)
         assert_both_pass(mcp_bad_payload)
         assert_both_pass(mcp_ok_payload)
-        assert_report_differs_after_strip(
-            mcp_bad.report_text,
-            mcp_ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
+        assert_more_findings(
+            mcp_bad_payload, mcp_ok_payload, "warnings", f"{ident}.md"
         )
 
 
@@ -714,11 +709,11 @@ def test_missing_generated_at_is_warning():
         )
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, "agent/cli", stamp]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
         print("[F08] missing generated.at", flush=True)
         require_warning_class(
-            defective, repaired, path_tokens=tokens, extra_tokens=extra
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
         )
 
 
@@ -751,11 +746,11 @@ def test_unparseable_generated_at_is_warning():
         )
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, "agent/cli", "not-a-timestamp", stamp]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
         print("[F08] unparseable generated.at", flush=True)
         require_warning_class(
-            defective, repaired, path_tokens=tokens, extra_tokens=extra
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
         )
 
 
@@ -783,11 +778,11 @@ def test_missing_verified_at_is_warning():
         )
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, "human:alice", stamp]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
         print("[F08] missing verified.at", flush=True)
         require_warning_class(
-            defective, repaired, path_tokens=tokens, extra_tokens=extra
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
         )
 
 
@@ -834,11 +829,11 @@ def test_unparseable_verified_at_is_warning():
         )
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, "human:alice", bad_at, stamp, earlier, later, "agent/cli"]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok) + _paths(ws, rel_gate)
         print("[F08] unparseable verified.at is a warning", flush=True)
         require_warning_class(
-            defective, repaired, path_tokens=tokens, extra_tokens=extra
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
         )
         bad_st, bad_payload = run_validate_structured(ws, rel_bad, strict=True)
         ok_st, ok_payload = run_validate_structured(ws, rel_ok, strict=True)
@@ -846,23 +841,19 @@ def test_unparseable_verified_at_is_warning():
         assert_both_pass(bad_payload)
         require_cli_status_0(ok_st)
         assert_both_pass(ok_payload)
-        assert_string_values_differ_after_strip(
-            bad_payload, ok_payload, path_tokens=tokens, extra_tokens=extra
-        )
+        assert_more_findings(bad_payload, ok_payload, "warnings", f"{ident}.md")
         gate, gate_payload = run_validate_structured(ws, rel_gate, strict=True)
         require_cli_status_1(gate)
         assert_conformant_gate_fail(gate_payload)
+        assert_finding_concerns(gate_payload, "gate_findings", f"{ident}.md")
         mcp_bad = mcp_validate(ws, rel_bad)
         mcp_ok = mcp_validate(ws, rel_ok)
         mcp_bad_payload = require_mcp_validate_report(mcp_bad)
         mcp_ok_payload = require_mcp_validate_report(mcp_ok)
         assert_both_pass(mcp_bad_payload)
         assert_both_pass(mcp_ok_payload)
-        assert_report_differs_after_strip(
-            mcp_bad.report_text,
-            mcp_ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
+        assert_more_findings(
+            mcp_bad_payload, mcp_ok_payload, "warnings", f"{ident}.md"
         )
 
 
@@ -892,9 +883,11 @@ def test_sources_last_modified_not_yyyy_mm_dd_is_warning():
         seed_validatable_bundle(ws, rel_ok, [fact_concept(ident, extra=good)])
         defective = run_validate(ws, rel_bad, strict=True)
         repaired = run_validate(ws, rel_ok, strict=True)
-        extra = [ident, resource, "not-a-date", "2020-01-01"]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
-        require_warning_class(defective, repaired, path_tokens=tokens, extra_tokens=extra)
+        require_warning_class(
+            defective,
+            repaired,
+            concerns=f"{ident}.md",
+        )
 
 
 def test_malformed_stale_after_is_warning_not_stale_count():
@@ -914,10 +907,10 @@ def test_malformed_stale_after_is_warning_not_stale_count():
         )
         malformed = run_validate(ws, rel_bad, strict=True)
         tomorrow_run = run_validate(ws, rel_t, strict=True)
-        extra = [ident, "not-a-date", yesterday, tomorrow]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_t) + _paths(ws, rel_y)
         require_warning_class(
-            malformed, tomorrow_run, path_tokens=tokens, extra_tokens=extra
+            malformed,
+            tomorrow_run,
+            concerns=f"{ident}.md",
         )
         m_stale, m_payload = run_validate_structured(ws, rel_bad, stale=True)
         y_stale, y_payload = run_validate_structured(ws, rel_y, stale=True)
@@ -925,7 +918,7 @@ def test_malformed_stale_after_is_warning_not_stale_count():
         require_cli_status_1(y_stale)
         assert_both_pass(m_payload)
         assert_conformant_gate_fail(y_payload)
-        assert_numbers_later_greater(m_payload, y_payload)
+        assert_numbers_later_greater(m_payload, y_payload, field="stale_count")
 
 
 # ---------------------------------------------------------------------------
@@ -959,14 +952,8 @@ def test_mcp_timestamp_finding_fails_default_producer_gate():
         assert_conformant_gate_fail(fail_payload)
         assert_both_pass(off_payload)
         assert_both_pass(ok_payload)
-        extra = [ident, leftover]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
-        assert_report_differs_after_strip(
-            off.report_text,
-            ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
-        )
+        assert_finding_concerns(fail_payload, "gate_findings", f"{ident}.md")
+        assert_more_findings(off_payload, ok_payload, "gate_findings", f"{ident}.md")
 
 
 def test_single_hash_citations_outside_fences_is_gate_finding():
@@ -980,15 +967,12 @@ def test_single_hash_citations_outside_fences_is_gate_finding():
         without = run_validate(ws, rel_bad)
         with_strict, payload = run_validate_structured(ws, rel_bad, strict=True)
         repaired, _ = run_validate_structured(ws, rel_ok, strict=True)
-        extra = [ident, "Citations"]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
         require_gate_finding_class(
             without,
             with_strict,
             repaired,
             structured_strict=payload,
-            path_tokens=tokens,
-            extra_tokens=extra,
+            concerns=f"{ident}.md",
         )
 
 
@@ -1160,15 +1144,12 @@ def test_absolute_and_dotdot_code_refs_are_gate_findings():
         without = run_validate(ws, rel_dot)
         with_strict, payload = run_validate_structured(ws, rel_dot, strict=True)
         repaired, _ = run_validate_structured(ws, rel_ok, strict=True)
-        extra = [ident, "secret.go", "inside.go"]
-        tokens = _paths(ws, rel_dot) + _paths(ws, rel_ok)
         require_gate_finding_class(
             without,
             with_strict,
             repaired,
             structured_strict=payload,
-            path_tokens=tokens,
-            extra_tokens=extra,
+            concerns=f"{ident}.md",
         )
 
 
@@ -1224,24 +1205,7 @@ def test_gate_findings_are_not_fatal_when_version_is_not_0_2():
         assert_both_pass(o_payload)
         require_cli_status_1(fail_02)
         assert_conformant_gate_fail(fail_payload)
-        extra = [ident, leftover, "0.1", "0.2"]
-        tokens = (
-            _paths(ws, rel_decl, ident)
-            + _paths(ws, rel_omit, ident)
-            + _paths(ws, rel_02, ident)
-        )
-        assert_report_differs_after_strip(
-            combined_report(fail_02),
-            combined_report(declared),
-            path_tokens=tokens,
-            extra_tokens=extra,
-        )
-        assert_report_differs_after_strip(
-            combined_report(fail_02),
-            combined_report(omitted),
-            path_tokens=tokens,
-            extra_tokens=extra,
-        )
+        assert_finding_concerns(fail_payload, "gate_findings", f"{ident}.md")
 
 
 # ---------------------------------------------------------------------------
@@ -1430,7 +1394,7 @@ def test_broken_relative_missing_md_listed_fails_gate_only_when_strict():
         seed_validatable_bundle(
             ws,
             rel_pub,
-            [fact_concept(ident, body=markdown_link("x", "missing.md") + "\n")],
+            [fact_concept(ident, body=markdown_link("x", SAMPLE_MISSING_HREF) + "\n")],
         )
         seed_validatable_bundle(
             ws,
@@ -1448,17 +1412,17 @@ def test_broken_relative_missing_md_listed_fails_gate_only_when_strict():
         loose, payload = run_validate_structured(ws, rel_pub)
         require_cli_status_0(loose)
         assert_both_pass(payload)
-        assert_href_listed(payload, "missing.md")
+        assert_href_listed(payload, SAMPLE_MISSING_HREF, source=f"{ident}.md")
         strict, s_payload = run_validate_structured(ws, rel_pub, strict=True)
         require_cli_status_1(strict)
         assert_conformant_gate_fail(s_payload)
         twin, t_payload = run_validate_structured(ws, rel_twin)
         require_cli_status_0(twin)
-        assert_href_listed(t_payload, f"{unique_href}.md")
+        assert_href_listed(t_payload, f"{unique_href}.md", source=f"{ident}.md")
         ok, ok_payload = run_validate_structured(ws, rel_ok, strict=True)
         require_cli_status_0(ok)
         assert_both_pass(ok_payload)
-        assert_href_not_listed(ok_payload, "missing.md")
+        assert_href_not_listed(ok_payload, SAMPLE_MISSING_HREF)
         assert_href_not_listed(ok_payload, "present.md")
 
 
@@ -1469,12 +1433,12 @@ def test_mcp_broken_missing_md_fails_default_producer_gate():
         seed_validatable_bundle(
             ws,
             rel,
-            [fact_concept(ident, body=markdown_link("x", "missing.md") + "\n")],
+            [fact_concept(ident, body=markdown_link("x", SAMPLE_MISSING_HREF) + "\n")],
         )
         outcome = mcp_validate(ws, rel)
         payload = require_mcp_validate_report(outcome)
         assert_conformant_gate_fail(payload)
-        assert_href_listed(payload, "missing.md")
+        assert_href_listed(payload, SAMPLE_MISSING_HREF, source=f"{ident}.md")
 
 
 def test_fenced_and_external_hrefs_are_not_broken_links():
@@ -1484,7 +1448,7 @@ def test_fenced_and_external_hrefs_are_not_broken_links():
         seed_validatable_bundle(
             ws,
             rel_fence,
-            [fact_concept(ident, body="```\n[x](missing.md)\n```\n")],
+            [fact_concept(ident, body=f"```\n[x]({SAMPLE_MISSING_HREF})\n```\n")],
         )
         seed_validatable_bundle(
             ws,
@@ -1492,14 +1456,14 @@ def test_fenced_and_external_hrefs_are_not_broken_links():
             [
                 fact_concept(
                     ident,
-                    body=markdown_link("x", "https://example.invalid/missing.md") + "\n",
+                    body=markdown_link("x", f"https://example.invalid/{SAMPLE_MISSING_HREF}") + "\n",
                 )
             ],
         )
         seed_validatable_bundle(
             ws,
             rel_live,
-            [fact_concept(ident, body=markdown_link("x", "missing.md") + "\n")],
+            [fact_concept(ident, body=markdown_link("x", SAMPLE_MISSING_HREF) + "\n")],
         )
         fenced, f_payload = run_validate_structured(ws, rel_fence, strict=True)
         external, e_payload = run_validate_structured(ws, rel_ext, strict=True)
@@ -1510,9 +1474,9 @@ def test_fenced_and_external_hrefs_are_not_broken_links():
         assert_both_pass(e_payload)
         require_cli_status_1(live)
         assert_conformant_gate_fail(l_payload)
-        assert_href_listed(l_payload, "missing.md")
-        assert_href_not_listed(f_payload, "missing.md")
-        assert_href_not_listed(e_payload, "missing.md")
+        assert_href_listed(l_payload, SAMPLE_MISSING_HREF, source=f"{ident}.md")
+        assert_href_not_listed(f_payload, SAMPLE_MISSING_HREF)
+        assert_href_not_listed(e_payload, SAMPLE_MISSING_HREF)
 
 
 def test_links_to_reserved_index_log_agents_are_broken():
@@ -1530,9 +1494,9 @@ def test_links_to_reserved_index_log_agents_are_broken():
         seed_validatable_bundle(ws, rel, [fact_concept(ident, body=body)])
         loose, payload = run_validate_structured(ws, rel)
         require_cli_status_0(loose)
-        assert_href_listed(payload, "index.md")
-        assert_href_listed(payload, "log.md")
-        assert_href_listed(payload, "AGENTS.md")
+        assert_href_listed(payload, "index.md", source=f"{ident}.md")
+        assert_href_listed(payload, "log.md", source=f"{ident}.md")
+        assert_href_listed(payload, "AGENTS.md", source=f"{ident}.md")
         strict, s_payload = run_validate_structured(ws, rel, strict=True)
         require_cli_status_1(strict)
         assert_conformant_gate_fail(s_payload)
@@ -1577,15 +1541,12 @@ def test_yesterday_stale_after_increments_count_strict_alone_still_passes():
         require_cli_status_0(o)
         assert_both_pass(y_payload)
         assert_both_pass(t_payload)
-        assert_numbers_later_greater(t_payload, y_payload)
-        assert_numbers_later_greater(o_payload, y_payload)
-        extra = [ident, yesterday, tomorrow]
-        tokens = _paths(ws, rel_y) + _paths(ws, rel_t)
+        assert_numbers_later_greater(t_payload, y_payload, field="stale_count")
+        assert_numbers_later_greater(o_payload, y_payload, field="stale_count")
         require_warning_class(
             run_validate(ws, rel_y, strict=True),
             run_validate(ws, rel_t, strict=True),
-            path_tokens=tokens,
-            extra_tokens=extra,
+            concerns=f"{ident}.md",
         )
 
 
@@ -1625,7 +1586,7 @@ def test_today_utc_is_stale_tomorrow_is_not():
         assert_conformant_gate_fail(today_payload)
         require_cli_status_0(tm_run)
         assert_both_pass(tm_payload)
-        assert_numbers_later_greater(tm_payload, today_payload)
+        assert_numbers_later_greater(tm_payload, today_payload, field="stale_count")
 
 
 def test_stale_after_uses_utc_today_under_tz_offset():
@@ -1680,13 +1641,15 @@ def test_drift_warns_when_listing_does_not_contain_description_after_named_compa
     with workspace() as ws:
         ident, title, mismatch = unique_tokens("id", "tl", "ms")
         rel_bad, rel_ok = unique_tokens("bd", "ok")
-        seed_drift_bundle(ws, rel_bad, ident, title, "Use PKCE", mismatch)
-        seed_drift_bundle(ws, rel_ok, ident, title, "Use PKCE", "Use PKCE for OAuth2.")
+        seed_drift_bundle(ws, rel_bad, ident, title, SAMPLE_DRIFT_DESC, mismatch)
+        seed_drift_bundle(ws, rel_ok, ident, title, SAMPLE_DRIFT_DESC, SAMPLE_DRIFT_LISTING)
         warn = run_validate(ws, rel_bad, drift=True, strict=True)
         ok = run_validate(ws, rel_ok, drift=True, strict=True)
-        extra = [ident, title, mismatch, "Use PKCE", "OAuth2"]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
-        require_warning_class(warn, ok, path_tokens=tokens, extra_tokens=extra)
+        require_warning_class(
+            warn,
+            ok,
+            concerns="index.md",
+        )
 
 
 def test_drift_containment_and_punctuation_strip_do_not_warn():
@@ -1700,7 +1663,7 @@ def test_drift_containment_and_punctuation_strip_do_not_warn():
         seed_drift_bundle(ws, rel_quiet, ident, title, hello, hello)
         seed_drift_bundle(ws, rel_case, ident, title, hello, "HELLO WORLD")
         seed_drift_bundle(ws, rel_punct, ident, title, hello, 'He"llo  wo_rld.')
-        seed_drift_bundle(ws, rel_bad, ident, title, "Use PKCE", mismatch)
+        seed_drift_bundle(ws, rel_bad, ident, title, SAMPLE_DRIFT_DESC, mismatch)
         seed_drift_bundle(ws, rel_bs, ident, title, hello, r"Hel\lo world")
         seed_drift_bundle(ws, rel_sq, ident, title, hello, "Hel'lo world")
         seed_drift_bundle(ws, rel_bt, ident, title, hello, "Hel`lo world")
@@ -1715,31 +1678,6 @@ def test_drift_containment_and_punctuation_strip_do_not_warn():
         backtick = run_validate(ws, rel_bt, drift=True, strict=True)
         asterisk = run_validate(ws, rel_as, drift=True, strict=True)
         hello_ok = run_validate(ws, rel_hello, drift=True, strict=True)
-        extra = [
-            ident,
-            title,
-            mismatch,
-            "Use PKCE",
-            hello,
-            "HELLO WORLD",
-            r"Hel\lo world",
-            "Hel'lo world",
-            "Hel`lo world",
-            "Hel*lo world",
-            'He"llo  wo_rld.',
-            "Hello world and more",
-        ]
-        tokens = (
-            _paths(ws, rel_quiet)
-            + _paths(ws, rel_case)
-            + _paths(ws, rel_punct)
-            + _paths(ws, rel_bad)
-            + _paths(ws, rel_bs)
-            + _paths(ws, rel_sq)
-            + _paths(ws, rel_bt)
-            + _paths(ws, rel_as)
-            + _paths(ws, rel_hello)
-        )
         require_cli_status_0(quiet)
         require_cli_status_0(case)
         require_cli_status_0(punct)
@@ -1748,7 +1686,11 @@ def test_drift_containment_and_punctuation_strip_do_not_warn():
         require_cli_status_0(backtick)
         require_cli_status_0(asterisk)
         require_cli_status_0(hello_ok)
-        require_warning_class(bad, quiet, path_tokens=tokens, extra_tokens=extra)
+        require_warning_class(
+            bad,
+            quiet,
+            concerns="index.md",
+        )
         for arm, label in (
             (case, "casefold"),
             (punct, "quote-underscore-whitespace-period"),
@@ -1759,31 +1701,23 @@ def test_drift_containment_and_punctuation_strip_do_not_warn():
             (hello_ok, "containment"),
         ):
             print(f"[F08] drift named comparison {label}", flush=True)
-            assert_warning_absent_after_strip(
-                combined_report(arm),
-                combined_report(quiet),
-                path_tokens=tokens,
-                extra_tokens=extra,
-            )
+            assert_warning_absent(arm, quiet, concerns="index.md")
 
 
 def test_drift_warning_alone_does_not_fail_producer_gate():
     with workspace() as ws:
         ident, title, mismatch = unique_tokens("id", "tl", "ms")
         rel, rel_ok = unique_tokens("bd", "ok")
-        seed_drift_bundle(ws, rel, ident, title, "Use PKCE", mismatch)
-        seed_drift_bundle(ws, rel_ok, ident, title, "Use PKCE", "Use PKCE for OAuth2.")
+        seed_drift_bundle(ws, rel, ident, title, SAMPLE_DRIFT_DESC, mismatch)
+        seed_drift_bundle(ws, rel_ok, ident, title, SAMPLE_DRIFT_DESC, SAMPLE_DRIFT_LISTING)
         result, payload = run_validate_structured(ws, rel, drift=True, strict=True)
         require_cli_status_0(result)
         assert_both_pass(payload)
         ok = run_validate(ws, rel_ok, drift=True, strict=True)
-        extra = [ident, title, mismatch, "Use PKCE", "OAuth2"]
-        tokens = _paths(ws, rel) + _paths(ws, rel_ok)
         require_warning_class(
             run_validate(ws, rel, drift=True, strict=True),
             ok,
-            path_tokens=tokens,
-            extra_tokens=extra,
+            concerns="index.md",
         )
 
 
@@ -1791,58 +1725,43 @@ def test_mcp_drift_mismatch_does_not_fail_producer_gate():
     with workspace() as ws:
         ident, title, mismatch = unique_tokens("id", "tl", "ms")
         rel = _rel()
-        desc = "Use PKCE"
-        listing = "Use PKCE for OAuth2."
+        desc = SAMPLE_DRIFT_DESC
+        listing = SAMPLE_DRIFT_LISTING
         seed_drift_bundle(ws, rel, ident, title, desc, mismatch)
         outcome = mcp_validate(ws, rel)
         payload = require_mcp_validate_report(outcome)
         assert_both_pass(payload)
-        extra = [ident, title, mismatch, desc, listing]
-        tokens = _paths(ws, rel)
         rel_ok = unique_tokens("ok")[0]
         seed_drift_bundle(ws, rel_ok, ident, title, desc, listing)
         ok = mcp_validate(ws, rel_ok)
         ok_payload = require_mcp_validate_report(ok)
         assert_both_pass(ok_payload)
-        assert_report_differs_after_strip(
-            outcome.report_text,
-            ok.report_text,
-            path_tokens=tokens + _paths(ws, rel_ok),
-            extra_tokens=extra,
-        )
+        assert_more_findings(payload, ok_payload, "warnings", "index.md")
 
 
 def test_cli_drift_is_opt_in_mcp_drift_is_always_on():
     with workspace() as ws:
         ident, title, mismatch = unique_tokens("id", "tl", "ms")
         rel_bad, rel_ok = unique_tokens("bd", "ok")
-        seed_drift_bundle(ws, rel_bad, ident, title, "Use PKCE", mismatch)
-        seed_drift_bundle(ws, rel_ok, ident, title, "Use PKCE", "Use PKCE for OAuth2.")
+        seed_drift_bundle(ws, rel_bad, ident, title, SAMPLE_DRIFT_DESC, mismatch)
+        seed_drift_bundle(ws, rel_ok, ident, title, SAMPLE_DRIFT_DESC, SAMPLE_DRIFT_LISTING)
         cli_off = run_validate(ws, rel_bad, strict=True)
         cli_on = run_validate(ws, rel_bad, drift=True, strict=True)
         baseline = run_validate(ws, rel_ok, drift=True, strict=True)
-        extra = [ident, title, mismatch, "Use PKCE"]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
         require_cli_status_0(cli_off)
-        require_warning_class(cli_on, baseline, path_tokens=tokens, extra_tokens=extra)
-        assert_warning_absent_after_strip(
-            combined_report(cli_off),
-            combined_report(baseline),
-            path_tokens=tokens,
-            extra_tokens=extra,
+        require_warning_class(
+            cli_on,
+            baseline,
+            concerns="index.md",
         )
+        assert_warning_absent(cli_off, baseline, concerns="index.md")
         mcp_default = mcp_validate(ws, rel_bad, strict=False)
         payload = require_mcp_validate_report(mcp_default)
         assert_both_pass(payload)
         mcp_ok = mcp_validate(ws, rel_ok, strict=False)
         ok_payload = require_mcp_validate_report(mcp_ok)
         assert_both_pass(ok_payload)
-        assert_report_differs_after_strip(
-            mcp_default.report_text,
-            mcp_ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
-        )
+        assert_more_findings(payload, ok_payload, "warnings", "index.md")
 
 
 def test_missing_non_glob_code_refs_path_is_drift_warning():
@@ -1859,9 +1778,11 @@ def test_missing_non_glob_code_refs_path_is_drift_warning():
         (ws.path / rel_ok / path).write_text("package x\n", encoding="utf-8")
         warn = run_validate(ws, rel_bad, drift=True, strict=True)
         ok = run_validate(ws, rel_ok, drift=True, strict=True)
-        extra = [ident, path, missing]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
-        require_warning_class(warn, ok, path_tokens=tokens, extra_tokens=extra)
+        require_warning_class(
+            warn,
+            ok,
+            concerns=f"{ident}.md",
+        )
 
 
 def test_glob_code_refs_and_existing_project_or_bundle_path_do_not_drift_warn():
@@ -1892,29 +1813,16 @@ def test_glob_code_refs_and_existing_project_or_bundle_path_do_not_drift_warn():
         proj = run_validate(ws, rel_proj, drift=True, strict=True)
         bundle = run_validate(ws, rel_bundle, drift=True, strict=True)
         miss = run_validate(ws, rel_miss, drift=True, strict=True)
-        extra = [ident, leaf]
-        tokens = (
-            _paths(ws, rel_glob)
-            + _paths(ws, rel_proj)
-            + _paths(ws, rel_bundle)
-            + _paths(ws, rel_miss)
-        )
         require_cli_status_0(glob)
         require_cli_status_0(proj)
         require_cli_status_0(bundle)
-        require_warning_class(miss, glob, path_tokens=tokens, extra_tokens=extra)
-        assert_warning_absent_after_strip(
-            combined_report(proj),
-            combined_report(glob),
-            path_tokens=tokens,
-            extra_tokens=extra + [f"{leaf}.go"],
+        require_warning_class(
+            miss,
+            glob,
+            concerns=f"{ident}.md",
         )
-        assert_warning_absent_after_strip(
-            combined_report(bundle),
-            combined_report(glob),
-            path_tokens=tokens,
-            extra_tokens=extra + [f"{leaf}.go"],
-        )
+        assert_warning_absent(proj, glob, concerns=f"{ident}.md")
+        assert_warning_absent(bundle, glob, concerns=f"{ident}.md")
 
 
 def test_cli_missing_code_refs_path_without_drift_is_not_that_warning():
@@ -1933,16 +1841,13 @@ def test_cli_missing_code_refs_path_without_drift_is_not_that_warning():
         )
         (ws.path / rel_ok / path).write_text("package x\n", encoding="utf-8")
         baseline = run_validate(ws, rel_ok, drift=True, strict=True)
-        extra = [ident, path, missing]
-        tokens = _paths(ws, rel) + _paths(ws, rel_ok)
         require_cli_status_0(off)
-        require_warning_class(on, baseline, path_tokens=tokens, extra_tokens=extra)
-        assert_warning_absent_after_strip(
-            combined_report(off),
-            combined_report(baseline),
-            path_tokens=tokens,
-            extra_tokens=extra,
+        require_warning_class(
+            on,
+            baseline,
+            concerns=f"{ident}.md",
         )
+        assert_warning_absent(off, baseline, concerns=f"{ident}.md")
 
 
 def test_mcp_missing_code_refs_path_warns_without_failing_gate():
@@ -1950,8 +1855,8 @@ def test_mcp_missing_code_refs_path_warns_without_failing_gate():
         ident, missing, title = unique_tokens("id", "mf", "tl")
         rel_bad, rel_ok = unique_tokens("bd", "ok")
         path = f"{missing}.go"
-        desc = "Use PKCE"
-        listing = "Use PKCE for OAuth2."
+        desc = SAMPLE_DRIFT_DESC
+        listing = SAMPLE_DRIFT_LISTING
         seed_validatable_bundle(
             ws,
             rel_bad,
@@ -1981,14 +1886,7 @@ def test_mcp_missing_code_refs_path_warns_without_failing_gate():
         o_payload = require_mcp_validate_report(ok)
         assert_both_pass(b_payload)
         assert_both_pass(o_payload)
-        extra = [ident, path, missing, title, desc, listing]
-        tokens = _paths(ws, rel_bad) + _paths(ws, rel_ok)
-        assert_report_differs_after_strip(
-            bad.report_text,
-            ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
-        )
+        assert_more_findings(b_payload, o_payload, "warnings", f"{ident}.md")
 
 
 # ---------------------------------------------------------------------------
@@ -2350,14 +2248,15 @@ def test_report_includes_bundle_path_hard_errors_and_warnings():
         seed_validatable_bundle(ws, rel_ok, [fact_concept(ident_err)])
         bad, bad_payload = run_validate_structured(ws, rel_bad)
         repaired, repaired_payload = run_validate_structured(ws, rel_ok)
-        require_hard_error_class(bad, repaired, structured_defective=bad_payload)
+        require_hard_error_class(
+            bad,
+            repaired,
+            structured_defective=bad_payload,
+            concerns=f"{ident_err}.md",
+        )
         assert_both_pass(repaired_payload)
-        err_tokens = _paths(ws, rel_bad, ident_err) + _paths(ws, rel_ok, ident_err)
-        assert_string_values_differ_after_strip(
-            bad_payload,
-            repaired_payload,
-            path_tokens=err_tokens,
-            extra_tokens=[ident_err],
+        assert_more_findings(
+            bad_payload, repaired_payload, "errors", f"{ident_err}.md"
         )
 
         ident_warn = unique_tokens("wn")[0]
@@ -2378,21 +2277,12 @@ def test_report_includes_bundle_path_hard_errors_and_warnings():
         require_cli_status_0(quiet)
         assert_both_pass(warn_payload)
         assert_both_pass(quiet_payload)
-        warn_tokens = _paths(ws, rel_warn, ident_warn) + _paths(
-            ws, rel_quiet, ident_warn
-        )
         require_warning_class(
             run_validate(ws, rel_warn),
             run_validate(ws, rel_quiet),
-            path_tokens=warn_tokens,
-            extra_tokens=[ident_warn],
+            concerns="dir/index.md",
         )
-        assert_string_values_differ_after_strip(
-            warn_payload,
-            quiet_payload,
-            path_tokens=warn_tokens,
-            extra_tokens=[ident_warn],
-        )
+        assert_more_findings(warn_payload, quiet_payload, "warnings", "dir/index.md")
 
 
 def test_human_default_still_lists_orphans_and_uses_exit_status():

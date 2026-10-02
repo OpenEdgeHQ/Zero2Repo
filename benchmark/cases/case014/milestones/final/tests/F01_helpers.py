@@ -14,7 +14,7 @@ from typing import Sequence
 from _harness import HarnessError, RunResult, invoke, product_identity, repo_root, run_python
 
 # ---------------------------------------------------------------------------
-# Published numeric oracles (PRD L117–L131)
+# Fixed inputs and tolerances
 # ---------------------------------------------------------------------------
 
 STUTTGART_LAT_DEG = 48.783
@@ -159,7 +159,6 @@ _C_PROBE = r"""
 #include <string.h>
 
 #include "geodetic_toolbox.h"
-#include "linalg.h"
 #include "magnetic_model.h"
 
 static int fail_usage(void)
@@ -209,7 +208,7 @@ int main(int argc, char **argv)
         vn[0] = vn[1] = vn[2] = 0.0f;
         for (row = 0; row < 3; ++row) {
             for (col = 0; col < 3; ++col) {
-                vn[row] += MAT_ELEM(R, row, col, 3, 3) * vb[col];
+                vn[row] += R[row + 3 * col] * vb[col];  /* column-major */
             }
         }
         printf("%.9g %.9g %.9g\n", vn[0], vn[1], vn[2]);
@@ -555,29 +554,15 @@ def is_public_wmm_row(lat_deg: float, lon_deg: float) -> bool:
     return False
 
 
-def _linalg_include_flags() -> list[str]:
-    """``-I`` for the directory that ships ``linalg.h``.
-
-    The harness adds ``NavCore/c`` when that directory exists. This tree
-    keeps the same header next to the sources ``make`` compiles.
-    """
-    headers = sorted(repo_root().glob("*/c/linalg.h"))
-    if not headers:
-        return []
-    return [f"-I{headers[0].parent}"]
-
-
 def _c(op: str, *args: float) -> list[float]:
     argv = [op, *[repr(float(a)) for a in args]]
-    # TEST-FIX(F01): upstream Makefile:91 shows the C library compile includes the directory that contains linalg.h (MAT_ELEM)
-    result = invoke(_C_PROBE, argv, extra_args=_linalg_include_flags())
+    result = invoke(_C_PROBE, argv)
     return parse_floats(result, _C_ARITY[op])
 
 
 def _py(op: str, *args: float) -> list[float]:
     argv = [op, *[repr(float(a)) for a in args]]
     ident = product_identity()
-    # TEST-FIX(F01): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports ecef_to_llh, llh_to_ecef, rpy_to_quat, wmm_field_ned; python/INSLIB/_core.py:37 loads libINSLIB.so from that directory
     assert ident is not None, "python package directory was not found after make pylib"
     package = ident.package_name
     assert package.isidentifier(), f"discovered package name is not importable: {package!r}"

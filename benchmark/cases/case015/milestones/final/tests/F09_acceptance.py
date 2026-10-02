@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import secrets
-
 from F01_helpers import (
     place_non_ogg,
     place_placeholder,
@@ -20,9 +18,9 @@ from F01_helpers import (
 from F02_helpers import parse_ogg_pages, place_vorbis_without_ogg_suffix
 from F03_helpers import (
     dump_stdout,
+    dump_stored_stage,
     place_opus_classified,
     require_codec_mode_field,
-    strip_paths_and_sizes,
 )
 from F04_helpers import (
     _SCALE_FILES,
@@ -33,19 +31,17 @@ from F04_helpers import (
     vorbis_with_runtime_comment,
 )
 from F05_helpers import (
-    generation_candidates_across,
+    foreign_generation_values,
     place_bytes_without_codec_suffix,
     with_generation_value,
+    written_generation,
 )
 from F06_helpers import concat_bitstreams
 from F09_helpers import (
-    dedicated_reconstruction_mismatch_field,
-    dedicated_reconstruction_success_field,
-    dedicated_stored_stage_field,
     lossless_compress,
     pages_stdout,
-    per_page_listing_tokens,
     require_every_page_reconstructs,
+    require_page_listing,
     still_parseable_one_page_checksum_sibling,
 )
 from _harness import workspace
@@ -87,60 +83,22 @@ def test_dump_stored_stage_field_vorbis_effort1_vs_effort3():
         text_1y = dump_stdout(ws, arc_1y)
         text_3x = dump_stdout(ws, arc_3x)
         text_3y = dump_stdout(ws, arc_3y)
-        paths = [
-            src_x,
-            src_y,
-            arc_1x,
-            arc_1y,
-            arc_3x,
-            arc_3y,
-            str(ws.path),
-        ]
-        sizes = (
-            len(ws.read_bytes(src_x)),
-            len(ws.read_bytes(src_y)),
-            len(ws.read_bytes(arc_1x)),
-            len(ws.read_bytes(arc_1y)),
-            len(ws.read_bytes(arc_3x)),
-            len(ws.read_bytes(arc_3y)),
-        )
-        stage_1 = dedicated_stored_stage_field(
-            text_1x, text_1y, text_3x, paths, sizes
-        )
-        stage_3 = dedicated_stored_stage_field(
-            text_3x, text_3y, text_1x, paths, sizes
-        )
-        left_1x = strip_paths_and_sizes(text_1x, paths, sizes)
-        left_3x = strip_paths_and_sizes(text_3x, paths, sizes)
+        stage_1x = dump_stored_stage(text_1x)
+        stage_1y = dump_stored_stage(text_1y)
+        stage_3x = dump_stored_stage(text_3x)
+        stage_3y = dump_stored_stage(text_3y)
         print(
-            f"[F09] B stage_1={sorted(stage_1)!r} stage_3={sorted(stage_3)!r} "
-            f"left_1x_len={len(left_1x)} left_3x_len={len(left_3x)}",
+            f"[F09] B stages e1=({stage_1x},{stage_1y}) e3=({stage_3x},{stage_3y})",
             flush=True,
         )
-        assert stage_1, (
-            "On dump standard output, a dedicated stored-stage field — not "
-            "the archive path, not a byte size, not a leftover that varies "
-            "with the file — answers the encoding stage stored for a Vorbis "
-            "archive: two effort-1 dumps share a payload that dump of an "
-            "effort-3 archive of the same input lacks, independent of path "
-            "and size. The payload may be a number or a hex value"
+        assert stage_1x == stage_1y and stage_3x == stage_3y, (
+            "the stored stage of a Vorbis archive follows the effort, not the "
+            f"input: effort 1 gave {stage_1x}/{stage_1y}, effort 3 gave "
+            f"{stage_3x}/{stage_3y}"
         )
-        assert stage_3, (
-            "On dump standard output, a dedicated stored-stage field — not "
-            "the archive path, not a byte size, not a leftover that varies "
-            "with the file — answers the encoding stage stored for a Vorbis "
-            "archive: two effort-3 dumps share a payload that dump of an "
-            "effort-1 archive of the same input lacks, independent of path "
-            "and size. The payload may be a number or a hex value"
-        )
-        assert stage_1 != stage_3, (
-            "effort 1 and effort 3 of Vorbis inputs must write distinguishable "
-            "payloads of the dedicated stored-stage field, not the same token set"
-        )
-        assert left_1x != left_3x, (
-            "dump of a Vorbis archive made at effort 1 and dump of an archive "
-            "of the same input made at effort 3 must differ after path and "
-            "size strip"
+        assert stage_1x != stage_3x, (
+            "Vorbis archives made at effort 1 and at effort 3 store different "
+            f"stages; both report level {stage_1x}"
         )
 
 
@@ -192,59 +150,13 @@ def test_pages_lists_valid_vorbis_countable_unmodified():
         path_flip_m = place_bytes_without_codec_suffix(ws, flip_m, "vorbis-flip-m")
         text_flip_n = pages_stdout(ws, path_flip_n)
         text_flip_m = pages_stdout(ws, path_flip_m)
-        paths = [path_n, path_m, path_flip_n, path_flip_m, str(ws.path)]
-        sizes = (len(snap_n), len(snap_m), len(flip_n), len(flip_m))
-        left_n = strip_paths_and_sizes(text_n, paths, sizes)
-        left_m = strip_paths_and_sizes(text_m, paths, sizes)
-        listing_n = per_page_listing_tokens(text_n, n_pages, paths, sizes)
-        listing_m = per_page_listing_tokens(text_m, m_pages, paths, sizes)
-        success = dedicated_reconstruction_success_field(
-            text_n,
-            n_pages,
-            text_m,
-            m_pages,
-            text_flip_n,
-            text_flip_m,
-            paths,
-            sizes,
+        require_page_listing(text_n, n_pages, frozenset(), what="Vorbis N well-formed")
+        require_page_listing(text_m, m_pages, frozenset(), what="Vorbis M well-formed")
+        require_page_listing(
+            text_flip_n, n_pages, frozenset({0}), what="Vorbis N one checksum flipped"
         )
-        mismatch = dedicated_reconstruction_mismatch_field(
-            text_flip_n, text_flip_m, text_n, paths, sizes
-        )
-        print(
-            f"[F09] C pages N={n_pages} M={m_pages} "
-            f"left_n={len(left_n)} left_m={len(left_m)} "
-            f"listing_n={sorted(listing_n)!r} listing_m={sorted(listing_m)!r} "
-            f"success={sorted(success)!r} mismatch={sorted(mismatch)!r}",
-            flush=True,
-        )
-        assert left_n != left_m, (
-            "pages of two valid Ogg Vorbis files whose page counts differ "
-            "must differ on standard output after path and size strip"
-        )
-        assert listing_n and listing_m, (
-            "pages on a valid Ogg Vorbis file lists every page: after "
-            "stripping paths and per-file byte sizes, a leftover token "
-            "occurs once per independently counted page"
-        )
-        assert success, (
-            "pages of a well-formed Vorbis file writes a dedicated "
-            "reconstruction-status field on each listed page whose payload "
-            "is success, independent of path and size: two well-formed "
-            "listings share a per-page leftover that a still-parseable "
-            "sibling differing only by one page's stored RFC 3533 checksum "
-            "does not share at that multiplicity"
-        )
-        assert mismatch, (
-            "pages of a still-parseable sibling that differs only by one "
-            "page's stored RFC 3533 checksum not matching the CRC computed "
-            "with the checksum field treated as zero still exits 0 and that "
-            "page carries the mismatch payload of the dedicated "
-            "reconstruction-status field, independent of path and size"
-        )
-        assert success != mismatch, (
-            "the dedicated reconstruction-status field has two payloads, "
-            "success and mismatch, that are distinguishable from each other"
+        require_page_listing(
+            text_flip_m, m_pages, frozenset({0}), what="Vorbis M one checksum flipped"
         )
 
 
@@ -298,59 +210,13 @@ def test_pages_lists_valid_opus_countable_unmodified():
         path_flip_m = place_bytes_without_codec_suffix(ws, flip_m, "opus-flip-m")
         text_flip_n = pages_stdout(ws, path_flip_n)
         text_flip_m = pages_stdout(ws, path_flip_m)
-        paths = [path_n, path_m, path_flip_n, path_flip_m, str(ws.path)]
-        sizes = (len(snap_n), len(snap_m), len(flip_n), len(flip_m))
-        left_n = strip_paths_and_sizes(text_n, paths, sizes)
-        left_m = strip_paths_and_sizes(text_m, paths, sizes)
-        listing_n = per_page_listing_tokens(text_n, n_pages, paths, sizes)
-        listing_m = per_page_listing_tokens(text_m, m_pages, paths, sizes)
-        success = dedicated_reconstruction_success_field(
-            text_n,
-            n_pages,
-            text_m,
-            m_pages,
-            text_flip_n,
-            text_flip_m,
-            paths,
-            sizes,
+        require_page_listing(text_n, n_pages, frozenset(), what="Opus N well-formed")
+        require_page_listing(text_m, m_pages, frozenset(), what="Opus M well-formed")
+        require_page_listing(
+            text_flip_n, n_pages, frozenset({0}), what="Opus N one checksum flipped"
         )
-        mismatch = dedicated_reconstruction_mismatch_field(
-            text_flip_n, text_flip_m, text_n, paths, sizes
-        )
-        print(
-            f"[F09] D pages N={n_pages} M={m_pages} "
-            f"left_n={len(left_n)} left_m={len(left_m)} "
-            f"listing_n={sorted(listing_n)!r} listing_m={sorted(listing_m)!r} "
-            f"success={sorted(success)!r} mismatch={sorted(mismatch)!r}",
-            flush=True,
-        )
-        assert left_n != left_m, (
-            "pages of two valid Ogg Opus files whose page counts differ "
-            "must differ on standard output after path and size strip"
-        )
-        assert listing_n and listing_m, (
-            "pages on a valid Ogg Opus file lists every page: after "
-            "stripping paths and per-file byte sizes, a leftover token "
-            "occurs once per independently counted page"
-        )
-        assert success, (
-            "pages of a well-formed Opus file writes a dedicated "
-            "reconstruction-status field on each listed page whose payload "
-            "is success, independent of path and size: two well-formed "
-            "listings share a per-page leftover that a still-parseable "
-            "sibling differing only by one page's stored RFC 3533 checksum "
-            "does not share at that multiplicity"
-        )
-        assert mismatch, (
-            "pages of a still-parseable sibling that differs only by one "
-            "page's stored RFC 3533 checksum not matching the CRC computed "
-            "with the checksum field treated as zero still exits 0 and that "
-            "page carries the mismatch payload of the dedicated "
-            "reconstruction-status field, independent of path and size"
-        )
-        assert success != mismatch, (
-            "the dedicated reconstruction-status field has two payloads, "
-            "success and mismatch, that are distinguishable from each other"
+        require_page_listing(
+            text_flip_m, m_pages, frozenset({0}), what="Opus M one checksum flipped"
         )
 
 
@@ -448,61 +314,24 @@ def test_dump_of_non_archive_and_foreign_generation_is_refused():
         require_refusal(of_random)
         bytes_a = archive_bytes(ws, arc_a)
         bytes_b = archive_bytes(ws, arc_b)
-        candidates = generation_candidates_across(ws, src_a, bytes_a, bytes_b)
+        written = written_generation(ws, src_a, bytes_a, bytes_b)
         non_dest = unique_name("gen-nonarc-out")
-        non_expand = run_product(ws, ["d", ogg, non_dest])
-        require_refusal(non_expand)
-        non_left = strip_paths_and_sizes(non_expand.stderr_text, (ogg, non_dest), ())
-        matched = None
-        older_run = None
-        newer_run = None
-        for field in candidates:
-            offset, width, written, endian = field
-            max_val = (1 << (8 * width)) - 1
-            older_val = secrets.choice(range(0, written))
-            newer_val = secrets.choice(range(written + 1, max_val + 1))
-            assert older_val < written < newer_val, (
-                f"relative order failed: {older_val} < {written} < {newer_val}"
-            )
-            older_bytes = with_generation_value(bytes_a, field, older_val)
-            newer_bytes = with_generation_value(bytes_a, field, newer_val)
-            older_path = unique_name("gen-older")
-            newer_path = unique_name("gen-newer")
-            ws.write(older_path, older_bytes)
-            ws.write(newer_path, newer_bytes)
-            generation_refused = True
-            for path in (older_path, newer_path):
-                out = unique_name("gen-exp-out")
-                expanded = run_product(ws, ["d", path, out])
-                left = strip_paths_and_sizes(expanded.stderr_text, (path, out), ())
-                if expanded.returncode != 1 or left.split() == non_left.split():
-                    generation_refused = False
-            if not generation_refused:
-                continue
-            older_try = run_product(ws, ["dump", older_path])
-            newer_try = run_product(ws, ["dump", newer_path])
-            print(
-                f"[F09] G field off={offset} width={width} endian={endian} "
-                f"written={written} older={older_val} newer={newer_val} "
-                f"older_exit={older_try.returncode} "
-                f"newer_exit={newer_try.returncode}",
-                flush=True,
-            )
-            if older_try.returncode != 1 or newer_try.returncode != 1:
-                continue
-            matched = field
-            older_run, newer_run = older_try, newer_try
-            break
-        assert matched is not None, (
-            "no generation-identifier candidate (constant across inputs, "
-            "codecs, and efforts; expand of its older and newer rewrites "
-            "refused distinguishably from a non-archive), when rewritten to "
-            "a strictly smaller and a strictly larger value, was refused by dump"
-        )
+        require_refusal(run_product(ws, ["d", ogg, non_dest]))
+        older_val, newer_val = foreign_generation_values(written)
+        older_path = unique_name("gen-older")
+        newer_path = unique_name("gen-newer")
+        ws.write(older_path, with_generation_value(bytes_a, older_val))
+        ws.write(newer_path, with_generation_value(bytes_a, newer_val))
+        for path in (older_path, newer_path):
+            out = unique_name("gen-exp-out")
+            require_refusal(run_product(ws, ["d", path, out]))
+        older_run = run_product(ws, ["dump", older_path])
+        newer_run = run_product(ws, ["dump", newer_path])
         require_refusal(older_run)
         require_refusal(newer_run)
         print(
-            f"[F09] G dump-ogg exit={of_ogg.returncode} "
+            f"[F09] G written={written} older={older_val} newer={newer_val} "
+            f"dump-ogg exit={of_ogg.returncode} "
             f"dump-nonogg exit={of_random.returncode} "
             f"dump-older exit={older_run.returncode} "
             f"dump-newer exit={newer_run.returncode}",

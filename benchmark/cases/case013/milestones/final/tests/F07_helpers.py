@@ -43,11 +43,8 @@ from F03_helpers import (
     mcp_reply_for_id,
 )
 from F05_helpers import (
-    SEED_LOG_DATE,
     _INLINE_LINK,
-    _class_remainder,
     _list_item_texts,
-    _whole_token_present,
     concept_file,
     concept_filename,
     generated_by_and_at,
@@ -56,14 +53,22 @@ from F05_helpers import (
 from F06_helpers import (
     SEED_GENERATED_AT,
     SEED_GENERATED_BY,
-    _ISO_DATE,
     assert_extra_keys_survive,
     assert_update_absent,
 )
 
-PUBLIC_SAMPLE_SOURCE = "architecture/tooling"
-PUBLIC_SAMPLE_TARGET = "architecture/layers"
-PUBLIC_SAMPLE_PROSE = "implements the 5-layer architecture"
+# Generated same-directory source/target pair and multi-word prose with a
+# digit-hyphen word (fresh per process; not taken from the documents).
+def _gen_hex(n: int = 8) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+_SAMPLE_DIR = f"s{_gen_hex(7)}"
+SAMPLE_SOURCE = f"{_SAMPLE_DIR}/t{_gen_hex(6)}"
+SAMPLE_TARGET = f"{_SAMPLE_DIR}/l{_gen_hex(6)}"
+SAMPLE_PROSE = f"implements the 5-l{_gen_hex(5)} a{_gen_hex(6)}"
 
 _LEVEL1_RELATED = frozenset({"Related Concepts", "Related"})
 
@@ -78,12 +83,10 @@ _NEVER_EXECUTED = (
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -198,7 +201,7 @@ def resolve_relate_binary() -> Path:
     workspace.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so relate never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it relate never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -207,7 +210,7 @@ def _raise_if_relate_binary_missing(binary: Path, exc: FileNotFoundError) -> NoR
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F07): upstream _harness.py:620 shows FileNotFoundError before relate when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F07): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -293,58 +296,182 @@ def require_relate_failure(result: RunResult) -> str:
 
 def require_relate_usage_failure(
     result: RunResult,
-    empty_identity_report: str,
-    reserved_report: str,
-    self_relate_report: str,
-    missing_target_report: str,
-    success_report: str,
-    path_tokens: Sequence[str],
+    empty_identity_report: str | None = None,
+    reserved_report: str | None = None,
+    self_relate_report: str | None = None,
+    missing_target_report: str | None = None,
+    success_report: str | None = None,
+    path_tokens: Sequence[str] = (),
 ) -> str:
-    """Fewer than two identities: non-success, non-empty, unlike live classes."""
+    """Usage failure (Output forms): status 1 and the usage text carries ``Usage:``.
+
+    Which stream carries the usage text is free, so both are read. The
+    sibling-class reports are no longer compared by leftover words; callers
+    read each sibling's own stated form (``require_relate_error_line``,
+    ``require_relate_endpoint_not_found``, ``require_relate_human_success``).
+    """
     report = combined_report(result)
     print(
         f"[F07] usage-failure exit={result.returncode} report={report!r}",
         flush=True,
     )
-    assert result.returncode != 0, (
-        f"relate with fewer than two identities succeeded; report={report!r}"
+    assert result.returncode == 1, (
+        f"relate with fewer than two identities did not exit with the usage "
+        f"failure status 1 (exit {result.returncode}); report={report!r}"
     )
-    assert report, (
-        "relate with fewer than two identities produced empty combined streams"
-    )
-    usage_rem = _class_remainder(report, path_tokens)
-    empty_rem = _class_remainder(empty_identity_report, path_tokens)
-    reserved_rem = _class_remainder(reserved_report, path_tokens)
-    self_rem = _class_remainder(self_relate_report, path_tokens)
-    missing_rem = _class_remainder(missing_target_report, path_tokens)
-    success_rem = _class_remainder(success_report, path_tokens)
-    print(
-        f"[F07] usage remainder={usage_rem!r} empty={empty_rem!r} "
-        f"reserved={reserved_rem!r} self={self_rem!r} missing={missing_rem!r} "
-        f"success={success_rem!r}",
-        flush=True,
-    )
-    assert usage_rem != empty_rem, (
-        "fewer-than-two-identities report is not distinguishable from "
-        f"empty-identity after stripping paths; remainder={usage_rem!r}"
-    )
-    assert usage_rem != reserved_rem, (
-        "fewer-than-two-identities report is not distinguishable from "
-        f"reserved-index after stripping paths; remainder={usage_rem!r}"
-    )
-    assert usage_rem != self_rem, (
-        "fewer-than-two-identities report is not distinguishable from "
-        f"self-relate after stripping paths; remainder={usage_rem!r}"
-    )
-    assert usage_rem != missing_rem, (
-        "fewer-than-two-identities report is not distinguishable from "
-        f"missing-target after stripping paths; remainder={usage_rem!r}"
-    )
-    assert usage_rem != success_rem, (
-        "fewer-than-two-identities report is not distinguishable from a live "
-        f"success report after stripping paths; remainder={usage_rem!r}"
+    assert "Usage:" in report, (
+        "relate with fewer than two identities did not print usage text "
+        f"containing the literal 'Usage:'; report={report!r}"
     )
     return report
+
+
+def _stderr_lines(result: RunResult) -> list[str]:
+    return result.stderr_text.splitlines()
+
+
+def require_relate_error_line(result: RunResult) -> str:
+    """Rejected input or refused write: status 1, a stderr line beginning ``Error: ``."""
+    report = combined_report(result)
+    print(
+        f"[F07] relate error-line exit={result.returncode} "
+        f"stderr={result.stderr_text!r}",
+        flush=True,
+    )
+    assert result.returncode == 1, (
+        f"refused relate did not exit with status 1 (exit {result.returncode}); "
+        f"report={report!r}"
+    )
+    for line in _stderr_lines(result):
+        if line.startswith("Error: "):
+            return line
+    raise AssertionError(
+        "refused relate has no standard-error line beginning 'Error: '; "
+        f"stderr={result.stderr_text!r}"
+    )
+
+
+def require_relate_endpoint_not_found(
+    result: RunResult, *, endpoint: str, identity: str
+) -> str:
+    """Relate endpoint not found: status 1 and a stderr line that begins
+    ``Error: <endpoint> concept '<identity>' not found``."""
+    if endpoint not in ("source", "target"):
+        raise HarnessError(f"endpoint must be source or target, got {endpoint!r}")
+    expected = f"Error: {endpoint} concept '{identity}' not found"
+    report = combined_report(result)
+    print(
+        f"[F07] endpoint-not-found exit={result.returncode} expected={expected!r} "
+        f"stderr={result.stderr_text!r}",
+        flush=True,
+    )
+    assert result.returncode == 1, (
+        f"relate with a missing {endpoint} did not exit with status 1 "
+        f"(exit {result.returncode}); report={report!r}"
+    )
+    assert any(line.startswith(expected) for line in _stderr_lines(result)), (
+        f"relate with a missing {endpoint} has no standard-error line "
+        f"beginning {expected!r}; stderr={result.stderr_text!r}"
+    )
+    return expected
+
+
+def _strip_md(identity: str) -> str:
+    text = identity.strip()
+    return text[:-3] if text.endswith(".md") else text
+
+
+def require_relate_human_success(
+    result: RunResult, source_id: str, target_id: str, bundle: str
+) -> str:
+    """Human relate success: status 0, stdout is exactly one line (wording
+    free) containing ``'<source>'``, ``'<target>'`` and ``'<bundle>'``,
+    stderr empty.
+
+    *bundle* is the bundle path as the caller named it (or the default
+    ``knowledge`` / ``.`` when omitted).
+    """
+    expected = (
+        f"'{_strip_md(source_id)}'",
+        f"'{_strip_md(target_id)}'",
+        f"'{bundle}'",
+    )
+    print(
+        f"[F07] human success exit={result.returncode} expected={expected!r} "
+        f"stdout={result.stdout_text!r} stderr={result.stderr_text!r}",
+        flush=True,
+    )
+    assert result.returncode == 0, (
+        f"relate did not end successfully (exit {result.returncode}); "
+        f"report={combined_report(result)!r}"
+    )
+    lines = result.stdout_text.split("\n")
+    assert (
+        len(lines) == 2
+        and lines[1] == ""
+        and all(part in lines[0] for part in expected)
+    ), (
+        f"relate human success is not one line containing {expected!r}; "
+        f"stdout={result.stdout_text!r}"
+    )
+    assert result.stderr_text == "", (
+        f"relate human success wrote to standard error: {result.stderr_text!r}"
+    )
+    return expected
+
+
+def mcp_first_content_text(outcome: "McpRelateOutcome") -> str:
+    """The ``text`` of the first content item of a tools/call result."""
+    result = outcome.reply.get("result")
+    if not isinstance(result, Mapping):
+        raise AssertionError(
+            f"membundle_relate reply carries no result object: {outcome.reply!r}"
+        )
+    content = result.get("content")
+    if (
+        not isinstance(content, Sequence)
+        or isinstance(content, (str, bytes))
+        or not content
+        or not isinstance(content[0], Mapping)
+        or not isinstance(content[0].get("text"), str)
+    ):
+        raise AssertionError(
+            "membundle_relate result has no first content item with text: "
+            f"{outcome.reply!r}"
+        )
+    return content[0]["text"]
+
+
+def require_mcp_relate_success_text(
+    outcome: "McpRelateOutcome",
+    source_id: str,
+    target_id: str,
+    bundle_dir: str | Path,
+) -> str:
+    """membundle_relate success text is exactly one line (wording free)
+    containing ``'<source>'`` and ``'<target>'`` (the argument values as
+    given) and ending with `` <bundle>``, the absolute bundle directory
+    written, symlinks resolved. A single trailing newline is tolerated.
+    """
+    require_mcp_relate_success(outcome)
+    absolute = os.path.realpath(str(bundle_dir))
+    expected = (f"'{source_id}'", f"'{target_id}'", f" {absolute}")
+    text = mcp_first_content_text(outcome)
+    print(
+        f"[F07] mcp success text={text!r} expected={expected!r}",
+        flush=True,
+    )
+    observed = text[:-1] if text.endswith("\n") else text
+    assert (
+        "\n" not in observed
+        and expected[0] in observed
+        and expected[1] in observed
+        and observed.endswith(expected[2])
+    ), (
+        f"membundle_relate success text is not one line containing "
+        f"{expected[:2]!r} and ending with {expected[2]!r}; text={text!r}"
+    )
+    return expected
 
 
 def mcp_membundle_relate(
@@ -442,13 +569,13 @@ def require_mcp_relate_success(outcome: McpRelateOutcome) -> str:
 
 
 def require_mcp_relate_tool_error(outcome: McpRelateOutcome) -> str:
-    """MCP relate without a source or target key, or MCP NUL identity (L215, L177)."""
+    """MCP relate without a source or target key, or MCP NUL identity."""
     if not outcome.batch.stdout and not outcome.batch.stderr:
         raise HarnessError("membundle_relate produced a silent empty transcript")
     if mcp_is_protocol_error(outcome.reply):
         raise AssertionError(
             "membundle_relate rejected the call as a JSON-RPC protocol error; "
-            "L215/L177 require a tool error, not a protocol error; "
+            "the PRD requires a tool error, not a protocol error; "
             f"reply={outcome.reply!r}"
         )
     assert mcp_is_tool_error(outcome.reply), (
@@ -459,7 +586,7 @@ def require_mcp_relate_tool_error(outcome: McpRelateOutcome) -> str:
 
 
 def require_mcp_relate_non_success(outcome: McpRelateOutcome) -> str:
-    """MCP relate did not succeed. Tool-error vs JSON-RPC channel is not scored."""
+    """MCP relate did not succeed. Tool-error vs JSON-RPC channel is not distinguished here."""
     if not outcome.batch.stdout and not outcome.batch.stderr:
         raise HarnessError("membundle_relate produced a silent empty transcript")
     if mcp_is_protocol_error(outcome.reply) or mcp_is_tool_error(outcome.reply):
@@ -934,7 +1061,7 @@ def first_named_related_item_for_target(
                 continue
             if not _href_is_named_filename(href, filename):
                 continue
-            if prose is not None and prose not in item[match.end() :]:
+            if prose is not None and not _item_is_prose_form(item, match, prose):
                 continue
             print(
                 f"[F07] named item index={index} source={source_id!r} "
@@ -1005,66 +1132,54 @@ def assert_prose_follows_link(
         )
     after = item[chosen.end() :]
     print(f"[F07] prose after link={after!r} expected={prose!r}", flush=True)
-    if prose not in after:
+    if not _item_is_prose_form(item, chosen, prose):
         raise AssertionError(
-            f"relationship prose {prose!r} does not follow the inline link; "
+            "prose list item is not '[<link text>](<href>)' at the start of "
+            f"the item text followed by text ending with the prose {prose!r}; "
             f"item={item!r}"
         )
 
 
-def _strip_item_covariates(
-    item: str,
-    tokens: Sequence[str],
-) -> str:
-    remainder = item
-    ordered = sorted({str(tok) for tok in tokens if tok}, key=len, reverse=True)
-    for tok in ordered:
-        remainder = remainder.replace(tok, " ")
-    remainder = _ISO_DATE.sub(" ", remainder)
-    return remainder
-
-
-def _phrase_tokens_present(text: str, phrase: str) -> bool:
-    cleaned = re.sub(r"[\"'`\[\]\(\)\{\}<>*_.,:;]+", " ", text)
-    parts = cleaned.split()
-    needles = phrase.split()
-    if not needles:
-        raise HarnessError("empty phrase; cannot test token presence")
-    for index in range(len(parts) - len(needles) + 1):
-        if parts[index : index + len(needles)] == needles:
-            return True
-    return False
+def _item_is_prose_form(item: str, link_match: "re.Match[str]", prose: str) -> bool:
+    """Prose item form: item text begins with the link and ends with the
+    trimmed prose; the text between them is free."""
+    expected_prose = prose.strip()
+    return (
+        link_match.start() == 0
+        and bool(expected_prose)
+        and item[link_match.end() :].endswith(expected_prose)
+    )
 
 
 def assert_related_to_item(
     item: str,
     *,
     unused_prose: str,
-    identities: Sequence[str],
-    filenames: Sequence[str],
-    titles: Sequence[str],
-    path_tokens: Sequence[str],
+    identities: Sequence[str] = (),
+    filenames: Sequence[str] = (),
+    titles: Sequence[str] = (),
+    path_tokens: Sequence[str] = (),
     href: str,
 ) -> None:
-    """After covariate strip, the whole phrase Related to remains; unused prose is absent."""
-    tokens = [
-        *identities,
-        *filenames,
-        *titles,
-        *path_tokens,
-        href,
-        _href_raw(href),
-    ]
-    remainder = _strip_item_covariates(item, tokens)
+    """No-prose item form: item text is exactly ``Related to [<link text>](<href>)``.
+
+    The link's text and href are checked by the caller
+    (``assert_relative_link_to_target``); this reads the stated item form.
+    """
+    match = _INLINE_LINK.match(item, len("Related to "))
+    expected = (
+        f"Related to {match.group(0)}"
+        if match is not None and item.startswith("Related to ")
+        else None
+    )
     print(
-        f"[F07] related-to remainder={remainder!r} item={item!r}",
+        f"[F07] related-to item={item!r} expected_form={expected!r} href={href!r}",
         flush=True,
     )
-    if not _phrase_tokens_present(remainder, "Related to"):
+    if expected is None or item != expected or match.group(2) != href:
         raise AssertionError(
-            "omit/empty/whitespace-prose list item does not retain the "
-            f"Related to token after covariate strip; item={item!r} "
-            f"remainder={remainder!r}"
+            "omit/empty/whitespace-prose list item is not exactly "
+            f"'Related to [<link text>](<href>)'; item={item!r}"
         )
     if unused_prose and unused_prose in item:
         raise AssertionError(
@@ -1320,54 +1435,25 @@ def assert_relate_log_bullet(
     titles: Sequence[str] = (),
     path_tokens: Sequence[str] = (),
 ) -> str:
-    """A log.md list item names both files and retains the Update token after strip."""
+    """log.md has a list item whose text begins ``**Update**: `` and whose
+    rest contains ``<source>.md`` and ``<target>.md``."""
     if not path_is_file(log_path):
         raise HarnessError(f"log.md is not a file: {log_path}")
     text = read_file(log_path)
     items = _list_item_texts(text)
-    source_file = concept_filename(source_id)
-    target_file = concept_filename(target_id)
-    matching: list[str] = []
+    source_file = f"{source_id}.md"
+    target_file = f"{target_id}.md"
+    prefix = "**Update**: "
     for item in items:
-        names_source = (
-            source_file in item
-            or f"{source_id}.md" in item
-            or source_id in item
-        )
-        names_target = (
-            target_file in item
-            or f"{target_id}.md" in item
-            or target_id in item
-        )
-        if names_source and names_target:
-            matching.append(item)
-    if not matching:
-        raise AssertionError(
-            "log.md has no list item naming both the source and target files; "
-            f"source={source_id!r} target={target_id!r} items={items!r}"
-        )
-    tokens = [
-        source_file,
-        target_file,
-        f"{source_id}.md",
-        f"{target_id}.md",
-        source_id,
-        target_id,
-        *titles,
-        *path_tokens,
-        SEED_LOG_DATE,
-    ]
-    for item in matching:
-        remainder = _strip_item_covariates(item, tokens)
-        print(
-            f"[F07] log item={item!r} remainder={remainder!r}",
-            flush=True,
-        )
-        if _whole_token_present(remainder, "Update"):
+        if not item.startswith(prefix):
+            continue
+        rest = item[len(prefix) :]
+        if source_file in rest and target_file in rest:
+            print(f"[F07] log Update item={item!r}", flush=True)
             return item
     raise AssertionError(
-        "log.md list item names both files but does not retain the Update "
-        f"token after covariate strip; items={matching!r}"
+        f"log.md has no list item beginning {prefix!r} that names both "
+        f"{source_file!r} and {target_file!r}; items={items!r}"
     )
 
 

@@ -89,12 +89,12 @@ def _last_cmd_t(cmds) -> int:
 
 
 # ---------------------------------------------------------------------------
-# A. Pad near zero; climb same-sign (L292 / L305–L306)
+# A. Pad near zero; climb same-sign
 # ---------------------------------------------------------------------------
 
 
 def test_static_pad_holds_near_anchor_height_and_zero_climb():
-    """L292 / L305: realistic pad pressure plus a level IMU holds near-anchor height and near-zero climb."""
+    """realistic pad pressure plus a level IMU holds near-anchor height and near-zero climb."""
     pad_h = runtime_pad_isa_m()
     climb = runtime_climb_m()
     p_pad = tropospheric_isa_pressure_pa(pad_h)
@@ -138,7 +138,7 @@ def test_static_pad_holds_near_anchor_height_and_zero_climb():
 
 
 def test_pressure_drop_raises_isa_and_datum_height_same_sign():
-    """L292 / L305–L306: a pressure drop raises ISA and datum height; a pressure rise lowers both."""
+    """a pressure drop raises ISA and datum height; a pressure rise lowers both."""
     pad_h = runtime_pad_isa_m()
     climb_a = runtime_climb_m()
     climb_b = runtime_climb_m() + 2.5
@@ -179,12 +179,12 @@ def test_pressure_drop_raises_isa_and_datum_height_same_sign():
 
 
 # ---------------------------------------------------------------------------
-# B. Tropospheric ISA (L290 / L293 / L305)
+# B. Tropospheric ISA
 # ---------------------------------------------------------------------------
 
 
 def test_sea_level_standard_pressure_maps_to_zero_isa():
-    """L290 / L305: 101325 Pa maps to zero ISA altitude."""
+    """101325 Pa maps to zero ISA altitude."""
     run = c_vert_run(
         VertScenario(t_init=0, pressure_pa=ISA_P0_PA, cmds=[])
     )
@@ -196,7 +196,7 @@ def test_sea_level_standard_pressure_maps_to_zero_isa():
 
 
 def test_tropospheric_isa_few_hundred_metres_within_one_metre():
-    """L305: two distinct few-hundred-metre pressures each yield that altitude within 1 m."""
+    """two distinct few-hundred-metre pressures each yield that altitude within 1 m."""
     h_a, h_b = runtime_isa_band_heights()
     for h_true in (h_a, h_b):
         p = tropospheric_isa_pressure_pa(h_true)
@@ -212,7 +212,7 @@ def test_tropospheric_isa_few_hundred_metres_within_one_metre():
 
 
 def test_isa_altitude_readable_separately_from_datum_height():
-    """L293 / L290: ISA altitude is readable separately; init height is the datum."""
+    """ISA altitude is readable separately; init height is the datum."""
     pad_h = runtime_pad_isa_m()
     h_init = runtime_h_init_m()
     climb = runtime_climb_m()
@@ -252,12 +252,12 @@ def test_isa_altitude_readable_separately_from_datum_height():
 
 
 # ---------------------------------------------------------------------------
-# C. IMU between baro samples; attitude; slow accel correction (L289)
+# C. IMU between baro samples; attitude; slow accel correction
 # ---------------------------------------------------------------------------
 
 
 def test_imu_between_baro_samples_follows_specific_force_minus_gravity():
-    """L289: with no further barometer, height and climb follow gravity-removed specific force."""
+    """with no further barometer, height and climb follow gravity-removed specific force."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     dt = 0.40
@@ -305,7 +305,7 @@ def test_imu_between_baro_samples_follows_specific_force_minus_gravity():
 
 
 def test_supplied_attitude_rotates_specific_force():
-    """L289: the supplied body-to-NED attitude is used to rotate specific force."""
+    """the supplied body-to-NED attitude is used to rotate specific force."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     # 12–24° leaves body acc[2] close to −g, so taking specific force as
@@ -362,7 +362,7 @@ def test_supplied_attitude_rotates_specific_force():
 
 
 def test_slow_accel_correction_holds_pad_under_accel_bias():
-    """L289: a slow additive correction is absorbed; IMU-only after a baro pad does not run away."""
+    """a slow additive correction is absorbed; IMU-only after a baro pad does not run away."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     bias = runtime_acc_bias_mps2()
@@ -429,7 +429,7 @@ def test_slow_accel_correction_holds_pad_under_accel_bias():
 
 
 def test_barometer_observes_height_only_not_climb_rate():
-    """L289: the barometer observes height only; it is not a direct climb-rate measurement."""
+    """the barometer observes height only; it is not a direct climb-rate measurement."""
     pad_h = runtime_pad_isa_m()
     climb = runtime_climb_m()
     p_pad = tropospheric_isa_pressure_pa(pad_h)
@@ -440,7 +440,7 @@ def test_barometer_observes_height_only_not_climb_rate():
     baro = c_vert_run(
         VertScenario(t_init=0, pressure_pa=p_pad, cmds=pad + hold)
     )
-    # ZUPT is the PRD's direct zero climb-rate measurement (L294). Same
+    # ZUPT is the PRD's direct zero climb-rate measurement. Same
     # still IMU and duration, pad pressure held, no new barometer altitude.
     zupt = c_vert_run(
         VertScenario(
@@ -485,7 +485,7 @@ def test_barometer_observes_height_only_not_climb_rate():
 
 
 # ---------------------------------------------------------------------------
-# D. Local-to-ellipsoid offset (L291 / L305–L306)
+# D. Local-to-ellipsoid offset
 # ---------------------------------------------------------------------------
 
 
@@ -508,7 +508,7 @@ def _offset_pairs(h_local, local_std, offset, gnss_std, *, t0_us, count, dt_us):
 
 
 # Consistent pairs fed after the true offset changes. How fast the offset
-# tracks is the implementer's (L291), so the stream is about an hour of
+# tracks is the implementer's, so the stream is about an hour of
 # 11 s pairs: long enough that any tracking filter has crossed the midpoint
 # between the old and the new offset, whatever its time constant or its
 # downweighting of the large first innovations.
@@ -516,7 +516,7 @@ _TRACK_PAIRS = 330
 
 
 def test_local_plus_offset_tracks_ellipsoid_height():
-    """L291 / L305: after the true offset changes, local height plus the published offset tracks the new ellipsoid."""
+    """after the true offset changes, local height plus the published offset tracks the new ellipsoid."""
     off_a, off_b = runtime_offset_pair()
     h_local = runtime_local_height_m()
     local_std = 0.25
@@ -576,7 +576,7 @@ def test_local_plus_offset_tracks_ellipsoid_height():
 
 
 def test_offset_converts_local_height_during_gnss_gap():
-    """L291 / L305–L306: during a GNSS gap the instance offset still converts a new local height."""
+    """during a GNSS gap the instance offset still converts a new local height."""
     off_a, off_b = runtime_offset_pair()
     h_local = runtime_local_height_m()
     h_gap = h_local + runtime_climb_m() + 5.0
@@ -618,7 +618,7 @@ def test_offset_converts_local_height_during_gnss_gap():
 
 
 def test_pairs_without_positive_gnss_vertical_variance_skipped():
-    """L291: pairs without a positive GNSS vertical variance are skipped; a positive pair must move the offset."""
+    """pairs without a positive GNSS vertical variance are skipped; a positive pair must move the offset."""
     off_a, off_b = runtime_offset_pair()
     off_c = off_b + 18.0
     h_local = runtime_local_height_m()
@@ -673,7 +673,7 @@ def test_pairs_without_positive_gnss_vertical_variance_skipped():
     first_off = pulled.snaps[0].offset
     assert first_off is not None, "first pair did not publish an offset"
     off_before = before[-1].offset
-    # Rate-free (L291: how fast the offset tracks is not scored): the
+    # Rate-free (PRD: how fast the offset tracks is not scored): the
     # positive-variance prefix moved the offset from the first pair toward
     # the new offset, by any amount.
     assert (off_before - first_off) * (off_b - off_a) > 0.0, (
@@ -730,12 +730,12 @@ def test_pairs_without_positive_gnss_vertical_variance_skipped():
 
 
 # ---------------------------------------------------------------------------
-# E. Downweight, not drop; 2 m default (L290 / L301 / L305–L306)
+# E. Downweight, not drop; 2 m default
 # ---------------------------------------------------------------------------
 
 
 def test_baro_spike_downweighted_height_does_not_jump():
-    """L290 / L305–L306: a one-sample pressure glitch does not become the datum."""
+    """a one-sample pressure glitch does not become the datum."""
     pad_h = runtime_pad_isa_m()
     spike = runtime_spike_isa_m()
     p_pad = tropospheric_isa_pressure_pa(pad_h)
@@ -781,7 +781,7 @@ def test_baro_spike_downweighted_height_does_not_jump():
 
 
 def test_persistent_weather_offset_does_not_deadlock():
-    """L290: a persistent weather offset is followed; downweight is not a hard drop."""
+    """a persistent weather offset is followed; downweight is not a hard drop."""
     pad_h = runtime_pad_isa_m()
     weather = runtime_weather_isa_m() + 4.0
     p_pad = tropospheric_isa_pressure_pa(pad_h)
@@ -852,7 +852,7 @@ def test_persistent_weather_offset_does_not_deadlock():
 
 
 def test_all_zero_config_default_baro_altitude_1sigma_is_2m():
-    """L301: an omitted barometer 1-sigma matches explicit 2 m on the first update, and a tighter 1-sigma pulls harder."""
+    """an omitted barometer 1-sigma matches explicit 2 m on the first update, and a tighter 1-sigma pulls harder."""
     pad_h = runtime_pad_isa_m()
     # Metre-scale step on the first update after init: large enough to see,
     # small enough that a tighter 1-sigma is not chi²-crushed into pulling
@@ -902,12 +902,12 @@ def test_all_zero_config_default_baro_altitude_1sigma_is_2m():
 
 
 # ---------------------------------------------------------------------------
-# F. Vertical ZUPT (L294 / L305)
+# F. Vertical ZUPT
 # ---------------------------------------------------------------------------
 
 
 def test_vertical_zupt_holds_climb_near_zero_on_still_pad():
-    """L305: on a still pad, ZUPT holds climb rate near zero; without it, biased accel leaves zero."""
+    """on a still pad, ZUPT holds climb rate near zero; without it, biased accel leaves zero."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     bias = runtime_acc_bias_mps2()
@@ -942,7 +942,7 @@ def test_vertical_zupt_holds_climb_near_zero_on_still_pad():
 
 
 def test_vertical_zupt_not_gated_on_filter_velocity():
-    """L294: ZUPT is not gated on the filter's own climb rate."""
+    """ZUPT is not gated on the filter's own climb rate."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     a_up = runtime_a_up_mps2()
@@ -981,12 +981,12 @@ def test_vertical_zupt_not_gated_on_filter_velocity():
 
 
 # ---------------------------------------------------------------------------
-# G. Non-finite drop; init refuse (L299 / L305–L306)
+# G. Non-finite drop; init refuse
 # ---------------------------------------------------------------------------
 
 
 def test_nonfinite_pressure_dropped_filter_continues():
-    """L299 / L306: a non-finite pressure is dropped and processing continues."""
+    """a non-finite pressure is dropped and processing continues."""
     pad_h = runtime_pad_isa_m()
     climb = runtime_climb_m()
     p = tropospheric_isa_pressure_pa(pad_h)
@@ -1042,7 +1042,7 @@ def test_nonfinite_pressure_dropped_filter_continues():
 
 
 def test_nonfinite_imu_dropped_filter_continues():
-    """L299: a non-finite IMU sample is dropped; a NaN pressure still consumes finite IMU."""
+    """a non-finite IMU sample is dropped; a NaN pressure still consumes finite IMU."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     a_up = runtime_a_up_mps2()
@@ -1097,7 +1097,7 @@ def test_nonfinite_imu_dropped_filter_continues():
 
 
 def test_init_refuses_nonfinite_or_implausible_anchor_pressure():
-    """L299 / L305: init itself fails on a non-finite or negative (ISA-undefined) anchor and succeeds on sea-level-standard and ordinary tropospheric positive pressure."""
+    """init itself fails on a non-finite or negative (ISA-undefined) anchor and succeeds on sea-level-standard and ordinary tropospheric positive pressure."""
     good_p = tropospheric_isa_pressure_pa(runtime_pad_isa_m())
     neg_p = -(50.0 + runtime_pad_isa_m())
     for p, label in ((ISA_P0_PA, "101325"), (good_p, "ordinary tropospheric")):
@@ -1115,12 +1115,12 @@ def test_init_refuses_nonfinite_or_implausible_anchor_pressure():
 
 
 # ---------------------------------------------------------------------------
-# H. Time anomalies (L300 / L305–L306)
+# H. Time anomalies
 # ---------------------------------------------------------------------------
 
 
 def test_backwards_timestamp_skips_epoch():
-    """L300: a backwards timestamp skips that epoch; later increasing timestamps continue."""
+    """a backwards timestamp skips that epoch; later increasing timestamps continue."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     a_up = runtime_a_up_mps2()
@@ -1178,7 +1178,7 @@ def test_backwards_timestamp_skips_epoch():
 
 
 def test_forward_gap_just_under_0_5s_still_integrates():
-    """L305: a forward gap just under 0.5 s with absurd vertical specific force still integrates."""
+    """a forward gap just under 0.5 s with absurd vertical specific force still integrates."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     a_up = runtime_a_up_mps2()
@@ -1206,7 +1206,7 @@ def test_forward_gap_just_under_0_5s_still_integrates():
 
 
 def test_named_0_3s_gap_is_not_an_outage():
-    """L306: a 0.3 s gap is not treated as an outage; IMU height still integrates."""
+    """a 0.3 s gap is not treated as an outage; IMU height still integrates."""
     pad_h = runtime_pad_isa_m()
     p = tropospheric_isa_pressure_pa(pad_h)
     a_up = runtime_a_up_mps2()
@@ -1234,7 +1234,7 @@ def test_named_0_3s_gap_is_not_an_outage():
 
 
 def test_forward_gap_just_over_0_5s_skips_imu_but_still_fuses_baro():
-    """L300 / L305–L306: just over 0.5 s skips IMU height integration; a barometer sample on that epoch still fuses."""
+    """just over 0.5 s skips IMU height integration; a barometer sample on that epoch still fuses."""
     pad_h = runtime_pad_isa_m()
     climb = 2.2 + runtime_climb_m() * 0.05
     p = tropospheric_isa_pressure_pa(pad_h)
@@ -1309,12 +1309,12 @@ def test_forward_gap_just_over_0_5s_skips_imu_but_still_fuses_baro():
 
 
 # ---------------------------------------------------------------------------
-# I. Later unpublished; suite re-bootstrap (L295 / L305–L306)
+# I. Later unpublished; suite re-bootstrap
 # ---------------------------------------------------------------------------
 
 
 def test_standalone_stays_unpublished_until_reinit_after_implausible_1sigma():
-    """L295 / L305–L306: after accessors fail, standalone stays unpublished until the caller re-inits."""
+    """after accessors fail, standalone stays unpublished until the caller re-inits."""
     pad_h = runtime_pad_isa_m()
     climb = runtime_climb_m()
     p_pad = tropospheric_isa_pressure_pa(pad_h)
@@ -1378,7 +1378,7 @@ def test_standalone_stays_unpublished_until_reinit_after_implausible_1sigma():
 
 
 def test_suite_rebootstrap_after_implausible_height_or_climb_1sigma():
-    """L295 / L305: the suite re-bootstraps this channel without a caller re-init; a healthy twin stays published."""
+    """the suite re-bootstraps this channel without a caller re-init; a healthy twin stays published."""
     lat, lon, h = runtime_suite_site()
     pad_h = runtime_pad_isa_m()
     climb = runtime_climb_m()

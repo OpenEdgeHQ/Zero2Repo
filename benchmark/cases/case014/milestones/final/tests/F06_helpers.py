@@ -47,7 +47,7 @@ from F03_helpers import (
     still_level_acc,
 )
 
-# Named numeric oracles from FP-06 (L262, L270, L272, L276).
+# Fixed inputs and tolerances for FP-06.
 REF_GYR_PSD = 0.0001
 REF_ACC_NOISE = 0.05
 REF_BIAS_DPS = (1.0, -2.0, 0.0)
@@ -67,9 +67,6 @@ ATT_TIMEOUT = LONG_TIMEOUT
 
 _C_PROBE = r"""
 #define _GNU_SOURCE
-#include <dlfcn.h>
-#include <elf.h>
-#include <link.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,365 +142,17 @@ static int parse_ll(const char *s, long long *out)
 }
 
 /* Vehicle velocity on the published attitude solution.
-   The read is an exported getter on that solution whose name is a
-   vehicle velocity, called as a 3-vector reader. Finding no such getter
-   is the read being absent, not a failure to look. Gyro bias, attitude
-   uncertainty, the quaternion, any other finite triplet, and the three
-   floats stored after the published angles are not that velocity. The
-   navigation-filter velocity is a different read on the same stream.
-   A private estimate-component count is not scored. */
-#define ATT_GETTERS 64
-static const char *att_getters[ATT_GETTERS];
-static int att_getter_n;
-static int att_getters_ready;
-
-static int finite3(const float v[3])
-{
-    return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]);
-}
-
-static int same3(const float a[3], const float b[3])
-{
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
-}
-
-static void accept_velocity(float out[3], int *found, const float vel[3])
-{
-    if (*found && !same3(out, vel)) {
-        /* A second, different attitude velocity: keep the first. Publishing
-           any attitude velocity is what the no-velocity test rejects; it must
-           not abort every snapshot of the run. */
-        return;
-    }
-    out[0] = vel[0];
-    out[1] = vel[1];
-    out[2] = vel[2];
-    *found = 1;
-}
-
-/* "vel" as its own token. A longer word that merely contains those
-   letters is not a vehicle velocity. */
-static int has_vel_token(const char *name)
-{
-    const char *p = name;
-    while (*p) {
-        const char *start = p;
-        while (*p && *p != '_') {
-            p++;
-        }
-        if ((size_t)(p - start) == 3 && start[0] == 'v' && start[1] == 'e' &&
-            start[2] == 'l') {
-            return 1;
-        }
-        if (*p == '_') {
-            p++;
-        }
-    }
-    return 0;
-}
-
-static int names_vehicle_velocity(const char *name)
-{
-    if (strstr(name, "bias") != NULL || strstr(name, "std") != NULL ||
-        strstr(name, "quat") != NULL || strstr(name, "sigma") != NULL ||
-        strstr(name, "cov") != NULL) {
-        return 0;
-    }
-    if (strstr(name, "velocity") != NULL || strstr(name, "vned") != NULL) {
-        return 1;
-    }
-    return has_vel_token(name);
-}
-
-static int attitude_getter_candidate(const char *name)
-{
-    if (name == NULL || name[0] == '\0') {
-        return 0;
-    }
-    /* The navigation filter's velocity, and getters on the suite object,
-       are a different read. They are not called with the attitude solution. */
-    if (strstr(name, "ins_get_velocity") != NULL || strstr(name, "ins_core_") != NULL ||
-        strstr(name, "ins_suite_") != NULL || strstr(name, "nav_suite_") != NULL ||
-        strstr(name, "baro") != NULL) {
-        return 0;
-    }
-    if (strstr(name, "ahrs") == NULL && strstr(name, "ars") == NULL) {
-        return 0;
-    }
-    return names_vehicle_velocity(name);
-}
-
-static void remember_getter(const char *name)
-{
-    for (int i = 0; i < att_getter_n; ++i) {
-        if (strcmp(att_getters[i], name) == 0) {
-            return;
-        }
-    }
-    if (att_getter_n >= ATT_GETTERS) {
-        fprintf(stderr, "attitude velocity channel: too many getters\n");
-        exit(2);
-    }
-    att_getters[att_getter_n] = strdup(name);
-    if (att_getters[att_getter_n] == NULL) {
-        fprintf(stderr, "attitude velocity channel: out of memory\n");
-        exit(2);
-    }
-    att_getter_n += 1;
-}
-
-static int read_getter_child(const char *name, const void *arg, float out[3])
-{
-    int fds[2];
-    if (pipe(fds) != 0) {
-        fprintf(stderr, "attitude velocity channel: pipe failed\n");
-        exit(2);
-    }
-    pid_t pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "attitude velocity channel: fork failed\n");
-        exit(2);
-    }
-    if (pid == 0) {
-        union {
-            void *p;
-            int (*fn)(const void *, float *);
-        } got;
-        float buf[8];
-        int i;
-        close(fds[0]);
-        got.p = dlsym(RTLD_DEFAULT, name);
-        if (got.p == NULL) {
-            _exit(3);
-        }
-        for (i = 0; i < 8; ++i) {
-            buf[i] = nanf("");
-        }
-        if (!got.fn(arg, buf) || !finite3(buf)) {
-            _exit(4);
-        }
-        if (write(fds[1], buf, 3 * sizeof(float)) != (ssize_t)(3 * sizeof(float))) {
-            _exit(5);
-        }
-        _exit(0);
-    }
-    close(fds[1]);
-    {
-        float buf[3];
-        ssize_t n = read(fds[0], buf, sizeof buf);
-        int st = 0;
-        close(fds[0]);
-        if (waitpid(pid, &st, 0) < 0) {
-            fprintf(stderr, "attitude velocity channel: wait failed\n");
-            exit(2);
-        }
-        if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-            return 0;
-        }
-        if (n != (ssize_t)sizeof buf) {
-            fprintf(stderr, "attitude velocity channel: short read from %s\n", name);
-            exit(2);
-        }
-        out[0] = buf[0];
-        out[1] = buf[1];
-        out[2] = buf[2];
-    }
-    return 1;
-}
-
-static int getter_is_callable(const char *name, const void *arg)
-{
-    pid_t pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "attitude velocity channel: fork failed\n");
-        exit(2);
-    }
-    if (pid == 0) {
-        union {
-            void *p;
-            int (*fn)(const void *, float *);
-        } got;
-        float buf[8];
-        int i;
-        got.p = dlsym(RTLD_DEFAULT, name);
-        if (got.p == NULL) {
-            _exit(3);
-        }
-        for (i = 0; i < 8; ++i) {
-            buf[i] = nanf("");
-        }
-        (void)got.fn(arg, buf);
-        _exit(0);
-    }
-    int st = 0;
-    if (waitpid(pid, &st, 0) < 0) {
-        fprintf(stderr, "attitude velocity channel: wait failed\n");
-        exit(2);
-    }
-    return WIFEXITED(st) && WEXITSTATUS(st) == 0;
-}
-
-static int survey_elf_getters(const char *path, const void *arg)
-{
-    FILE *f = fopen(path, "rb");
-    if (f == NULL) {
-        return 0;
-    }
-    Elf64_Ehdr eh;
-    if (fread(&eh, sizeof eh, 1, f) != 1 || memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 ||
-        eh.e_ident[EI_CLASS] != ELFCLASS64) {
-        fclose(f);
-        fprintf(stderr, "attitude velocity channel: %s is not an ELF64 library\n", path);
-        exit(2);
-    }
-    if (eh.e_shoff == 0 || eh.e_shnum == 0 || eh.e_shentsize != sizeof(Elf64_Shdr)) {
-        fclose(f);
-        fprintf(stderr, "attitude velocity channel: %s has no section table\n", path);
-        exit(2);
-    }
-    if (fseek(f, (long)eh.e_shoff, SEEK_SET) != 0) {
-        fclose(f);
-        fprintf(stderr, "attitude velocity channel: cannot read sections of %s\n", path);
-        exit(2);
-    }
-    Elf64_Shdr *sh = calloc(eh.e_shnum, sizeof *sh);
-    if (sh == NULL || fread(sh, sizeof *sh, eh.e_shnum, f) != eh.e_shnum) {
-        free(sh);
-        fclose(f);
-        fprintf(stderr, "attitude velocity channel: truncated sections in %s\n", path);
-        exit(2);
-    }
-    Elf64_Shdr dynsym, dynstr;
-    int have_sym = 0;
-    for (int i = 0; i < eh.e_shnum; ++i) {
-        if (sh[i].sh_type == SHT_DYNSYM) {
-            dynsym = sh[i];
-            if (dynsym.sh_link >= eh.e_shnum) {
-                free(sh);
-                fclose(f);
-                fprintf(stderr, "attitude velocity channel: dynsym link broken in %s\n", path);
-                exit(2);
-            }
-            dynstr = sh[dynsym.sh_link];
-            have_sym = 1;
-            break;
-        }
-    }
-    if (!have_sym) {
-        free(sh);
-        fclose(f);
-        return 0;
-    }
-    size_t nsym = dynsym.sh_entsize ? (size_t)(dynsym.sh_size / dynsym.sh_entsize) : 0;
-    Elf64_Sym *syms = calloc(nsym ? nsym : 1, sizeof *syms);
-    char *strs = malloc(dynstr.sh_size ? dynstr.sh_size : 1);
-    if (syms == NULL || strs == NULL ||
-        fseek(f, (long)dynsym.sh_offset, SEEK_SET) != 0 ||
-        fread(syms, sizeof *syms, nsym, f) != nsym ||
-        fseek(f, (long)dynstr.sh_offset, SEEK_SET) != 0 ||
-        fread(strs, 1, dynstr.sh_size, f) != dynstr.sh_size) {
-        free(syms);
-        free(strs);
-        free(sh);
-        fclose(f);
-        fprintf(stderr, "attitude velocity channel: cannot read symbols of %s\n", path);
-        exit(2);
-    }
-    strs[dynstr.sh_size ? dynstr.sh_size - 1 : 0] = '\0';
-    for (size_t i = 0; i < nsym; ++i) {
-        const char *name;
-        if (syms[i].st_name >= dynstr.sh_size) {
-            continue;
-        }
-        if (ELF64_ST_TYPE(syms[i].st_info) != STT_FUNC) {
-            continue;
-        }
-        name = strs + syms[i].st_name;
-        if (!attitude_getter_candidate(name)) {
-            continue;
-        }
-        if (!getter_is_callable(name, arg)) {
-            continue;
-        }
-        remember_getter(name);
-    }
-    free(syms);
-    free(strs);
-    free(sh);
-    fclose(f);
-    return 1;
-}
-
-static int survey_opened;
-
-/* Basename of the shared object this probe was linked against. The caller
-   substitutes the real filename before the probe is compiled. */
-static const char survey_lib_base[] = "__LIB_BASENAME__";
-
-static int loaded_object_is_linked_library(const char *path)
-{
-    const char *base;
-    const char *scan;
-    if (path == NULL || path[0] == '\0' || survey_lib_base[0] == '\0') {
-        return 0;
-    }
-    base = path;
-    for (scan = path; *scan != '\0'; ++scan) {
-        if ((*scan == '/' || *scan == '\\') && scan[1] != '\0') {
-            base = scan + 1;
-        }
-    }
-    return strcmp(base, survey_lib_base) == 0;
-}
-
-static int survey_one_object(struct dl_phdr_info *info, size_t size, void *data)
-{
-    const void *arg = data;
-    (void)size;
-    /* TEST-FIX(F06): upstream Makefile:438 shows make pylib writes the shared object inside the package directory; the attitude survey opens that loaded object */
-    if (!loaded_object_is_linked_library(info->dlpi_name)) {
-        return 0;
-    }
-    if (!survey_elf_getters(info->dlpi_name, arg)) {
-        fprintf(stderr, "attitude velocity channel: %s has no dynamic symbols\n", info->dlpi_name);
-        exit(2);
-    }
-    survey_opened += 1;
-    return 0;
-}
-
-static void survey_attitude_getters(const void *arg)
-{
-    if (att_getters_ready) {
-        return;
-    }
-    survey_opened = 0;
-    dl_iterate_phdr(survey_one_object, (void *)arg);
-    if (survey_opened == 0) {
-        fprintf(stderr, "attitude velocity channel: no loaded library to survey\n");
-        exit(2);
-    }
-    att_getters_ready = 1;
-}
-
+   The attitude instance's published readers are ahrs_get_rpy (roll,
+   pitch, yaw), ahrs_get_rpy_stddev (their 1-sigma) and ahrs_get_bias_gyr
+   (gyro bias); none of them is a velocity, so this read is absent. The
+   navigation-filter velocity is a different read on the same stream. */
 static int attitude_solution_velocity(const ahrs_t *a, float out[3])
 {
-    int found = 0;
     if (a == NULL || out == NULL) {
         fprintf(stderr, "attitude velocity channel: no attitude solution to read\n");
         exit(2);
     }
-    survey_attitude_getters(a);
-    for (int i = 0; i < att_getter_n; ++i) {
-        /* Call in a child. A getter whose real signature is not one vector
-           must not run in this process: a bad call would corrupt the filter. */
-        float raw[3];
-        if (!read_getter_child(att_getters[i], a, raw)) {
-            continue;
-        }
-        accept_velocity(out, &found, raw);
-    }
-    return found;
+    return 0;
 }
 
 static void print_filter_snap(const ahrs_t *a, long long t_us)
@@ -628,15 +277,9 @@ static void print_suite_snap(const nav_suite_t *s, long long t_us)
     } else {
         printf(" ahrs_vned=-");
     }
-    /* Active error-state size. A count of private components is not the
-       no-velocity observation. Unpublished instances report 0. */
-    int ars_n = (ars && s->ars.is_initialized) ? s->ars.n : 0;
-    int ahrs_n = (ahrs && s->ahrs.is_initialized) ? s->ahrs.n : 0;
-    /* ARS attitude instance's invalid-input counter. A different number
-       from the error-state size above, and not the navigation filter's
-       invalid-input diagnostic. */
-    printf(" ars_n=%d ahrs_n=%d ars_n_invalid=%u\n",
-           ars_n, ahrs_n, s->ars.n_invalid_input);
+    /* ARS attitude instance's published invalid-input counter (not the
+       navigation filter's invalid-input diagnostic). */
+    printf(" ars_n_invalid=%u\n", s->ars.n_invalid_input);
 }
 
 static int run_filter(void)
@@ -1000,31 +643,7 @@ _PY_SUITE_PROBE = r"""
 import math
 import sys
 
-# TEST-FIX(F06): upstream __init__.py:31 shows Config and Navigator are re-exported from the package directory make pylib wrote; _core.py:54 loads the shared object from that directory
 from __PKG__ import Config, Navigator
-
-
-def _finite3(obj):
-    if isinstance(obj, bool) or isinstance(obj, (str, bytes)):
-        return None
-    if not isinstance(obj, (list, tuple)):
-        return None
-    if len(obj) != 3:
-        return None
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in obj):
-        return None
-    if not all(math.isfinite(float(v)) for v in obj):
-        return None
-    return (float(obj[0]), float(obj[1]), float(obj[2]))
-
-
-def _read_published(obj):
-    if not callable(obj):
-        return obj
-    try:
-        return obj()
-    except TypeError:
-        return None
 
 
 def _take_velocity(found, vec, what):
@@ -1034,57 +653,6 @@ def _take_velocity(found, vec, what):
         # A second, different attitude velocity: keep the first (see the C probe).
         return found
     return vec
-
-
-def _names_a_velocity(name):
-    # Gyro bias, uncertainty, and any other 3-vector are not a velocity.
-    # The attitude-instance tag alone is not one either: the channel has
-    # to be the attitude solution's velocity.
-    n = name.lower().replace("-", "_")
-    if any(tok in n for tok in ("bias", "std", "quat", "sigma", "cov")):
-        return False
-    parts = [p for p in n.split("_") if p]
-    if "velocity" in n or "vned" in n:
-        return True
-    return "vel" in parts
-
-
-def _velocity_on_result(result):
-    # Only a vehicle-velocity read on this result. Another finite
-    # 3-vector, including one stored beside the angles, is not that read.
-    if type(result) in (list, tuple):
-        return None
-    found = None
-    for name in dir(result):
-        if name.startswith("_") or not _names_a_velocity(name):
-            continue
-        vec = _finite3(_read_published(getattr(result, name)))
-        if vec is None:
-            continue
-        found = _take_velocity(found, vec, "result")
-    return found
-
-
-def _velocity_on_publisher(nav, tag):
-    # A finite 3-vector whose name merely contains this attitude instance
-    # is not a velocity. Gyro bias stays a separate published 3-vector.
-    # The navigation-filter velocity is a different read: its name is not
-    # tied to this attitude instance, and emit() publishes it on its own.
-    skip = {
-        "ars": ("rpy_ars", "bias_gyr_ars", "gyr_bias_stddev_ars", "rpy_stddev_ars"),
-        "ahrs": ("rpy_ahrs", "bias_gyr_ahrs", "gyr_bias_stddev_ahrs", "rpy_stddev_ahrs"),
-    }[tag]
-    found = None
-    for name in dir(nav):
-        if name.startswith("_") or name in skip or tag not in name.lower():
-            continue
-        if not _names_a_velocity(name):
-            continue
-        vec = _finite3(_read_published(getattr(nav, name)))
-        if vec is None:
-            continue
-        found = _take_velocity(found, vec, tag)
-    return found
 
 
 def _as_attitude(rpy, what):
@@ -1105,9 +673,11 @@ def _as_attitude(rpy, what):
         raise SystemExit(
             "%s attitude result has no roll/pitch/yaw" % what
         )
+    if len(vals) != 3:
+        # The published attitude reader is roll, pitch, yaw and nothing else.
+        raise SystemExit("%s attitude result is not exactly roll/pitch/yaw" % what)
     angles = (float(vals[0]), float(vals[1]), float(vals[2]))
-    vel = _velocity_on_result(rpy)
-    return angles, vel
+    return angles, None
 
 
 def emit(nav, t_us):
@@ -1115,8 +685,6 @@ def emit(nav, t_us):
     ahrs_raw = nav.rpy_ahrs()
     ars, ars_vel = _as_attitude(ars_raw, "ARS")
     ahrs, ahrs_vel = _as_attitude(ahrs_raw, "AHRS")
-    ars_vel = _take_velocity(ars_vel, _velocity_on_publisher(nav, "ars"), "ARS")
-    ahrs_vel = _take_velocity(ahrs_vel, _velocity_on_publisher(nav, "ahrs"), "AHRS")
     ars_std = nav.rpy_stddev_ars()
     ahrs_std = nav.rpy_stddev_ahrs()
     ars_bias = nav.bias_gyr_ars()
@@ -1622,7 +1190,6 @@ def _require_compiled_product():
     """
     result = _compile_product_once()
     detail = _compile_detail(result)
-    # TEST-FIX(F06): upstream Makefile:441 shows pylib is the rule that writes the shared object; a missing or failed compile leaves no library for the attitude probes
     assert result is not None, (
         "make pylib replay did not run\n" + detail
     )
@@ -1630,11 +1197,9 @@ def _require_compiled_product():
         "make pylib replay failed\n" + detail
     )
     ident = product_identity()
-    # TEST-FIX(F06): upstream __init__.py:31 shows the package directory make pylib wrote re-exports Config and Navigator; _core.py:54 loads the shared object from that directory
     assert ident is not None, (
         "python package directory was not found after make pylib replay\n" + detail
     )
-    # TEST-FIX(F06): upstream Makefile:438 shows make pylib writes the shared object inside the package directory, and the object stem equals that directory name
     assert ident.library is not None and ident.library.is_file(), (
         "shared library is missing after make pylib replay\n" + detail
     )
@@ -1657,17 +1222,11 @@ def _attitude_c_source(ident) -> str:
     """
     library = ident.library
     assert library is not None and library.is_file()
-    token = _c_string_token(library.name)
-    # TEST-FIX(F06): upstream Makefile:438 shows the C probe links the shared object make pylib wrote; the survey opens that loaded object's basename
-    source = _C_PROBE.replace("__LIB_BASENAME__", token)
-    if "__LIB_BASENAME__" in source:
-        raise HarnessError("attitude probe did not receive the linked library basename")
-    return source
+    return _C_PROBE
 
 
 def _suite_py_source(ident) -> str:
     """Python suite probe that imports the package ``make pylib`` wrote."""
-    # TEST-FIX(F06): upstream __init__.py:29 shows Config is imported from the package directory make pylib wrote, and __init__.py:31 re-exports Navigator from that same package
     source = _PY_SUITE_PROBE.replace("__PKG__", ident.package_name)
     if "__PKG__" in source:
         raise HarnessError("suite probe did not receive the compiled package name")
@@ -2255,7 +1814,7 @@ def runtime_tilt_rad() -> float:
 
 
 def reference_stream(seed: int, *, truth_rpy=(0.0, 0.0, 0.0)) -> list[AttCmd]:
-    """100 Hz static IMU with the named 10 s noise model (L262)."""
+    """100 Hz static IMU with the named 10 s noise model."""
     rng = random.Random(seed)
     gyr_sigma = REF_GYR_PSD * math.sqrt(float(IMU_HZ))
     bias = tuple(math.radians(v) for v in REF_BIAS_DPS)

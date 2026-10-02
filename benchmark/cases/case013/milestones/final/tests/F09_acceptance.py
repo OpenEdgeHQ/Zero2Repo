@@ -4,7 +4,7 @@
 Public entry: the ``membundle mcp`` command. Observations go through sealed
 ``workspace`` / ``mcp_batch`` (via F09 ``mcp_script``) and on-disk files
 the tests wrote. These tests do not import Go packages and do not use
-``membundle show`` / ``membundle create`` / ``membundle validate`` as the MCP oracle.
+``membundle show`` / ``membundle create`` / ``membundle validate`` to judge the MCP results.
 """
 
 from __future__ import annotations
@@ -29,16 +29,11 @@ from F03_helpers import (
     mcp_is_tool_error,
     mcp_reply_for_id,
     path_tokens_for,
-    record_string_values,
     unique_tokens,
 )
 from F04_helpers import (
     compact_token,
-    hit_identities,
-    identity_in_records,
     numbered_identities,
-    require_mcp_empty_success,
-    require_mcp_search_success,
     search_concept_spec,
     write_concepts_later_first,
     write_equal_score_title_bundle,
@@ -66,13 +61,7 @@ from F07_helpers import (
     seed_relatable_pair,
 )
 from F08_helpers import (
-    assert_both_pass,
-    assert_conformant_gate_fail,
-    assert_identity_listed,
-    assert_numbers_later_greater,
-    assert_report_differs_after_strip,
     fact_concept,
-    require_mcp_validate_report,
     seed_drift_bundle,
     seed_fact_identities,
     seed_validatable_bundle,
@@ -84,13 +73,19 @@ from F09_helpers import (
     assert_json_arrays_empty,
     assert_outside_root_remainder_distinct,
     assert_request_reply_count,
+    assert_orphan_listed,
+    assert_report_both_pass,
+    assert_report_conformant_gate_fail,
     assert_token_absent_from_batch,
-    classify_search,
-    classify_validate,
+    hit_ids,
     listed_tool_names,
     mcp_script,
+    mcp_search_hits,
+    mcp_validate_report,
+    ordered_fixture_hit_ids,
     path_covariates,
     require_empty_ping,
+    require_empty_search,
     require_initialize_handshake,
     require_rpc_error_code,
     require_search_hits_identity,
@@ -98,8 +93,24 @@ from F09_helpers import (
     require_tool_error_not_protocol,
     require_tool_success,
     tools_call_params_line,
+    tool_result_json,
     tools_call_request,
 )
+
+def _gen_hex(n: int = 6) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+
+# Generated per test process: a missing link target, and a concept
+# description with an index listing text that contains it.
+SAMPLE_MISSING_HREF = f"m{_gen_hex(7)}.md"
+SAMPLE_DRIFT_DESC = f"Use K{_gen_hex(6)}"
+SAMPLE_DRIFT_LISTING = f"{SAMPLE_DRIFT_DESC} for O{_gen_hex(5)}2."
+
+
 
 
 def _kb() -> str:
@@ -127,7 +138,7 @@ def _result_of(reply: dict) -> object:
 
 
 def test_initialize_returns_protocol_version_and_server_identity():
-    """Initialize result contains 2024-11-05, membundle-agent-memory, and advertises tools, resources, and prompts (L271, L279)."""
+    """Initialize result contains 2024-11-05, membundle-agent-memory, and advertises tools, resources, and prompts."""
     with workspace() as ws:
         batch = mcp_script(ws, [rpc_request("ping", id=2)])
         init = mcp_reply_for_id(batch, 1)
@@ -139,7 +150,7 @@ def test_initialize_returns_protocol_version_and_server_identity():
 
 
 def test_initialized_cancel_and_ping_notifications_produce_no_response():
-    """Initialized, cancel, and ping-without-id add zero stdout lines (L271, L275)."""
+    """Initialized, cancel, and ping-without-id add zero stdout lines."""
     with workspace() as ws:
         batch = mcp_script(
             ws,
@@ -157,7 +168,7 @@ def test_initialized_cancel_and_ping_notifications_produce_no_response():
 
 
 def test_ping_replies_with_empty_result():
-    """Request-form ping has a present result whose leftover walk is empty; initialize still has the two tokens (L271)."""
+    """Request-form ping has a present result whose leftover walk is empty; initialize still has the two tokens."""
     with workspace() as ws:
         batch = mcp_script(
             ws,
@@ -173,8 +184,8 @@ def test_ping_replies_with_empty_result():
             f"echoes the request id is not an empty result; reply={ping!r}"
         )
         ping_result = require_empty_ping(ping)
-        values = record_string_values(init_result)
-        assert "2024-11-05" in values and "membundle-agent-memory" in values
+        assert init_result["protocolVersion"] == "2024-11-05"
+        assert init_result["serverInfo"]["name"] == "membundle-agent-memory"
         print(
             f"ping present empty result={ping_result!r} vs initialize tokens",
             flush=True,
@@ -187,7 +198,7 @@ def test_ping_replies_with_empty_result():
 
 
 def test_tools_list_is_exactly_the_six_named_tools():
-    """tools/list identities are exactly the six named MCP tools (L61, L271, L280)."""
+    """tools/list identities are exactly the six named MCP tools."""
     with workspace() as ws:
         batch = mcp_script(ws, [rpc_request("tools/list", id=2)])
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
@@ -201,7 +212,7 @@ def test_tools_list_is_exactly_the_six_named_tools():
 
 
 def test_resources_list_and_prompts_list_are_empty_collections():
-    """resources/list and prompts/list succeed with a length-0 collection; tools/list is not (L271)."""
+    """resources/list and prompts/list succeed with a length-0 collection; tools/list is not."""
     with workspace() as ws:
         batch = mcp_script(
             ws,
@@ -217,31 +228,17 @@ def test_resources_list_and_prompts_list_are_empty_collections():
         prompts = mcp_reply_for_id(batch, 4)
         tool_names = listed_tool_names(_result_of(tools))
         assert tool_names == SIX_TOOL_NAMES
-        resource_lengths = assert_json_arrays_empty(_result_of(resources))
-        prompt_lengths = assert_json_arrays_empty(_result_of(prompts))
-        assert resource_lengths, (
-            "resources/list success result contains no collection of length 0"
-        )
-        assert prompt_lengths, (
-            "prompts/list success result contains no collection of length 0"
-        )
-        assert all(length == 0 for length in resource_lengths), (
-            "resources/list reachable collection is not empty; "
-            f"lengths={resource_lengths!r}"
-        )
-        assert all(length == 0 for length in prompt_lengths), (
-            "prompts/list reachable collection is not empty; "
-            f"lengths={prompt_lengths!r}"
-        )
+        resource_items = assert_json_arrays_empty(_result_of(resources), "resources")
+        prompt_items = assert_json_arrays_empty(_result_of(prompts), "prompts")
         print(
-            f"resources/prompts empty collections lengths="
-            f"{resource_lengths!r}/{prompt_lengths!r}; tools list non-empty",
+            f"resources/prompts empty arrays "
+            f"{resource_items!r}/{prompt_items!r}; tools list non-empty",
             flush=True,
         )
 
 
 def test_tools_list_unchanged_after_create():
-    """After membundle_create, tools/list is still the six names; no unmatched-id messages (L271)."""
+    """After membundle_create, tools/list is still the six names; no unmatched-id messages."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -283,7 +280,7 @@ def test_tools_list_unchanged_after_create():
 
 
 def test_non_json_line_is_parse_error_minus_32700_and_ping_still_works():
-    """A non-JSON line is −32700; ping after it is still an empty success (L275, L279)."""
+    """A non-JSON line is −32700; ping after it is still an empty success."""
     with workspace() as ws:
         batch = mcp_script(
             ws,
@@ -299,7 +296,7 @@ def test_non_json_line_is_parse_error_minus_32700_and_ping_still_works():
 
 
 def test_unknown_method_with_id_is_minus_32601():
-    """Unknown method on a request with an id is −32601; ping on the same batch is not (L275)."""
+    """Unknown method on a request with an id is −32601; ping on the same batch is not."""
     with workspace() as ws:
         method = unique_tokens("meth")[0]
         batch = mcp_script(
@@ -318,7 +315,7 @@ def test_unknown_method_with_id_is_minus_32601():
 
 
 def test_unknown_method_notification_produces_no_reply():
-    """Unknown-method notification is silent; the request form of that method is −32601 (L275)."""
+    """Unknown-method notification is silent; the request form of that method is −32601."""
     with workspace() as ws:
         method = unique_tokens("nmeth")[0]
         batch = mcp_script(
@@ -337,7 +334,7 @@ def test_unknown_method_notification_produces_no_reply():
 
 
 def test_tools_call_array_string_or_omitted_params_is_minus_32602():
-    """tools/call params as array, string, or omitted are −32602; object params are not (L275, L279)."""
+    """tools/call params as array, string, or omitted are −32602; object params are not."""
     with workspace() as ws:
         ident, typ, title, desc, body, term = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "q"
@@ -380,8 +377,8 @@ def test_tools_call_array_string_or_omitted_params_is_minus_32602():
             "object-params tools/call was −32602; live twin must not be that code; "
             f"reply={live!r}"
         )
-        records = require_mcp_search_success(classify_search(batch, 5))
-        assert identity_in_records(records, ident)
+        records = mcp_search_hits(batch, 5)
+        assert ident in hit_ids(records)
         print("array/string/omitted params are −32602; object params are not", flush=True)
 
 
@@ -391,7 +388,7 @@ def test_tools_call_array_string_or_omitted_params_is_minus_32602():
 
 
 def test_create_then_show_search_validate_round_trip():
-    """membundle_create then show/search/validate; actor agent/mcp; bookkeeping (L32, L271, L281)."""
+    """membundle_create then show/search/validate; actor agent/mcp; bookkeeping."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -434,26 +431,35 @@ def test_create_then_show_search_validate_round_trip():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        empty_payload = require_mcp_validate_report(classify_validate(batch, 2))
+        empty_payload = mcp_validate_report(batch, 2)
         require_tool_success(mcp_reply_for_id(batch, 3))
-        show_payload, show_text = require_tool_success(mcp_reply_for_id(batch, 4))
-        show_values = record_string_values(show_payload)
-        assert ident in show_values, (
-            f"show payload has no exact identity value {ident!r}; "
-            f"values={sorted(show_values)!r}"
+        show_reply = mcp_reply_for_id(batch, 4)
+        require_tool_success(show_reply)
+        show_record = tool_result_json(show_reply, what="membundle_show")
+        assert isinstance(show_record, dict), (
+            f"membundle_show tool text is not a JSON object: {show_record!r}"
         )
-        assert typ in show_values, (
-            f"show payload has no exact type value {typ!r}; "
-            f"values={sorted(show_values)!r}"
+        assert show_record.get("id") == ident, (
+            f"show record id is {show_record.get('id')!r}, not {ident!r}; "
+            f"record={show_record!r}"
         )
-        assert any(body in item for item in show_values) or body in show_text, (
-            f"show payload has no body token {body!r}; "
-            f"values={sorted(show_values)!r} text={show_text!r}"
+        assert show_record.get("type") == typ, (
+            f"show record type is {show_record.get('type')!r}, not {typ!r}; "
+            f"record={show_record!r}"
         )
-        records = require_mcp_search_success(classify_search(batch, 5))
-        assert identity_in_records(records, ident)
-        after_payload = require_mcp_validate_report(classify_validate(batch, 6))
-        assert_numbers_later_greater(empty_payload, after_payload)
+        show_body = show_record.get("body")
+        assert isinstance(show_body, str) and body in show_body, (
+            f"show record body does not carry body token {body!r}; "
+            f"record={show_record!r}"
+        )
+        records = mcp_search_hits(batch, 5)
+        assert ident in hit_ids(records)
+        after_payload = mcp_validate_report(batch, 6)
+        assert after_payload["concept_count"] > empty_payload["concept_count"], (
+            "validate concept_count after membundle_create is not greater than "
+            f"before; before={empty_payload['concept_count']} "
+            f"after={after_payload['concept_count']}"
+        )
         assert_concept_written(
             concept_file(root, ident),
             concept_type=typ,
@@ -488,7 +494,7 @@ def test_create_then_show_search_validate_round_trip():
 
 
 def test_update_and_relate_use_agent_mcp_and_write_bookkeeping_and_relative_link():
-    """membundle_update refreshes listing+log with agent/mcp; membundle_relate writes a relative link (L271)."""
+    """membundle_update refreshes listing+log with agent/mcp; membundle_relate writes a relative link."""
     with workspace() as ws:
         (
             upd_id,
@@ -630,7 +636,7 @@ def test_update_and_relate_use_agent_mcp_and_write_bookkeeping_and_relative_link
 
 
 def test_mcp_search_omit_limit_caps_at_10():
-    """Fifteen keyword matches, MCP limit omitted, returns 10 identities not 15 (L271)."""
+    """Fifteen keyword matches, MCP limit omitted, returns 10 identities not 15."""
     with workspace() as ws:
         term = compact_token("m15")
         ids = numbered_identities(15, compact_token("ms15"))
@@ -648,11 +654,11 @@ def test_mcp_search_omit_limit_caps_at_10():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        records = require_mcp_search_success(classify_search(batch, 2))
+        records = mcp_search_hits(batch, 2)
         assert len(records) == 10, (
             f"omit-limit on 15 matches returned {len(records)}, not 10"
         )
-        ordered = hit_identities(records, ids)
+        ordered = ordered_fixture_hit_ids(records, ids)
         assert ordered != walk_prefix, (
             "omit-limit returned the reverse-lex walk-order prefix of 10; "
             f"ordered={ordered!r}"
@@ -661,7 +667,7 @@ def test_mcp_search_omit_limit_caps_at_10():
 
 
 def test_mcp_search_huge_limit_caps_at_100():
-    """120 keyword matches, MCP limit 100000 returns 100; omit-limit on the same 120 is 10 (L271)."""
+    """120 keyword matches, MCP limit 100000 returns 100; omit-limit on the same 120 is 10."""
     with workspace() as ws:
         term = compact_token("m120")
         ids = numbered_identities(120, compact_token("ms120"))
@@ -684,11 +690,11 @@ def test_mcp_search_huge_limit_caps_at_100():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        huge = require_mcp_search_success(classify_search(batch, 2))
-        omitted = require_mcp_search_success(classify_search(batch, 3))
+        huge = mcp_search_hits(batch, 2)
+        omitted = mcp_search_hits(batch, 3)
         assert len(huge) == 100, f"limit 100000 on 120 returned {len(huge)}"
         assert len(omitted) == 10, f"omit-limit on 120 returned {len(omitted)}"
-        huge_ids = hit_identities(huge, ids)
+        huge_ids = ordered_fixture_hit_ids(huge, ids)
         assert huge_ids != walk_prefix, (
             "max-100 returned the reverse-lex walk-order prefix of 100; "
             f"ordered={huge_ids!r}"
@@ -702,7 +708,7 @@ def test_mcp_search_huge_limit_caps_at_100():
 
 
 def test_mcp_path_bound_search_selects_governing_concept():
-    """for_path hits the code_refs concept, not a second concept that only mentions the path (L271)."""
+    """for_path hits the code_refs concept, not a second concept that only mentions the path."""
     with workspace() as ws:
         gov_id, other_id, typ, gtitle, otitle, desc, gbody, obody = unique_tokens(
             "gid", "oid", "typ", "gttl", "ottl", "dsc", "gbod", "obod"
@@ -746,16 +752,16 @@ def test_mcp_path_bound_search_selects_governing_concept():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        path_hits = require_mcp_search_success(classify_search(batch, 2))
-        assert identity_in_records(path_hits, gov_id), (
+        path_hits = mcp_search_hits(batch, 2)
+        assert gov_id in hit_ids(path_hits), (
             f"for_path did not return the governing identity {gov_id!r}"
         )
-        assert not identity_in_records(path_hits, other_id), (
+        assert other_id not in hit_ids(path_hits), (
             "for_path treated a title/body mention as coverage; "
             f"other={other_id!r} hits={path_hits!r}"
         )
-        keyword = require_mcp_search_success(classify_search(batch, 3))
-        assert identity_in_records(keyword, other_id), (
+        keyword = mcp_search_hits(batch, 3)
+        assert other_id in hit_ids(keyword), (
             "keyword query for the path string did not find the second identity"
         )
         print("for_path is not keyword search of the path string", flush=True)
@@ -767,7 +773,7 @@ def test_mcp_path_bound_search_selects_governing_concept():
 
 
 def test_mcp_validate_default_producer_gate_on_until_strict_false():
-    """Two-concept orphans: default MCP gate-fail; strict false both-pass (L271)."""
+    """Two-concept orphans: default MCP gate-fail; strict false both-pass."""
     with workspace() as ws:
         a, b = unique_tokens("a", "b")
         rel = _kb()
@@ -786,22 +792,22 @@ def test_mcp_validate_default_producer_gate_on_until_strict_false():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        default_payload = require_mcp_validate_report(classify_validate(batch, 2))
-        off_payload = require_mcp_validate_report(classify_validate(batch, 3))
-        assert_conformant_gate_fail(default_payload)
-        assert_both_pass(off_payload)
-        assert_identity_listed(default_payload, a)
-        assert_identity_listed(off_payload, b)
+        default_payload = mcp_validate_report(batch, 2)
+        off_payload = mcp_validate_report(batch, 3)
+        assert_report_conformant_gate_fail(default_payload)
+        assert_report_both_pass(off_payload)
+        assert_orphan_listed(default_payload, a)
+        assert_orphan_listed(off_payload, b)
         print("MCP producer gate on until strict false", flush=True)
 
 
 def test_mcp_validate_drift_always_on_without_failing_gate():
-    """Default MCP drift warns vs a matching-listing twin and still both-pass (L271)."""
+    """Default MCP drift warns vs a matching-listing twin and still both-pass."""
     with workspace() as ws:
         ident, title, mismatch = unique_tokens("id", "tl", "ms")
         rel_bad, rel_ok = unique_tokens("bd", "ok")
-        desc = "Use PKCE"
-        listing = "Use PKCE for OAuth2."
+        desc = SAMPLE_DRIFT_DESC
+        listing = SAMPLE_DRIFT_LISTING
         seed_drift_bundle(ws, rel_bad, ident, title, desc, mismatch)
         seed_drift_bundle(ws, rel_ok, ident, title, desc, listing)
         batch = mcp_script(
@@ -816,25 +822,22 @@ def test_mcp_validate_drift_always_on_without_failing_gate():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        bad = classify_validate(batch, 2)
-        ok = classify_validate(batch, 3)
-        bad_payload = require_mcp_validate_report(bad)
-        ok_payload = require_mcp_validate_report(ok)
-        assert_both_pass(bad_payload)
-        assert_both_pass(ok_payload)
-        extra = [ident, title, mismatch, desc, listing]
-        tokens = path_covariates(ws.path, rel_bad, rel_ok)
-        assert_report_differs_after_strip(
-            bad.report_text,
-            ok.report_text,
-            path_tokens=tokens,
-            extra_tokens=extra,
+        bad_payload = mcp_validate_report(batch, 2)
+        ok_payload = mcp_validate_report(batch, 3)
+        assert_report_both_pass(bad_payload)
+        assert_report_both_pass(ok_payload)
+        drift_only = set(bad_payload["warnings"]) - set(ok_payload["warnings"])
+        print(f"[F09] drift-only warnings={sorted(drift_only)!r}", flush=True)
+        assert drift_only, (
+            "mismatched-listing bundle has no warning that the matching-listing "
+            f"twin lacks; bad={bad_payload['warnings']!r} "
+            f"ok={ok_payload['warnings']!r}"
         )
         print("MCP drift always on; warning does not fail the gate", flush=True)
 
 
 def test_mcp_validate_stale_gate_only_when_requested():
-    """Yesterday stale_after: default both-pass; stale true gate-fail (L271)."""
+    """Yesterday stale_after: default both-pass; stale true gate-fail."""
     with workspace() as ws:
         ident = unique_tokens("id")[0]
         yesterday = utc_yesterday()
@@ -856,10 +859,10 @@ def test_mcp_validate_stale_gate_only_when_requested():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        omitted = require_mcp_validate_report(classify_validate(batch, 2))
-        requested = require_mcp_validate_report(classify_validate(batch, 3))
-        assert_both_pass(omitted)
-        assert_conformant_gate_fail(requested)
+        omitted = mcp_validate_report(batch, 2)
+        requested = mcp_validate_report(batch, 3)
+        assert_report_both_pass(omitted)
+        assert_report_conformant_gate_fail(requested)
         print("MCP stale gate only when requested", flush=True)
 
 
@@ -869,7 +872,7 @@ def test_mcp_validate_stale_gate_only_when_requested():
 
 
 def test_mcp_search_neither_query_nor_path_is_empty_success():
-    """MCP search with neither query nor for_path is empty success, not a tool error (L275)."""
+    """MCP search with neither query nor for_path is empty success, not a tool error."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -904,10 +907,10 @@ def test_mcp_search_neither_query_nor_path_is_empty_success():
             ],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        empty = require_mcp_empty_success(classify_search(batch, 2))
+        empty = require_empty_search(batch, 2)
         assert empty == []
-        live = require_mcp_search_success(classify_search(batch, 3))
-        assert identity_in_records(live, ident)
+        live = mcp_search_hits(batch, 3)
+        assert ident in hit_ids(live)
         neither = mcp_reply_for_id(batch, 2)
         assert not mcp_is_tool_error(neither)
         assert not mcp_is_invalid_params(neither)
@@ -920,7 +923,7 @@ def test_mcp_search_neither_query_nor_path_is_empty_success():
 
 
 def test_unknown_tool_name_is_tool_error_not_protocol_error():
-    """Unknown tools/call name is a tool error, not −32601/−32602; search still works (L275)."""
+    """Unknown tools/call name is a tool error, not −32601/−32602; search still works."""
     with workspace() as ws:
         ident, typ, title, desc, body, unknown = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "unk"
@@ -959,14 +962,14 @@ def test_unknown_tool_name_is_tool_error_not_protocol_error():
         unknown_reply = mcp_reply_for_id(batch, 2)
         require_tool_error_not_protocol(unknown_reply)
         assert not mcp_is_invalid_params(unknown_reply)
-        live = require_mcp_search_success(classify_search(batch, 3))
-        assert identity_in_records(live, ident)
+        live = mcp_search_hits(batch, 3)
+        assert ident in hit_ids(live)
         require_empty_ping(mcp_reply_for_id(batch, 4))
         print("unknown tool name is tool error", flush=True)
 
 
 def test_named_missing_bundle_is_tool_error_not_protocol_error():
-    """Named missing inside-root bundle is a tool error, not empty-list success (L275)."""
+    """Named missing inside-root bundle is a tool error, not empty-list success."""
     with workspace() as ws:
         ident, typ, title, desc, body, missing = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "miss"
@@ -1004,8 +1007,8 @@ def test_named_missing_bundle_is_tool_error_not_protocol_error():
         missing_reply = mcp_reply_for_id(batch, 2)
         require_tool_error_not_protocol(missing_reply)
         assert not mcp_is_invalid_params(missing_reply)
-        live = require_mcp_search_success(classify_search(batch, 3))
-        assert identity_in_records(live, ident)
+        live = mcp_search_hits(batch, 3)
+        assert ident in hit_ids(live)
         print("named missing bundle is tool error", flush=True)
 
 
@@ -1072,7 +1075,7 @@ def _assert_confinement_batch(
     *,
     inside_ident: str,
     t_out: str,
-    strip: list,
+    unknown_name: str,
 ) -> None:
     """Live inside arm is a classified hit; outside is unread path-traversal tool error."""
     require_search_hits_identity(batch, 20, inside_ident)
@@ -1084,12 +1087,12 @@ def _assert_confinement_batch(
     require_tool_error_not_protocol(missing_reply)
     assert_token_absent_from_batch(batch, t_out)
     assert_outside_root_remainder_distinct(
-        outside_reply, unknown_reply, missing_reply, strip
+        outside_reply, unknown_reply, missing_reply, unknown_name
     )
 
 
 def test_membundle_mcp_root_is_workspace_root_and_overrides_started_knowledge():
-    """MEMBUNDLE_MCP_ROOT wins over a started knowledge/ parent (L273)."""
+    """MEMBUNDLE_MCP_ROOT wins over a started knowledge/ parent."""
     with workspace() as ws:
         t_in, t_out, unknown, missing = unique_tokens("tin", "tout", "unk", "miss")
         root_a = ws.path / unique_tokens("ra")[0]
@@ -1116,11 +1119,8 @@ def test_membundle_mcp_root_is_workspace_root_and_overrides_started_knowledge():
             env_updates={MCP_ROOT_ENV: str(root_a.resolve())},
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, root_a, root_b, inside_abs, decoy_abs, inside_rel, decoy_rel, missing
-        ) + [unknown, t_in, t_out, id_in, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_in, t_out=t_out, strip=strip
+            batch, inside_ident=id_in, t_out=t_out, unknown_name=unknown
         )
         twin = mcp_script(
             ws,
@@ -1139,7 +1139,7 @@ def test_membundle_mcp_root_is_workspace_root_and_overrides_started_knowledge():
 
 
 def test_started_knowledge_directory_uses_parent_as_workspace_root():
-    """Started …/project/knowledge: workspace root is project (L273)."""
+    """Started …/project/knowledge: workspace root is project."""
     with workspace() as ws:
         t_in, t_out, unknown, missing, t_know = unique_tokens(
             "tin", "tout", "unk", "miss", "tk"
@@ -1166,17 +1166,14 @@ def test_started_knowledge_directory_uses_parent_as_workspace_root():
             args=[started],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, project, started, other, other_abs, outside, outside_abs, missing
-        ) + [unknown, t_in, t_out, t_know, id_in, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_in, t_out=t_out, strip=strip
+            batch, inside_ident=id_in, t_out=t_out, unknown_name=unknown
         )
         print("started knowledge/ uses parent as workspace root", flush=True)
 
 
 def test_started_non_knowledge_path_is_workspace_root():
-    """Started path not named knowledge/ is the workspace root (L273)."""
+    """Started path not named knowledge/ is the workspace root."""
     with workspace() as ws:
         t_in, t_out, unknown, missing = unique_tokens("tin", "tout", "unk", "miss")
         named = unique_tokens("named")[0]
@@ -1200,17 +1197,14 @@ def test_started_non_knowledge_path_is_workspace_root():
             args=[named],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, named, inside, inside_abs, outside, outside_abs, missing
-        ) + [unknown, t_in, t_out, id_in, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_in, t_out=t_out, strip=strip
+            batch, inside_ident=id_in, t_out=t_out, unknown_name=unknown
         )
         print("started non-knowledge path is workspace root", flush=True)
 
 
 def test_absolute_bundle_outside_workspace_root_is_tool_error_and_unread():
-    """Absolute directory outside the started workspace root is a tool error and unread (L275, L282)."""
+    """Absolute directory outside the started workspace root is a tool error and unread."""
     with workspace() as ws:
         t_in, t_out, unknown, missing = unique_tokens("tin", "tout", "unk", "miss")
         named = unique_tokens("nm")[0]
@@ -1234,11 +1228,8 @@ def test_absolute_bundle_outside_workspace_root_is_tool_error_and_unread():
             args=[named],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, named, inside, inside_abs, outside, outside_abs, missing
-        ) + [unknown, t_in, t_out, id_in, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_in, t_out=t_out, strip=strip
+            batch, inside_ident=id_in, t_out=t_out, unknown_name=unknown
         )
         twin = mcp_script(
             ws,
@@ -1255,7 +1246,7 @@ def test_absolute_bundle_outside_workspace_root_is_tool_error_and_unread():
 
 
 def test_relative_bundle_escaping_workspace_root_is_tool_error_and_unread():
-    """Relative ../outside on a non-knowledge start is a tool error and unread (L273, L275)."""
+    """Relative ../outside on a non-knowledge start is a tool error and unread."""
     with workspace() as ws:
         t_in, t_out, unknown, missing = unique_tokens("tin", "tout", "unk", "miss")
         named = unique_tokens("nmr")[0]
@@ -1278,17 +1269,14 @@ def test_relative_bundle_escaping_workspace_root_is_tool_error_and_unread():
             args=[named],
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, named, inside, outside, escape, missing
-        ) + [unknown, t_in, t_out, id_in, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_in, t_out=t_out, strip=strip
+            batch, inside_ident=id_in, t_out=t_out, unknown_name=unknown
         )
         print("relative escape is tool error and unread", flush=True)
 
 
 def test_mcp_started_knowledge_omit_bundle_loads_knowledge_not_parent():
-    """membundle mcp …/project/knowledge; omit bundle loads knowledge/, not a parent decoy (L269, L273)."""
+    """membundle mcp …/project/knowledge; omit bundle loads knowledge/, not a parent decoy."""
     with workspace() as ws:
         t_know, t_parent = unique_tokens("tk", "tp")
         project = unique_tokens("proj")[0]
@@ -1306,13 +1294,13 @@ def test_mcp_started_knowledge_omit_bundle_loads_knowledge_not_parent():
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
         require_search_hits_identity(batch, 2, id_know)
-        empty_parent = require_mcp_empty_success(classify_search(batch, 3))
+        empty_parent = require_empty_search(batch, 3)
         assert empty_parent == []
         print("started knowledge omit-bundle loads knowledge not parent", flush=True)
 
 
 def test_mcp_started_path_is_omit_bundle_default():
-    """Started non-knowledge path is the omit-bundle load root (L269, L273)."""
+    """Started non-knowledge path is the omit-bundle load root."""
     with workspace() as ws:
         t_named, t_cwd = unique_tokens("tn", "tc")
         named = unique_tokens("nm")[0]
@@ -1332,13 +1320,13 @@ def test_mcp_started_path_is_omit_bundle_default():
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
         require_search_hits_identity(batch, 2, id_named)
-        cwd_hits = require_mcp_empty_success(classify_search(batch, 3))
+        cwd_hits = require_empty_search(batch, 3)
         assert cwd_hits == []
         print("started path is omit-bundle default", flush=True)
 
 
 def test_mcp_omit_path_follows_cwd_knowledge_default():
-    """membundle mcp with no path: omit-bundle follows L49 knowledge/ vs cwd (L49, L269)."""
+    """membundle mcp with no path: omit-bundle follows the knowledge/ vs cwd."""
     with workspace() as ws:
         t_know, t_cwd = unique_tokens("tk", "tc")
         _root_k, id_know = _seed_token_bundle(ws, "knowledge", t_know)
@@ -1367,7 +1355,7 @@ def test_mcp_omit_path_follows_cwd_knowledge_default():
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
         require_search_hits_identity(batch, 2, id_know)
-        cwd_hits = require_mcp_empty_success(classify_search(batch, 3))
+        cwd_hits = require_empty_search(batch, 3)
         assert cwd_hits == []
         print("omit-path with knowledge/ dir loads knowledge", flush=True)
 
@@ -1390,13 +1378,13 @@ def test_mcp_omit_path_follows_cwd_knowledge_default():
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
         require_search_hits_identity(batch, 2, id_cwd)
-        sib_hits = require_mcp_empty_success(classify_search(batch, 3))
+        sib_hits = require_empty_search(batch, 3)
         assert sib_hits == []
         print("omit-path with knowledge file loads cwd", flush=True)
 
 
 def test_omit_path_workspace_root_is_cwd_not_knowledge():
-    """membundle mcp with no path: workspace root is cwd; sibling of knowledge/ succeeds (L273)."""
+    """membundle mcp with no path: workspace root is cwd; sibling of knowledge/ succeeds."""
     with workspace() as ws:
         t_sib, t_out, unknown, missing, t_know = unique_tokens(
             "ts", "to", "unk", "miss", "tk"
@@ -1422,10 +1410,7 @@ def test_omit_path_workspace_root_is_cwd_not_knowledge():
             cwd=cwd,
         )
         require_initialize_handshake(mcp_reply_for_id(batch, 1))
-        strip = path_covariates(
-            ws.path, project, cwd, sibling_abs, outside, outside_abs, missing
-        ) + [unknown, t_sib, t_out, t_know, id_sib, id_out]
         _assert_confinement_batch(
-            batch, inside_ident=id_sib, t_out=t_out, strip=strip
+            batch, inside_ident=id_sib, t_out=t_out, unknown_name=unknown
         )
         print("omit-path workspace root is cwd, not knowledge/", flush=True)

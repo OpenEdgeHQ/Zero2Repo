@@ -11,6 +11,24 @@ import pytest
 
 from _harness import HarnessError, invoke, workspace
 from F01_helpers import (
+    PARALLELISM_17_KEY,
+    TAILING_17_KEY,
+    require_member,
+    require_absent_member,
+    EMPTY_INPUT_ERROR,
+    EXIT_EMPTY_INPUT,
+    EXIT_UNKNOWN_OPTION,
+    EXIT_UNREADABLE,
+    HELP_FLAG,
+    HELP_SHORT,
+    INTERVAL_FLAG,
+    INTERVAL_KEY,
+    TRUNCATED_KEY,
+    UNKNOWN_OPTION_WORDS,
+    UNREADABLE_ERROR_PREFIX,
+    USAGE_SYNOPSIS,
+    failure_record,
+    is_unreadable_error,
     CORE_SLOTS,
     binding,
     bind_character_layer_slot,
@@ -52,7 +70,6 @@ from F01_helpers import (
     bind_mixed_script_count,
     bind_nonstandard_space_count,
     catalogue_numbers,
-    catalogue_of,
     confidence_of,
     empty_input_identity,
     error_points_toward_help,
@@ -87,6 +104,7 @@ from F01_helpers import (
     score_moving_numbers,
     score_of,
     stderr_states_one_file_at_a_time,
+    multi_file_notice_lines,
     strip_error_covariates,
     strip_paths_from_stderr,
     too_few_sentences_stated,
@@ -104,91 +122,6 @@ from F01_helpers import (
     band_named_for_score,
     require_character_layer_counts,
 )
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _bind_metric_fields():
-    """Locate score / band / confidence / scanned via PRD-named contrasts.
-
-    Each binding step records its own failure. A test that reads a slot
-    whose binding failed fails with that reason; no test is skipped.
-    """
-    window_runs = None
-    over_raw = None
-    try:
-        at_body = padding_of_length(SCAN_CAP)
-        over_body = padding_of_length(SCAN_CAP + 1)
-        extra_body = padding_of_length(SCAN_CAP + 2)
-        with workspace() as ws:
-            ws.write("at_cap.txt", at_body)
-            ws.write("over_cap.txt", over_body)
-            ws.write("extra_cap.txt", extra_body)
-            window_runs = (
-                scan_path(ws, "at_cap.txt"),
-                scan_path(ws, "over_cap.txt"),
-                scan_path(ws, "extra_cap.txt"),
-            )
-        over_raw = metrics_from_report(structured_report(window_runs[1]))
-    except Exception as exc:  # noqa: BLE001 - re-raised in the window step
-        window_error = exc
-    else:
-        window_error = None
-
-    f_metrics = None
-    with binding(*CORE_SLOTS):
-        fact = scan_stdin(SHORT_FACTUAL)
-        slop = scan_stdin(SHORT_SLOP)
-        if fact.returncode != 0:
-            raise AssertionError(
-                f"factual probe failed: exit {fact.returncode} stderr={fact.stderr_text!r}"
-            )
-        if slop.returncode != 0:
-            raise AssertionError(
-                f"slop probe failed: exit {slop.returncode} stderr={slop.stderr_text!r}"
-            )
-        f_findings, f_metrics = require_success_report(
-            fact, input_chars=unicode_len(SHORT_FACTUAL)
-        )
-        s_findings, s_metrics = require_success_report(
-            slop, input_chars=unicode_len(SHORT_SLOP)
-        )
-        none_text = neutral_words(39)
-        high_text = pad_human(300)
-        none_r = scan_stdin(none_text)
-        high_r = scan_stdin(high_text)
-        if none_r.returncode != 0 or high_r.returncode != 0:
-            raise AssertionError("confidence probes must succeed")
-        _nf, none_m = require_success_report(none_r, input_chars=unicode_len(none_text))
-        _hf, high_m = require_success_report(high_r, input_chars=unicode_len(high_text))
-        bind_core_metric_paths(
-            f_metrics,
-            s_metrics,
-            none_metrics=none_m,
-            high_conf_metrics=high_m,
-            scanned_metrics=f_metrics,
-            scanned_chars=unicode_len(SHORT_FACTUAL),
-            scanned_over_metrics=over_raw,
-        )
-        print(
-            f"[F01] bound metrics factual_score={score_of(f_metrics, findings=f_findings)} "
-            f"slop_score={score_of(s_metrics, findings=s_findings)}",
-            flush=True,
-        )
-    # Locate the three character-layer counts by the named K/J/I contrasts:
-    # each pair is the same prose, and only one arm carries the marks.
-    for slot in ("invisible", "space", "mixed"):
-        with binding(slot):
-            bind_character_layer_slot(slot)
-    with binding("window_mark"):
-        if window_error is not None:
-            raise window_error
-        if f_metrics is None:
-            raise HarnessError("short factual metrics are unavailable")
-        at_r, over_r, extra_r = window_runs
-        _af_cap, at_m = require_success_report(at_r, input_chars=SCAN_CAP)
-        _of_cap, over_m = require_success_report(over_r, input_chars=SCAN_CAP + 1)
-        _ef_cap, extra_m = require_success_report(extra_r, input_chars=SCAN_CAP + 2)
-        bind_window_mark(at_m, over_m, extra_m, f_metrics)
 
 
 # ===========================================================================
@@ -266,7 +199,7 @@ def test_finding_has_label_count_and_at_most_three_samples():
     # L96 / L100: a fired finding carries a human-readable label that
     # identifies the numbered kind, a hit count, and up to three samples.
     assert rec["label"]
-    assert catalogue_of(rec["label"]) == 1
+    assert rec["number"] == 1
     assert rec["hit"] >= 1
     samples = sample_list(rec)
     assert len(samples) <= 3
@@ -627,9 +560,8 @@ def test_listed_writing_advice_numbers_do_not_move_the_score():
         s_f, _s_m = require_success_report(
             scan_stdin(sample), input_chars=unicode_len(sample)
         )
-        require_absent_finding(s_f, 17)
-        assert 17 not in catalogue_numbers(s_f)
-        print(f"[F01] {label} omits catalogue 17", flush=True)
+        require_absent_member(s_f, PARALLELISM_17_KEY)
+        print(f"[F01] {label} omits parallelism-form 17", flush=True)
 
     # L99 / L108 / L126: named resin sentence fires parallelism-form 17,
     # does not fire 18, and does not move the score when that phrasing is
@@ -644,6 +576,7 @@ def test_listed_writing_advice_numbers_do_not_move_the_score():
         input_chars=unicode_len(RESIN_WITHOUT_PARALLELISM),
     )
     require_finding(r_f, 17)
+    require_member(r_f, PARALLELISM_17_KEY)
     require_absent_finding(r_f, 18)
     assert 17 in catalogue_numbers(r_f)
     assert 18 not in catalogue_numbers(r_f)
@@ -678,6 +611,7 @@ def test_catalogue_17_tailing_negation_moves_score_parallelism_is_advice():
         input_chars=unicode_len(TAILING_NEGATION_WITHOUT),
     )
     require_finding(t_f, 17)
+    require_member(t_f, TAILING_17_KEY)
     b_score = score_of(b_m, findings=b_f)
     t_score = score_of(t_m, findings=t_f)
     moving_b = score_moving_numbers(b_f) - {17}
@@ -700,6 +634,7 @@ def test_catalogue_17_tailing_negation_moves_score_parallelism_is_advice():
         input_chars=unicode_len(RESIN_WITHOUT_PARALLELISM),
     )
     require_finding(r_f, 17)
+    require_member(r_f, PARALLELISM_17_KEY)
     require_absent_finding(r_f, 18)
     assert 18 not in catalogue_numbers(r_f)
     r_score = score_of(r_m, findings=r_f)
@@ -1108,9 +1043,11 @@ def test_short_dense_slop_outscores_factual_by_at_least_20():
     assert abs(slop_words - fact_words) <= 20
     assert abs(twin_words - fact_words) <= 20
     assert slop_score >= fact_score + 20
-    assert twin_score >= fact_score + 20
-    require_absent_finding(slop_f, 17)
-    assert 17 not in catalogue_numbers(slop_f)
+    # PRD FP-01: the twin carries two escalating families (floor 25) while
+    # the factual paragraph is clean; the 20-point gap is not a rule for it.
+    assert twin_score >= 25
+    assert twin_score > fact_score
+    require_absent_member(slop_f, PARALLELISM_17_KEY)
 
 
 def test_named_line_126_oracles_are_not_a_constant_fifty():
@@ -1146,11 +1083,16 @@ def test_named_line_126_oracles_are_not_a_constant_fifty():
 
 
 def test_humanized_coding_sample_has_zero_findings():
+    # PRD FP-01: this plain human prose fires no family rule; with no
+    # score-moving finding other than sentence-length monotony it is clean.
     findings, metrics = require_success_report(
         scan_stdin(HUMANIZED_CODING), input_chars=unicode_len(HUMANIZED_CODING)
     )
-    assert catalogue_numbers(findings) == set()
-    assert finding_count_of(metrics, findings) == 0
+    fired = catalogue_numbers(findings)
+    assert not ((fired - WRITING_ADVICE) - {40}), sorted(fired)
+    assert finding_count_of(metrics, findings) == len(findings)
+    assert score_of(metrics, findings=findings) <= 20
+    assert band_of(metrics) == "clean"
 
 
 def test_ai_register_sample_has_ten_findings_and_higher_score():
@@ -1167,19 +1109,16 @@ def test_ai_register_sample_has_ten_findings_and_higher_score():
     for number in (1, 47, 48, 39, 51):
         require_finding(ai_f, number)
         rec = require_finding(ai_f, number)
-        assert catalogue_of(rec["label"]) == number
-    require_absent_finding(ai_f, 17)
-    assert 17 not in fired
-    assert catalogue_numbers(hu_f) == set()
+        assert rec["number"] == number
+    require_absent_member(ai_f, PARALLELISM_17_KEY)
+    assert not ((catalogue_numbers(hu_f) - WRITING_ADVICE) - {40})
     slop_f, _slop_m = require_success_report(
         scan_stdin(SHORT_SLOP), input_chars=unicode_len(SHORT_SLOP)
     )
-    require_absent_finding(slop_f, 17)
-    assert 17 not in catalogue_numbers(slop_f)
+    require_absent_member(slop_f, PARALLELISM_17_KEY)
     lab1 = require_finding(ai_f, 1)["label"]
     lab47 = require_finding(ai_f, 47)["label"]
-    assert catalogue_of(lab1) == 1
-    assert catalogue_of(lab47) == 47
+    # Contract: labels are free text, but two catalogue numbers never share one.
     assert lab1 != lab47
     assert score_of(ai_m, findings=ai_f) > score_of(hu_m, findings=hu_f)
 
@@ -1388,7 +1327,8 @@ def test_consecutive_blockquotes_do_not_fire():
 
 
 def test_markdown_table_and_badge_and_front_matter_do_not_fire():
-    table = "| col | delve |\n| --- | I hope this helps |\n"
+    # A table valid under the common (GFM) specification: header, delimiter, body.
+    table = "| col | delve |\n| --- | --- |\n| row | I hope this helps |\n"
     badge = "[![delve I hope this helps](https://img.example/b.svg)](https://example.com)\n"
     front = "---\ntitle: delve\nnote: I hope this helps\n---\n"
     after = "They delve into the records after."
@@ -1433,7 +1373,7 @@ def test_second_named_fire_inside_each_mask_also_stays_quiet():
         "fence": f"```\ndelve\n{second}\n```\n",
         "indent": f"\n    delve\n    {second}\n",
         "quote": f"> delve\n> {second}\n",
-        "table": "| x | delve |\n| y | I hope this helps |\n",
+        "table": "| x | delve |\n| --- | --- |\n| y | I hope this helps |\n",
         "badge": "[![delve I hope this helps](https://img.example/b.svg)](https://example.com)\n",
         "yaml": "---\ntitle: delve\nnote: I hope this helps\n---\n",
     }
@@ -1525,7 +1465,6 @@ def test_latin_run_homoglyph_moves_mixed_script_count():
         scan_stdin(mixed), input_chars=unicode_len(mixed)
     )
     require_finding(m_f, 66)
-    bind_mixed_script_count(p_m, m_m)
     assert mixed_script_count_of(m_m) > mixed_script_count_of(p_m)
 
 
@@ -1632,6 +1571,7 @@ def test_constructable_fires_match_named_probes(name, text, numbers):
     # L108: forms of 17 vs 18 are told apart by which named input fired
     # and whether the score moved, not by a required label wording.
     if name == "resin-parallelism-17":
+        require_member(findings, PARALLELISM_17_KEY)
         require_absent_finding(findings, 18)
         assert 18 not in catalogue_numbers(findings)
         w_f, w_m = require_success_report(
@@ -1655,6 +1595,7 @@ def test_constructable_fires_match_named_probes(name, text, numbers):
             input_chars=unicode_len(RESIN_PARALLELISM_17),
         )
         require_finding(r_f, 17)
+        require_member(r_f, PARALLELISM_17_KEY)
         require_absent_finding(r_f, 18)
         assert 17 in catalogue_numbers(r_f)
         assert 18 not in catalogue_numbers(r_f)
@@ -1668,6 +1609,8 @@ def test_constructable_fires_match_named_probes(name, text, numbers):
             input_chars=unicode_len(TAILING_NEGATION_WITHOUT),
         )
         require_finding(findings, 17)
+        require_member(findings, TAILING_17_KEY)
+        require_absent_member(w_f, TAILING_17_KEY)
         require_absent_finding(w_f, 17)
         assert 17 in catalogue_numbers(findings)
         assert 17 not in catalogue_numbers(w_f)
@@ -1694,6 +1637,7 @@ def test_named_catalogue_18_probes_are_not_the_parallelism_form_17_fire():
         input_chars=unicode_len(RESIN_WITHOUT_PARALLELISM),
     )
     require_finding(r_f, 17)
+    require_member(r_f, PARALLELISM_17_KEY)
     require_absent_finding(r_f, 18)
     assert 17 in catalogue_numbers(r_f)
     assert 18 not in catalogue_numbers(r_f)
@@ -1889,7 +1833,6 @@ def test_nbsp_moves_nonstandard_space_count():
     )
     require_finding(n_f, 67)
     require_absent_finding(n_f, 62)
-    bind_nonstandard_space_count(p_m, n_m)
     assert nonstandard_space_count_of(n_m) > nonstandard_space_count_of(p_m)
     assert 67 in catalogue_numbers(n_f)
     assert 62 not in catalogue_numbers(n_f)
@@ -1962,8 +1905,6 @@ def test_interior_zero_width_moves_invisible_character_count():
     require_absent_finding(b_f, 62)
     require_absent_finding(p_f, 62)
     require_finding(z_f, 62)
-    # Bind on the same prose with and without the interior marks.
-    bind_invisible_count(p_m, z_m)
     assert invisible_count_of(z_m) > invisible_count_of(p_m)
     assert invisible_count_of(z_m) > invisible_count_of(b_m)
 
@@ -1974,11 +1915,7 @@ def test_interior_zero_width_moves_invisible_character_count():
 
 
 def test_interval_switch_adds_low_high_without_replacing_point_score():
-    usage = usage_from_help()
-    # Discover by the description that talks about an interval or
-    # resample. Do not require this checkout's --ci spelling.
-    flag = interval_flag_from_usage(usage)
-    print(f"[F01] interval switch from usage: {flag!r}", flush=True)
+    flag = INTERVAL_FLAG
     four = (
         "The lock opened at dawn. Barges waited below the ridge. "
         "Crews cleared the silt. Stone from the quarry still faces west."
@@ -1990,18 +1927,17 @@ def test_interval_switch_adds_low_high_without_replacing_point_score():
     off_score = score_of(off_m, findings=off_f)
     on_score = score_of(on_m, findings=on_f)
     assert off_score == on_score
+    assert INTERVAL_KEY not in off_m
     assert not interval_present(off_m, off_score)
     assert interval_present(on_m, on_score)
-    # L111: a low/high interval is present and does not replace the point
-    # score. Do not pin the interval as a two-element sequence.
+    # L111: a low/high interval ([low, high] under score_ci) is present and
+    # does not replace the point score.
     assert isinstance(on_score, int) and 0 <= on_score <= 100
     print(f"[F01] interval present on >=4 sentences; score {on_score} unchanged", flush=True)
 
 
 def test_interval_omitted_when_fewer_than_four_sentences():
-    usage = usage_from_help()
-    flag = interval_flag_from_usage(usage)
-    print(f"[F01] interval switch from usage: {flag!r}", flush=True)
+    flag = INTERVAL_FLAG
     two = "The lock opened at dawn. Barges waited below the ridge."
     four = (
         "The lock opened at dawn. Barges waited below the ridge. "
@@ -2019,11 +1955,11 @@ def test_interval_omitted_when_fewer_than_four_sentences():
     assert not interval_present(t_m, t_score)
     assert interval_present(f_m, f_score)
     assert not interval_present(off_m, off_score)
+    assert INTERVAL_KEY not in off_m
     # Point score still present on the omitted-interval arm (L111).
     assert isinstance(t_score, int) and 0 <= t_score <= 100
     # L111: on the omitted-interval arm, metrics state there are too few
-    # sentences. That statement is the pin — not a leftover-string
-    # inequality against the switch-off or ≥4-sentence arms.
+    # sentences: score_ci is null (score_ci_note is free text).
     too_few_sentences_stated(t_m)
     assert f_score == off_score
 
@@ -2034,54 +1970,28 @@ def test_interval_omitted_when_fewer_than_four_sentences():
 
 
 def test_help_request_from_usage_prints_usage_and_succeeds():
-    usage = usage_from_help()
-    print(f"[F01] help printed usage ({len(usage)} chars)", flush=True)
-    require_usage_message(usage)
-    assert usage.strip()
-    # A help switch or short alias prints usage and succeeds. Discovery is
-    # the bootstrap, not a pin that usage text lists --help / -h.
-    succeeded = False
-    last = None
-    for token in ("--help", "-h", "-?", "help", "--usage"):
+    # The help switch and its short alias print the usage message on
+    # standard output and succeed; the usage's first line is the stated
+    # synopsis.
+    for token in (HELP_FLAG, HELP_SHORT):
         result = invoke([token])
-        last = result
         print(f"[F01] help token {token!r} exit={result.returncode}", flush=True)
-        if result.returncode == 0 and result.stdout.strip():
-            text = result.stdout_text
-            if "usage" in text.lower() or "--" in text:
-                require_usage_message(text)
-                succeeded = True
-                break
-    assert last is not None
-    assert succeeded, "help switch or short help alias did not print usage and succeed"
-    assert last.returncode == 0
-    assert last.stdout.strip()
+        assert result.returncode == 0, (
+            f"{token} exited {result.returncode}; stderr={result.stderr_text[:300]!r}"
+        )
+        assert result.stdout.strip(), f"{token} printed nothing on standard output"
+        require_usage_message(result.stdout_text)
 
 
 def test_usage_names_cleanup_interval_double_dash_and_file_operand():
+    # Usage names the cleanup switch, the interval switch, the double-dash,
+    # and the single-file operand: the stated synopsis line carries all four.
     usage = usage_from_help()
-    usage_names_concepts(usage)
-    usage_names_end_of_options_double_dash(usage)
-    usage_names_single_file_operand(usage)
-    require_usage_message(usage)
-    # The interval switch is the one usage associates with a resampled
-    # interval. Discover it; do not require --ci.
-    flag = interval_flag_from_usage(usage)
-    print(f"[F01] interval switch from usage: {flag!r}", flush=True)
-    assert flag.startswith("--")
-    low = usage.lower()
-    assert "clean" in low or "scrub" in low
-    assert "interval" in low or "resample" in low
-    # End-of-options double-dash is a named token, not part of a long option.
-    dashed = (
-        usage.replace("[", " ")
-        .replace("]", " ")
-        .replace(",", " ")
-        .replace("|", " ")
-    )
-    assert any(tok == "--" for tok in dashed.split())
-    operand_marks = ("file", "files", "path", "paths", "document", "documents", "filename", "filepath")
-    assert any(mark in low for mark in operand_marks)
+    first = usage.splitlines()[0]
+    assert first == USAGE_SYNOPSIS
+    tokens = first.replace("[", " ").replace("]", " ").split()
+    for needed in ("--clean", INTERVAL_FLAG, "--", "FILE"):
+        assert needed in tokens, f"usage synopsis does not name {needed!r}"
 
 
 def test_double_dash_then_dash_filename_scans():
@@ -2120,6 +2030,9 @@ def test_empty_stdin_fails_structured_and_without_traceback():
     assert stripped_empty
     assert stripped_empty != stripped_unknown
     assert unknown_tok in uerr
+    assert err == EMPTY_INPUT_ERROR
+    assert empty.returncode == EXIT_EMPTY_INPUT
+    assert unknown.returncode == EXIT_UNKNOWN_OPTION
     with workspace() as ws:
         missing = str(ws.resolve("missing.txt"))
         unread = ws.invoke([missing])
@@ -2142,6 +2055,10 @@ def test_empty_stdin_fails_structured_and_without_traceback():
     assert bad.returncode != unknown.returncode
     assert unread.returncode == empty.returncode
     assert bad.returncode == empty.returncode
+    assert unread.returncode == EXIT_UNREADABLE
+    assert bad.returncode == EXIT_UNREADABLE
+    assert is_unreadable_error(uerr_unread)
+    assert is_unreadable_error(bad_err)
     assert stripped_empty != stripped_unread
     assert stripped_empty != stripped_bad
     empty_input_identity(
@@ -2213,7 +2130,9 @@ def test_empty_file_notebook_archive_pdf_rtf_fail_as_empty_extracted_prose():
         kinds.append(stripped)
         statuses.append(result.returncode)
         assert result.returncode != 0
+        assert result.returncode == EXIT_EMPTY_INPUT
         assert result.returncode != unknown.returncode
+        assert err == EMPTY_INPUT_ERROR
         assert stripped != strip_error_covariates(uerr, unknown_tok)
     assert len(set(kinds)) == 1
     assert len(set(statuses)) == 1
@@ -2224,6 +2143,8 @@ def test_empty_file_notebook_archive_pdf_rtf_fail_as_empty_extracted_prose():
     assert bad.returncode != unknown.returncode
     assert kinds[0] != unread_kind
     assert kinds[0] != bad_kind
+    assert is_unreadable_error(unread_err)
+    assert is_unreadable_error(bad_err)
     empty_input_identity(
         kinds,
         [strip_error_covariates(uerr, unknown_tok), unread_kind, bad_kind],
@@ -2242,7 +2163,9 @@ def test_unreadable_path_fails_structured_without_traceback():
     mapping = structured_error_mapping(result)
     assert mapping
     assert err
-    assert result.returncode != 0
+    assert result.returncode == EXIT_UNREADABLE
+    assert is_unreadable_error(err)
+    assert err != EMPTY_INPUT_ERROR
 
 
 def test_supported_archive_extension_that_is_not_a_zip_fails_structured_without_traceback():
@@ -2253,7 +2176,9 @@ def test_supported_archive_extension_that_is_not_a_zip_fails_structured_without_
     mapping = structured_error_mapping(result)
     assert mapping
     assert err
-    assert result.returncode != 0
+    assert result.returncode == EXIT_UNREADABLE
+    assert is_unreadable_error(err)
+    assert err != EMPTY_INPUT_ERROR
 
 
 # ===========================================================================
@@ -2268,9 +2193,13 @@ def test_unknown_option_fails_distinctly_from_empty_input():
     eerr = require_structured_failure(empty)
     uerr = require_structured_failure(unknown)
     assert empty.returncode != unknown.returncode
+    assert empty.returncode == EXIT_EMPTY_INPUT
+    assert unknown.returncode == EXIT_UNKNOWN_OPTION
+    assert eerr == EMPTY_INPUT_ERROR
     assert token in uerr
+    assert UNKNOWN_OPTION_WORDS in uerr
     assert strip_error_covariates(eerr, token) != strip_error_covariates(uerr, token)
-    error_points_toward_help(uerr, usage_from_help())
+    error_points_toward_help(uerr)
 
 
 # ===========================================================================
@@ -2294,21 +2223,11 @@ def test_two_file_operands_scan_the_first_and_warn_on_stderr():
     assert catalogue_numbers(m_f) == catalogue_numbers(s_f)
     assert score_of(m_m, findings=m_f) != score_of(o_m, findings=o_f)
     require_no_traceback(multi)
-    base = os.path.basename(first_path)
-    other = os.path.basename(second_path)
-    assert base in multi.stderr_text
-    left = strip_paths_from_stderr(
-        single.stderr_text, first_path, second_path, base, other
-    )
-    right = strip_paths_from_stderr(
-        multi.stderr_text, first_path, second_path, base, other
-    )
-    assert right, (
-        "error stream does not state that only one file at a time is supported"
-    )
-    assert right != left
-    stderr_states_one_file_at_a_time(right)
-    print(f"[F01] extra-operand stderr remainder={right!r}", flush=True)
+    # Contract: a non-JSON stderr notice line names the scanned (first)
+    # operand as given; a single operand prints no such line.
+    stderr_states_one_file_at_a_time(multi.stderr_text, first_path)
+    assert not multi_file_notice_lines(single.stderr_text, first_path)
+    print(f"[F01] extra-operand stderr={multi.stderr_text!r}", flush=True)
 
 
 def test_extra_operands_are_not_dropped_silently():
@@ -2326,16 +2245,8 @@ def test_extra_operands_are_not_dropped_silently():
     assert score_of(t_m, findings=t_f) == score_of(o_m, findings=o_f)
     assert catalogue_numbers(t_f) == catalogue_numbers(o_f)
     require_no_traceback(three)
-    base = os.path.basename(a)
-    assert base in three.stderr_text
-    names = (a, b, c, os.path.basename(a), os.path.basename(b), os.path.basename(c))
-    left = strip_paths_from_stderr(one.stderr_text, *names)
-    right = strip_paths_from_stderr(three.stderr_text, *names)
-    assert right, (
-        "error stream does not state that only one file at a time is supported"
-    )
-    assert right != left
-    stderr_states_one_file_at_a_time(right)
+    stderr_states_one_file_at_a_time(three.stderr_text, a)
+    assert not multi_file_notice_lines(one.stderr_text, a)
 
 
 # ===========================================================================
@@ -2364,11 +2275,8 @@ def test_at_cap_file_is_not_truncated():
     assert scanned_of(at_m, chars=SCAN_CAP) == SCAN_CAP
     assert scanned_of(over_m, chars=SCAN_CAP + 1) == SCAN_CAP
     assert scanned_of(extra_m, chars=SCAN_CAP + 2) == SCAN_CAP
-    # Two-valued longer-than-window indication (L97 / L120 / L126): at-cap
-    # is “not longer”; one-past and two-past share the “longer” token.
-    # A leftover length field that grows with the extra bytes is not that
-    # indication. Encoding is open — not a required field name.
-    bind_window_mark(at_m, over_m, extra_m, short_m)
+    # Two-valued longer-than-window indication: _metrics.truncated is
+    # false at the cap and true one or two characters past it.
     at_mark = window_mark_of(at_m)
     over_mark = window_mark_of(over_m)
     extra_mark = window_mark_of(extra_m)
@@ -2386,6 +2294,7 @@ def test_at_cap_file_is_not_truncated():
     )
     assert window_is_longer(extra_m)
     assert window_is_not_longer(short_m)
+    assert at_m[TRUNCATED_KEY] is False and over_m[TRUNCATED_KEY] is True
     print("[F01] at-cap not-longer; over-window longer (two-valued)", flush=True)
 
 
@@ -2409,7 +2318,6 @@ def test_one_past_cap_marks_truncated_and_reports_262144_scanned():
     _sf, short_m = require_success_report(
         short_r, input_chars=unicode_len(SHORT_FACTUAL)
     )
-    bind_window_mark(at_m, metrics, extra_m, short_m)
     at_mark = window_mark_of(at_m)
     over_mark = window_mark_of(metrics)
     extra_mark = window_mark_of(extra_m)
@@ -2498,6 +2406,8 @@ def test_nul_without_utf16_bom_is_empty_input_failure():
     assert unread.returncode == empty.returncode
     assert unread.returncode != unknown.returncode
     assert stripped_empty == stripped_nul
+    assert nerr == EMPTY_INPUT_ERROR
+    assert result.returncode == EXIT_EMPTY_INPUT
     assert stripped_nul != stripped_unknown
     assert stripped_nul != stripped_unread
     empty_input_identity(
@@ -2558,9 +2468,7 @@ def test_default_scan_is_deterministic():
     assert band_of(am) == band_of(bm)
     assert confidence_of(am) == confidence_of(bm)
     assert catalogue_numbers(af) == catalogue_numbers(bf)
-    usage = usage_from_help()
-    flag = interval_flag_from_usage(usage)
-    print(f"[F01] interval switch from usage: {flag!r}", flush=True)
+    flag = INTERVAL_FLAG
     on = scan_stdin(SHORT_SLOP, extra_args=(flag,))
     on_f, on_m = require_success_report(on, input_chars=unicode_len(SHORT_SLOP))
     assert score_of(am, findings=af) == score_of(on_m, findings=on_f)

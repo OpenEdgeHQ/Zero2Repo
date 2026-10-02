@@ -8,7 +8,6 @@ substitute public entry.
 
 from __future__ import annotations
 
-import re
 import secrets
 from pathlib import Path
 
@@ -38,12 +37,6 @@ from F02_helpers import (
 from F03_helpers import place_opus_classified, replace_opus_tags
 from _harness import HarnessError, RunResult, Workspace, stored_copy
 
-# Whole-word verb covariates the caller typed, plus the PRD names for those
-# verbs. Not a product-output spelling requirement.
-_VERB_COVARIATE = re.compile(
-    r"(?<![A-Za-z0-9])(?:e|d|compress|expand)(?![A-Za-z0-9])",
-    re.IGNORECASE,
-)
 _OGG_CAPTURE = b"OggS"
 _SPAN_TAKE = 255
 _GRANULE_NONE = (1 << 64) - 1
@@ -662,73 +655,37 @@ def sparse_book_slot(data: bytes) -> int:
     return slot
 
 
-def generation_field(
-    archive_a: bytes, archive_b: bytes
-) -> tuple[tuple[int, int, int, str], ...]:
-    """Collect sortable integer candidates from the longest shared prefix.
+# Interface Contract, archive file: the byte at offset 9 is the format
+# generation, an unsigned 8-bit integer from 1 through 254.
+GENERATION_OFFSET = 9
+GENERATION_MIN = 1
+GENERATION_MAX = 254
 
-    Each item is ``(offset, width, value, endian)``. Widths and endians are
-    a search over encodings so a rewrite can be tried; they are not a claim
-    that the product stores any particular layout. A candidate must admit
-    both a strictly smaller and a strictly larger value (older and newer).
-    Raises :class:`HarnessError` when the prefix holds no such candidate.
-    Does not judge expand behaviour.
-    """
-    if not isinstance(archive_a, (bytes, bytearray)):
-        raise HarnessError(f"archive_a expected bytes, got {type(archive_a)!r}")
-    if not isinstance(archive_b, (bytes, bytearray)):
-        raise HarnessError(f"archive_b expected bytes, got {type(archive_b)!r}")
-    n = min(len(archive_a), len(archive_b))
-    prefix = 0
-    while prefix < n and archive_a[prefix] == archive_b[prefix]:
-        prefix += 1
-    if prefix < 1:
-        raise HarnessError("archives share no prefix")
-    candidates: list[tuple[int, int, int, str]] = []
-    seen: set[tuple[int, int, str]] = set()
-    for width in (1, 2, 4, 8):
-        max_val = (1 << (8 * width)) - 1
-        endians = ("little",) if width == 1 else ("little", "big")
-        for endian in endians:
-            for offset in range(0, prefix - width + 1):
-                key = (offset, width, endian)
-                if key in seen:
-                    continue
-                left = int.from_bytes(
-                    archive_a[offset : offset + width], endian
-                )
-                right = int.from_bytes(
-                    archive_b[offset : offset + width], endian
-                )
-                if left != right:
-                    continue
-                if left <= 0 or left >= max_val:
-                    continue
-                seen.add(key)
-                candidates.append((offset, width, left, endian))
-    if not candidates:
-        raise HarnessError(
-            "shared archive prefix holds no sortable integer that admits "
-            "both a strictly smaller and a strictly larger value"
-        )
-    print(
-        f"[F05] generation candidates={len(candidates)} prefix={prefix}",
-        flush=True,
+
+def archive_generation(archive: bytes) -> int:
+    """Read the format generation byte the Contract places in every archive."""
+    if not isinstance(archive, (bytes, bytearray)):
+        raise HarnessError(f"archive expected bytes, got {type(archive)!r}")
+    assert len(archive) > GENERATION_OFFSET, (
+        f"archive of {len(archive)} bytes has no generation byte at offset "
+        f"{GENERATION_OFFSET}"
     )
-    return tuple(candidates)
+    value = archive[GENERATION_OFFSET]
+    assert GENERATION_MIN <= value <= GENERATION_MAX, (
+        f"archive generation {value} at offset {GENERATION_OFFSET} is not "
+        f"in {GENERATION_MIN}..{GENERATION_MAX}"
+    )
+    return value
 
 
-def generation_candidates_across(
+def written_generation(
     ws: Workspace, src_a: str, bytes_a: bytes, bytes_b: bytes
-) -> tuple[tuple[int, int, int, str], ...]:
-    """Generation-identifier candidates that stay constant across archives.
+) -> int:
+    """The generation every archive carries, across inputs, codecs, efforts.
 
-    The generation identifier names the product generation: it does not
-    vary with the input, the codec, or the effort. Starting from
-    generation_field over two same-codec archives, keep only candidates
-    whose value is identical in archives of *src_a* at effort 1 and 9 and
-    of an input of the other codec at effort 1 and 9. Codec, effort, size,
-    and checksum fields then drop out. Raises when nothing is left.
+    Reads the stated generation byte of the two given archives and of
+    archives of *src_a* at effort 9 and of an input of the other codec at
+    efforts 1 and 9; all must carry the same value.
     """
     first = complete_packets(bytes(ws.read_bytes(src_a)))[0]
     if is_opus_head(first):
@@ -741,56 +698,35 @@ def generation_candidates_across(
         result = run_product(ws, [effort, "e", src, dest])
         require_ok(result)
         archives.append(ws.read_bytes(dest))
-    kept = []
-    for offset, width, value, endian in generation_field(archives[0], archives[1]):
-        if all(
-            len(a) >= offset + width
-            and int.from_bytes(a[offset : offset + width], endian) == value
-            for a in archives
-        ):
-            kept.append((offset, width, value, endian))
-    print(
-        f"[F05] generation candidates across codecs/efforts={len(kept)}",
-        flush=True,
+    values = [archive_generation(a) for a in archives]
+    print(f"[F05] archive generations={values}", flush=True)
+    assert len(set(values)) == 1, (
+        "every archive this product writes carries the same generation "
+        f"value; got {values}"
     )
-    if not kept:
-        raise HarnessError(
-            "no archive field is constant across inputs, codecs, and efforts"
-        )
-    return tuple(kept)
+    return values[0]
 
 
-def with_generation_value(
-    archive: bytes, field: tuple[int, int, int, str], value: int
-) -> bytes:
-    """Rewrite only the integer field ``(offset, width, written, endian)``."""
+def with_generation_value(archive: bytes, value: int) -> bytes:
+    """Rewrite only the stated generation byte of *archive* to *value*."""
     if not isinstance(archive, (bytes, bytearray)):
         raise HarnessError(f"archive expected bytes, got {type(archive)!r}")
-    if len(field) != 4:
-        raise HarnessError(
-            "generation field must be (offset, width, value, endian), "
-            f"got {field!r}"
-        )
-    offset, width, _written, endian = field
-    if endian not in ("little", "big"):
-        raise HarnessError(f"generation endian {endian!r} is not little or big")
-    max_val = (1 << (8 * width)) - 1
-    if not (0 <= offset and offset + width <= len(archive)):
-        raise HarnessError(
-            f"generation field offset {offset} width {width} escapes archive"
-        )
-    if not 0 <= value <= max_val:
-        raise HarnessError(f"generation value {value} does not fit width {width}")
+    if not 0 <= value <= 255:
+        raise HarnessError(f"generation value {value} does not fit one byte")
+    if len(archive) <= GENERATION_OFFSET:
+        raise HarnessError("archive has no generation byte")
     out = bytearray(archive)
-    out[offset : offset + width] = int(value).to_bytes(width, endian)
+    out[GENERATION_OFFSET] = value
     return bytes(out)
 
 
-def strip_verb_covariates(text: str) -> str:
-    """Remove whole-word ``e`` / ``d`` / compress / expand from already-stripped text."""
-    if not isinstance(text, str):
-        raise HarnessError(f"strip_verb_covariates expected str, got {type(text)!r}")
-    return _VERB_COVARIATE.sub(" ", text)
+def foreign_generation_values(written: int) -> tuple[int, int]:
+    """A runtime older (lower) and newer (higher) one-byte generation."""
+    older = secrets.choice(range(0, written))
+    newer = secrets.choice(range(written + 1, 256))
+    if not older < written < newer:
+        raise HarnessError(f"relative order failed: {older} < {written} < {newer}")
+    return older, newer
 
 
 def stderr_names_input(text: str, path: str) -> None:
@@ -953,9 +889,11 @@ def shared_prefix_len(left: bytes, right: bytes) -> int:
 
 
 __all__ = (
+    "GENERATION_OFFSET",
+    "archive_generation",
     "corrupt_stored_page_checksum",
     "floor_slot",
-    "generation_field",
+    "foreign_generation_values",
     "later_page_index",
     "live_compress",
     "lookup_slot",
@@ -974,7 +912,6 @@ __all__ = (
     "shared_prefix_len",
     "sparse_book_slot",
     "stderr_names_input",
-    "strip_verb_covariates",
     "truncation_lengths",
     "with_generation_value",
     "with_marked_packet_span",
@@ -982,4 +919,5 @@ __all__ = (
     "with_sparse_empty_book",
     "with_trailing_non_page",
     "with_unmarked_packet_span",
+    "written_generation",
 )

@@ -26,7 +26,7 @@ from _harness import (
 
 # PRD language floor: Node.js 24.
 _NODE_MAJOR = 24
-_PLUGIN_WRAP = re.compile(r"^([A-Za-z0-9_.:-]+)\((.+)\)$")
+_PLUGIN_WRAP = re.compile(r"(lint-policy|lint-policy-effect)\(([^()\s]+)\)")
 _SNIPPET = "[].filter(active).map(email);\n"
 _RULE_NAME = "no-array-filter-map"
 _PLUGINS_SCOPE = "@oxlint"
@@ -36,17 +36,17 @@ __test__ = False
 
 
 def published_rule_id(rule: str) -> str:
-    """Normalize ``plugin(rule)`` and ``plugin/rule`` to ``plugin/rule``."""
-    current = rule.strip()
-    matched = _PLUGIN_WRAP.match(current)
+    """Read a host finding code ``<plugin>(<rule>)`` as ``<plugin>/<rule>``.
+
+    The Interface Contract states that a plugin finding's ``code`` in the
+    host's JSON report is exactly ``<plugin>(<rule>)``. Any other code (a
+    host parse failure has none) is returned unchanged, so it never reads
+    as a ``<plugin>/<rule>`` id.
+    """
+    matched = _PLUGIN_WRAP.fullmatch(rule)
     if not matched:
-        return current
-    plugin, inner = matched.group(1), matched.group(2)
-    if plugin in {"eslint", "eslint-plugin-js"}:
-        return published_rule_id(inner)
-    if "/" in inner:
-        return inner
-    return f"{plugin}/{inner}"
+        return rule
+    return f"{matched.group(1)}/{matched.group(2)}"
 
 
 def _read_manifest(root: Path) -> dict:
@@ -148,7 +148,7 @@ def _node_version() -> str:
 
 def assert_node_language_floor() -> None:
     """The interpreter major is the language floor."""
-    # TEST-FIX(F00): upstream Full_PRD.md:53 shows the language floor is Node.js 24.
+    # TEST-FIX(F00): Full_PRD.md:51 states the language floor is Node.js 24.
     node_version = _node_version()
     major_text = node_version.split(".", 1)[0]
     try:

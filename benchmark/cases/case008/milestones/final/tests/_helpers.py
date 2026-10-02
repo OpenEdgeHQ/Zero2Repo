@@ -28,7 +28,7 @@ from _harness import (
 )
 
 # ---------------------------------------------------------------------------
-# PRD-named literals (Check 1). Hyphen in the 7-Eleven host is U+2011.
+# Fixed sample inputs. Hyphen in the 7-Eleven host is U+2011.
 # ---------------------------------------------------------------------------
 
 UINT32_MAX: int = 2**32 - 1

@@ -30,7 +30,7 @@ from _helpers import (
     zig_executable,
 )
 
-# Values the PRD names in FP-01. Unpublished draws must not land here.
+# Fixed inputs used by the FP-01 tests. Random draws must not land here.
 PUBLIC_U64_SAMPLES = frozenset({0, 42, 2999, 1 << 40, 1 << 50})
 
 # Big-endian triple used to observe L57. Architecture spelling is the

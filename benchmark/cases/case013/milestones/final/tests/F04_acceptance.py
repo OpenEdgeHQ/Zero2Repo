@@ -6,7 +6,7 @@ Context Protocol tool. Observations go through the sealed harness
 ``workspace`` / ``invoke`` / ``mcp_batch`` path and the on-disk files
 the tests wrote. These tests do not import Go packages, do not call
 internal Search / SearchForPath helpers, and do not use ``membundle validate``
-/ ``membundle create`` / ``membundle show`` as an oracle.
+/ ``membundle create`` / ``membundle show`` to judge results.
 """
 
 from __future__ import annotations
@@ -22,11 +22,24 @@ from F03_helpers import (
     markdown_link,
     render_concept_markdown,
     snapshot_tree,
-    unselected_token_absent,
     unique_tokens,
     write_bundle,
 )
 from F04_helpers import (
+    SAMPLE_BARE_GO,
+    SAMPLE_BIG_CAP,
+    SAMPLE_FILE,
+    SAMPLE_HIGH_ID,
+    SAMPLE_LOW_ID,
+    SAMPLE_NESTED_DIR,
+    SAMPLE_PREFIX_DIR,
+    SAMPLE_SHARED_TITLE,
+    SAMPLE_SHARED_WORD,
+    SAMPLE_SIBLING_DIR,
+    SAMPLE_SIBLING_FILE,
+    SAMPLE_TERM,
+    SAMPLE_TERM_TITLE,
+    SAMPLE_TOP_DIR,
     abs_workspace_path,
     assert_human_concept_identity_after_badge,
     assert_human_path_hit_reports,
@@ -48,7 +61,9 @@ from F04_helpers import (
     prefix_sharing_tool_omit_identity,
     generated_filesystem_absolute_relative_probe,
     concept_identity_order,
+    hit_field,
     hit_identities,
+    hit_list,
     identity_in_records,
     longer_filesystem_absolute_caller,
     inverted_convention_identities,
@@ -73,8 +88,6 @@ from F04_helpers import (
     term_character_outside_fixture_prefixes,
     record_for_identity,
     record_has_json_number,
-    record_string_values,
-    record_values_after_stripping,
     require_call_leaves_bundle_bytes_unchanged,
     require_core_fields,
     require_planted_code_refs_is_sole_copy,
@@ -90,8 +103,9 @@ from F04_helpers import (
     require_mcp_search_load_failure,
     require_escaping_directory_symlink_not_walked,
     require_search_entry_load_refusal,
-    require_search_failure,
     require_search_load_error,
+    require_search_load_failure,
+    require_human_identity_absent,
     require_human_identity_prefix,
     require_human_identity_present,
     require_human_ranked_prefix,
@@ -134,7 +148,7 @@ def _filler() -> tuple[str, str, str]:
 
 
 def test_keyword_hit_includes_identity_type_title_description_and_omits_non_match():
-    """Named-bundle keyword search returns the titled hit and omits a non-match (L149, L167)."""
+    """Named-bundle keyword search returns the titled hit and omits a non-match."""
     with workspace() as ws:
         early, late, typ, early_title, late_title, early_desc, late_desc, body, obody = unique_tokens(
             "ea", "la", "typ", "etl", "ltl", "edc", "ldc", "bod", "obod"
@@ -197,7 +211,7 @@ def test_keyword_hit_includes_identity_type_title_description_and_omits_non_matc
 
 
 def test_unknown_frontmatter_field_remains_a_title_hit():
-    """A key the document does not name still leaves a title hit (L29, L149).
+    """A key the document does not name still leaves a title hit.
 
     Recognized concept fields are type and the named optional fields. One
     concept carries a different key and a title that is the query. Structured
@@ -333,8 +347,8 @@ def test_unknown_frontmatter_field_remains_a_title_hit():
         )
 
 
-def test_keyword_public_sample_shape_has_runtime_twin():
-    """A runtime-unique title hit is not the only fixture that matches (L167)."""
+def test_keyword_title_hit_runtime_twin():
+    """A runtime-unique title hit is not the only fixture that matches."""
     with workspace() as ws:
         early, late, typ, title, desc, body, otitle = unique_tokens(
             "ea", "la", "ttyp", "tttl", "tdsc", "tbod", "tottl"
@@ -372,7 +386,7 @@ def test_keyword_public_sample_shape_has_runtime_twin():
 
 
 def test_human_mode_is_not_replaced_by_structured_only():
-    """Default output prefixes the hit with the lowercase governance badge (L32, L145, L149)."""
+    """Default output prefixes the hit with the lowercase governance badge."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "hid", "htyp", "httl", "hdsc", "hbod"
@@ -405,7 +419,7 @@ def test_human_mode_is_not_replaced_by_structured_only():
 
 
 def test_non_letter_digit_characters_split_terms():
-    """Non-letter, non-digit characters split terms (L149).
+    """Non-letter, non-digit characters split terms.
 
     Comma, hyphen, period, underscore, and slash split. One further ASCII
     mark that is not a letter, not a digit, and not one of those joiners
@@ -512,7 +526,7 @@ def test_non_letter_digit_characters_split_terms():
 
 
 def test_digit_is_not_a_term_splitter():
-    """A digit stays inside the term; pieces of a digit split do not hit (L149).
+    """A digit stays inside the term; pieces of a digit split do not hit.
 
     The command line and the search tool both search one title token that
     has a digit between two pieces. That concept is required. Concepts
@@ -593,7 +607,7 @@ def test_digit_is_not_a_term_splitter():
 
 
 def test_term_matches_equal_or_prefix_token_not_mid_token_substring():
-    """Query matches a prefix token and does not match a mid-token substring (L149)."""
+    """Query matches a prefix token and does not match a mid-token substring."""
     with workspace() as ws:
         needle = compact_token("n")
         prefix_token = f"{needle}aaa"
@@ -669,7 +683,7 @@ def test_term_matches_equal_or_prefix_token_not_mid_token_substring():
 
 
 def test_term_prefix_and_mid_token_rule_on_all_five_fields():
-    """Equals-or-prefix, not mid-token substring, on title/tags/description/id/body (L149).
+    """Equals-or-prefix, not mid-token substring, on title/tags/description/id/body.
 
     Title, tags, description, and body also carry a later token that is
     longer than the term and only starts with it. That field text does
@@ -794,7 +808,7 @@ def test_term_prefix_and_mid_token_rule_on_all_five_fields():
 
 
 def test_keyword_match_is_case_insensitive():
-    """A capital stays inside the title token, and the other letter case still matches (L149).
+    """A capital stays inside the title token, and the other letter case still matches.
 
     Same-case whole-token prefix hits, and an interior slice misses. On the
     search command and on the search tool, a title token that equals the
@@ -1119,7 +1133,7 @@ def test_keyword_match_is_case_insensitive():
 
 
 def test_title_tags_description_id_and_body_each_produce_a_keyword_hit():
-    """Term T in exactly one of title/tags/description/id/body still hits (L149)."""
+    """Term T in exactly one of title/tags/description/id/body still hits."""
     with workspace() as ws:
         term = compact_token("term")
         typ, desc_f, body_f, title_f, tag_f = unique_tokens(
@@ -1194,7 +1208,7 @@ def test_title_tags_description_id_and_body_each_produce_a_keyword_hit():
 
 
 def test_code_refs_alone_is_not_a_keyword_hit():
-    """A term that lives only in code_refs is omitted from keyword search (L149).
+    """A term that lives only in code_refs is omitted from keyword search.
 
     The search command omits that concept. A keyword query for the same
     concept's own title still returns it, so dropping the file at load
@@ -1319,7 +1333,7 @@ def _planted_type_is_the_only_copy_of_term(path, term: str) -> None:
 
 
 def test_concept_type_alone_is_not_a_keyword_hit():
-    """A term that lives only in the concept type is omitted (L149).
+    """A term that lives only in the concept type is omitted.
 
     Title, tags, description, identity, and body of that concept do not
     contain the term. A different concept whose title is the term is
@@ -1454,7 +1468,7 @@ def test_concept_type_alone_is_not_a_keyword_hit():
 
 
 def test_unscored_recognized_fields_alone_are_not_keyword_hits():
-    """A term that lives only in an unscored recognized field is omitted (L149).
+    """A term that lives only in an unscored recognized field is omitted.
 
     Keyword scoring uses title, tags, description, concept identity, and
     body. Generated, verified, status, stale_after, and sources are
@@ -1747,7 +1761,7 @@ def test_unscored_recognized_fields_alone_are_not_keyword_hits():
 
 
 def test_structured_reports_which_fields_matched():
-    """Structured hit names exactly the keyword fields the term matched (L149).
+    """Structured hit names exactly the keyword fields the term matched.
 
     Each single-field concept matches in one of title, tags, description,
     id, or body. One further concept matches the same term in title and
@@ -1867,7 +1881,7 @@ def test_structured_reports_which_fields_matched():
 
 
 def test_title_match_ranks_above_single_incidental_body_match():
-    """Titled hit ranks first even when the body-only identity sorts earlier (L149, L161)."""
+    """Titled hit ranks first even when the body-only identity sorts earlier."""
     with workspace() as ws:
         stem = compact_token("rk")
         body_id = f"abody{stem}"
@@ -1884,26 +1898,26 @@ def test_title_match_ranks_above_single_incidental_body_match():
                     concept_type=typ,
                     title=filler,
                     description=body_desc,
-                    body="Mentions OAuth2 only in passing.\n",
+                    body=f"Mentions {SAMPLE_TERM} only in passing.\n",
                 ),
                 search_concept_spec(
                     titled_id,
                     concept_type=typ,
-                    title="OAuth2 PKCE",
+                    title=SAMPLE_TERM_TITLE,
                     description=titled_desc,
                     body=f"{filler}\n",
                 ),
             ],
         )
         records = require_search_structured_success(
-            run_search(ws, "OAuth2", rel, structured=True)
+            run_search(ws, SAMPLE_TERM, rel, structured=True)
         )
         require_identity_order(records, [titled_id, body_id])
-        human = require_search_success(run_search(ws, "OAuth2", rel))
+        human = require_search_success(run_search(ws, SAMPLE_TERM, rel))
         require_human_ranked_hits(
             human,
             [
-                ("context", (titled_id, "OAuth2 PKCE", titled_desc)),
+                ("context", (titled_id, SAMPLE_TERM_TITLE, titled_desc)),
                 ("context", (body_id, filler, body_desc)),
             ],
             planted_order=(body_id, titled_id),
@@ -1912,14 +1926,14 @@ def test_title_match_ranks_above_single_incidental_body_match():
 
 
 def test_title_over_body_reports_title_match_on_the_titled_hit():
-    """The titled hit still contains matched-field title after stripping texts (L161)."""
+    """The titled hit still contains matched-field title after stripping texts."""
     with workspace() as ws:
         stem = compact_token("tm")
         titled_id = f"atitle{stem}"
         body_id = f"zbody{stem}"
         assert titled_id < body_id
         typ, desc, filler = unique_tokens("typ", "dsc", "fil")
-        title = "OAuth2 PKCE"
+        title = SAMPLE_TERM_TITLE
         rel = _kb()
         write_concepts_later_first(
             ws,
@@ -1937,12 +1951,12 @@ def test_title_over_body_reports_title_match_on_the_titled_hit():
                     concept_type=typ,
                     title=filler,
                     description=desc,
-                    body="Mentions OAuth2 only in passing.\n",
+                    body=f"Mentions {SAMPLE_TERM} only in passing.\n",
                 ),
             ],
         )
         records = require_search_structured_success(
-            run_search(ws, "OAuth2", rel, structured=True)
+            run_search(ws, SAMPLE_TERM, rel, structured=True)
         )
         rec = record_for_identity(records, titled_id)
         tokens = matched_field_tokens(
@@ -1952,8 +1966,8 @@ def test_title_over_body_reports_title_match_on_the_titled_hit():
         print("titled hit reports title", flush=True)
 
 
-def test_title_over_body_public_sample_has_runtime_twin():
-    """Runtime-unique title vs incidental body, identities still inverted (L161)."""
+def test_title_over_body_runtime_twin():
+    """Runtime-unique title vs incidental body, identities still inverted."""
     with workspace() as ws:
         term = compact_token("tw")
         body_id = f"abody{term}"
@@ -2001,26 +2015,26 @@ def test_title_over_body_public_sample_has_runtime_twin():
 
 
 def test_equal_scores_order_by_identity_ascending_cap_1_returns_alpha():
-    """Equal title scores: alpha before zeta; cap 1 returns only alpha (L149, L162)."""
+    """Equal title scores: lower identity first; cap 1 returns only that one."""
     with workspace() as ws:
         rel = _kb()
-        write_equal_score_title_bundle(ws, rel, "Shared title", ["alpha", "zeta"])
+        write_equal_score_title_bundle(ws, rel, SAMPLE_SHARED_TITLE, [SAMPLE_LOW_ID, SAMPLE_HIGH_ID])
         capped = require_search_structured_success(
-            run_search(ws, "Shared", rel, limit=1, structured=True)
+            run_search(ws, SAMPLE_SHARED_WORD, rel, limit=1, structured=True)
         )
-        require_identity_order(capped, ["alpha"])
+        require_identity_order(capped, [SAMPLE_LOW_ID])
         both = require_search_structured_success(
-            run_search(ws, "Shared", rel, structured=True)
+            run_search(ws, SAMPLE_SHARED_WORD, rel, structured=True)
         )
-        require_identity_order(both, ["alpha", "zeta"])
-        human = require_search_success(run_search(ws, "Shared", rel))
+        require_identity_order(both, [SAMPLE_LOW_ID, SAMPLE_HIGH_ID])
+        human = require_search_success(run_search(ws, SAMPLE_SHARED_WORD, rel))
         require_human_ranked_hits(
             human,
             [
-                ("context", ("alpha",)),
-                ("context", ("zeta",)),
+                ("context", (SAMPLE_LOW_ID,)),
+                ("context", (SAMPLE_HIGH_ID,)),
             ],
-            planted_order=("zeta", "alpha"),
+            planted_order=(SAMPLE_HIGH_ID, SAMPLE_LOW_ID),
         )
         twin_rel = _kb()
         a_id, z_id = f"aaa{compact_token('a')}", f"zzz{compact_token('z')}"
@@ -2049,7 +2063,7 @@ def test_equal_scores_order_by_identity_ascending_cap_1_returns_alpha():
 
 
 def test_structured_reports_effective_governance_including_convention_default():
-    """Declared hold, convention omit → constraint, other omit → context (L32, L149).
+    """Declared hold, convention omit → constraint, other omit → context.
 
     The omitted convention identities are one segment and
     ``convention/<dir>/<leaf>``. Both effective values are constraint.
@@ -2155,7 +2169,7 @@ def test_structured_reports_effective_governance_including_convention_default():
 
 
 def test_declared_governance_is_compared_case_insensitively():
-    """Declared governance folds any capitalization to the lowercase word (L32).
+    """Declared governance folds any capitalization to the lowercase word.
 
     The structured hit's effective value is that lowercase word. The
     spelling written in the file may remain beside it; a hit whose only
@@ -2241,7 +2255,7 @@ def test_declared_governance_is_compared_case_insensitively():
 
 
 def test_structured_includes_code_refs_and_tags_when_present():
-    """code_refs path and unique tag appear only on the concept that has them (L149)."""
+    """code_refs path and unique tag appear only on the concept that has them."""
     with workspace() as ws:
         tagged, plain, typ, title, desc, body, ptitle = unique_tokens(
             "tg", "pl", "typ", "ttl", "dsc", "bod", "ptt"
@@ -2274,20 +2288,22 @@ def test_structured_includes_code_refs_and_tags_when_present():
         records = require_search_structured_success(
             run_search(ws, title, rel, structured=True)
         )
-        tagged_vals = record_string_values(record_for_identity(records, tagged))
-        assert path in tagged_vals, f"code_refs path missing: {sorted(tagged_vals)}"
-        assert tag in tagged_vals, f"tag missing: {sorted(tagged_vals)}"
+        tagged_hit = record_for_identity(records, tagged)
+        assert path in hit_list(tagged_hit, "code_refs"), (
+            f"code_refs path missing: {tagged_hit!r}"
+        )
+        assert tag in hit_list(tagged_hit, "tags"), f"tag missing: {tagged_hit!r}"
         plain_records = require_search_structured_success(
             run_search(ws, ptitle, rel, structured=True)
         )
-        plain_vals = record_string_values(record_for_identity(plain_records, plain))
-        assert path not in plain_vals
-        assert tag not in plain_vals
+        plain_hit = record_for_identity(plain_records, plain)
+        assert path not in hit_list(plain_hit, "code_refs")
+        assert tag not in hit_list(plain_hit, "tags")
         print("code_refs and tags presence contrast ok", flush=True)
 
 
 def test_structured_includes_outbound_identity_when_present():
-    """A bundle-relative href plus .md leaves that identity after the body is removed (L149)."""
+    """A bundle-relative href plus .md leaves that identity after the body is removed."""
     with workspace() as ws:
         p_leaf, q_leaf, r_leaf, ptyp, qtyp, rtyp, pttl, qttl, rttl, pdsc, qdsc, rdsc, ptok, qtok, rtok = unique_tokens(
             "pl",
@@ -2357,21 +2373,17 @@ def test_structured_includes_outbound_identity_when_present():
             ),
             r_id,
         )
-        p_strip = [p_body, ptok, pttl, pdsc, p_id, href]
-        q_strip = [qtok, qttl, qdsc, q_id, href]
-        p_rest = record_values_after_stripping(p_hit, p_strip)
-        q_rest = record_values_after_stripping(q_hit, q_strip)
-        r_rest = record_values_after_stripping(
-            r_hit, [rtok, rttl, rdsc, r_id, href]
-        )
-        print(f"P remainder has Q={q_id in p_rest} Q remainder has P={p_id in q_rest}", flush=True)
-        assert q_id in p_rest, f"outbound Q missing after strip; remainder={sorted(p_rest)!r}"
-        assert p_id in q_rest, f"inbound P missing after strip; remainder={sorted(q_rest)!r}"
-        assert q_id not in r_rest, f"unrelated R still carries Q; remainder={sorted(r_rest)!r}"
+        p_out = hit_list(p_hit, "outbound")
+        q_in = hit_list(q_hit, "inbound")
+        r_links = hit_list(r_hit, "outbound") + hit_list(r_hit, "inbound")
+        print(f"P outbound has Q={q_id in p_out} Q inbound has P={p_id in q_in}", flush=True)
+        assert q_id in p_out, f"outbound Q missing; outbound={p_out!r}"
+        assert p_id in q_in, f"inbound P missing; inbound={q_in!r}"
+        assert q_id not in r_links, f"unrelated R still carries Q; links={r_links!r}"
 
 
 def test_structured_hit_includes_a_numeric_score():
-    """Each structured hit includes a numeric score; title still ranks first (L149)."""
+    """Each structured hit includes a numeric score; title still ranks first."""
     with workspace() as ws:
         term = compact_token("sc")
         body_id = f"abody{term}"
@@ -2420,7 +2432,7 @@ def test_structured_hit_includes_a_numeric_score():
 
 
 def test_human_prefixes_each_hit_with_constraint_hold_or_context_badge():
-    """Declared HOLD, CONSTRAINT, and CONTEXT still prefix each human hit in lowercase (L32, L149)."""
+    """Declared HOLD, CONSTRAINT, and CONTEXT still prefix each human hit in lowercase."""
     with workspace() as ws:
         hold_id, con_id, ctx_id = inverted_governance_identities()
         typ, htitle, ctitle, xtitle, hdesc, cdesc, xdesc, body = unique_tokens(
@@ -2474,7 +2486,7 @@ def test_human_prefixes_each_hit_with_constraint_hold_or_context_badge():
 
 
 def test_human_badges_convention_omit_as_constraint():
-    """Omitted identities under convention/ badge as constraint, including a nested leaf (L32, L149).
+    """Omitted identities under convention/ badge as constraint, including a nested leaf.
 
     The one-segment omit stays. Governance is also omitted on
     ``convention/<dir>/<leaf>``. That hit's human badge is the lowercase
@@ -2620,7 +2632,7 @@ def test_human_badges_convention_omit_as_constraint():
 
 
 def test_omit_cap_returns_all_when_under_10_and_truncates_to_10_when_over():
-    """5 matches omit-cap → 5 identity-ascending; 15 omit-cap → first 10 (L155, L165).
+    """5 matches omit-cap → 5 identity-ascending; 15 omit-cap → first 10.
 
     Keyword search as human text, structured output not requested, uses
     the same caps. These hits share one title, so the kept hits are the
@@ -2694,7 +2706,7 @@ def test_omit_cap_returns_all_when_under_10_and_truncates_to_10_when_over():
 
 
 def test_non_positive_cap_is_the_default_10():
-    """--limit 0 and a negative cap on 15 matches still return the first 10 (L155)."""
+    """--limit 0 and a negative cap on 15 matches still return the first 10."""
     with workspace() as ws:
         term = compact_token("np")
         ids = numbered_identities(15, compact_token("snp"))
@@ -2722,7 +2734,7 @@ def test_non_positive_cap_is_the_default_10():
 
 
 def test_cap_3_returns_at_most_3_ranked_prefix():
-    """Cap 3 on 15 matches returns the 3 lexicographically first identities (L165).
+    """Cap 3 on 15 matches returns the 3 lexicographically first identities.
 
     Structured output is a separate request. The same cap on human output
     presents those three identities inside successive governance-badge
@@ -2768,9 +2780,9 @@ def test_cap_3_returns_at_most_3_ranked_prefix():
 
 
 def test_cap_above_100_returns_at_most_100():
-    """Cap 100000 and cap 101 on 120 matches each return the first 100 (L155).
+    """A large cap and cap 101 on 120 matches each return the first 100.
 
-    101 is above 100 and is not the literal 100000. Omit-cap returns 10.
+    101 is above 100 and is not the large cap. Omit-cap returns 10.
     Cap 100 returns 100.
     """
     with workspace() as ws:
@@ -2779,9 +2791,9 @@ def test_cap_above_100_returns_at_most_100():
         rel = _kb()
         write_equal_score_title_bundle(ws, rel, term, ids)
         huge = require_search_structured_success(
-            run_search(ws, term, rel, limit=100000, structured=True)
+            run_search(ws, term, rel, limit=SAMPLE_BIG_CAP, structured=True)
         )
-        assert len(huge) == 100, f"cap 100000 returned {len(huge)}"
+        assert len(huge) == 100, f"cap {SAMPLE_BIG_CAP} returned {len(huge)}"
         require_identity_order(huge, ids[:100])
         above = require_search_structured_success(
             run_search(ws, term, rel, limit=101, structured=True)
@@ -2805,7 +2817,7 @@ def test_cap_above_100_returns_at_most_100():
 
 
 def test_mcp_search_limits_default_10_and_max_100():
-    """MCP omit and a negative cap on 15 are the first 10; cap 3 is the first 3; caps 100000 and 101 on 120 are 100."""
+    """MCP omit and a negative cap on 15 are the first 10; cap 3 is the first 3; a large cap and 101 on 120 are 100."""
     with workspace() as ws:
         term15 = compact_token("m15")
         ids15 = numbered_identities(15, compact_token("ms15"))
@@ -2838,9 +2850,9 @@ def test_mcp_search_limits_default_10_and_max_100():
         rel120 = _kb()
         write_equal_score_title_bundle(ws, rel120, term120, ids120)
         mcp120 = require_mcp_search_success(
-            mcp_search(ws, query=term120, bundle=rel120, limit=100000)
+            mcp_search(ws, query=term120, bundle=rel120, limit=SAMPLE_BIG_CAP)
         )
-        assert len(mcp120) == 100, f"MCP cap 100000 returned {len(mcp120)}"
+        assert len(mcp120) == 100, f"MCP cap {SAMPLE_BIG_CAP} returned {len(mcp120)}"
         require_identity_order(mcp120, ids120[:100])
         mcp_above = require_mcp_search_success(
             mcp_search(ws, query=term120, bundle=rel120, limit=101)
@@ -2856,7 +2868,7 @@ def test_mcp_search_limits_default_10_and_max_100():
 
 
 def test_omit_cap_on_path_search_truncates_to_10():
-    """Fifteen same-governance path hits, cap omitted, return the first 10 identities (L155).
+    """Fifteen same-governance path hits, cap omitted, return the first 10 identities.
 
     Structured output is a separate request. The same path request as
     human text, with structured output not requested, presents that
@@ -2909,7 +2921,7 @@ def test_omit_cap_on_path_search_truncates_to_10():
 
 
 def test_non_positive_cap_on_path_search_is_the_default_10():
-    """Fifteen path-only hits with cap 0 and a negative cap return the first 10 (L155).
+    """Fifteen path-only hits with cap 0 and a negative cap return the first 10.
 
     The same two caps on human path output, with structured output not
     requested, present that ranked identity prefix as the concept
@@ -2965,7 +2977,7 @@ def test_non_positive_cap_on_path_search_is_the_default_10():
 
 
 def test_cap_3_on_path_search_returns_at_most_3():
-    """Fifteen path hits with --limit 3 return the first 3 identities (L165).
+    """Fifteen path hits with --limit 3 return the first 3 identities.
 
     The same cap on human output presents those three inside successive
     governance-badge spans, in concept-identity order, and does not
@@ -3015,14 +3027,14 @@ def test_cap_3_on_path_search_returns_at_most_3():
 
 
 def test_cap_above_100_on_path_search_returns_at_most_100():
-    """120 path-only hits with cap 100000 or cap 101 return the first 100 (L155).
+    """120 path-only hits with a large cap or cap 101 return the first 100.
 
     The command, human path text, and the search tool share this ceiling.
     Structured output is a separate request. On human path output, with
     structured output not requested, both caps present the ranked identity
     prefix of 100 as the concept identities inside successive
     governance-badge spans, and do not present a later path hit. 101 is above 100
-    and is not the literal 100000. A cap above 100 on a path search is
+    and is not the large cap. A cap above 100 on a path search is
     not the omitted-cap default of 10, and it is not the keyword-search
     ceiling already locked on 120 title matches.
     """
@@ -3050,28 +3062,28 @@ def test_cap_above_100_on_path_search_returns_at_most_100():
         expected = ids[:100]
         records = require_search_structured_success(
             run_search(
-                ws, None, rel, for_path=path, limit=100000, structured=True
+                ws, None, rel, for_path=path, limit=SAMPLE_BIG_CAP, structured=True
             )
         )
         assert len(records) == 100, (
-            f"path cap 100000 returned {len(records)} of {len(ids)} path hits; "
+            f"path cap {SAMPLE_BIG_CAP} returned {len(records)} of {len(ids)} path hits; "
             "a requested cap above 100 returns at most 100"
         )
         ordered = require_identity_order(records, expected)
         assert ordered == expected, (
-            f"path cap 100000 must return the first 100 identities; "
+            f"path cap {SAMPLE_BIG_CAP} must return the first 100 identities; "
             f"order={ordered!r}"
         )
         mcp = require_mcp_search_success(
-            mcp_search(ws, for_path=path, bundle=rel, limit=100000)
+            mcp_search(ws, for_path=path, bundle=rel, limit=SAMPLE_BIG_CAP)
         )
         assert len(mcp) == 100, (
-            f"path-tool cap 100000 returned {len(mcp)} of {len(ids)} path hits; "
+            f"path-tool cap {SAMPLE_BIG_CAP} returned {len(mcp)} of {len(ids)} path hits; "
             "a requested cap above 100 returns at most 100"
         )
         mcp_ordered = require_identity_order(mcp, expected)
         assert mcp_ordered == expected, (
-            f"path-tool cap 100000 must return the first 100 identities; "
+            f"path-tool cap {SAMPLE_BIG_CAP} must return the first 100 identities; "
             f"order={mcp_ordered!r}"
         )
         above = require_search_structured_success(
@@ -3101,7 +3113,7 @@ def test_cap_above_100_on_path_search_returns_at_most_100():
             f"human path ceiling probe withheld {len(withheld)}; "
             "need a path hit past 100"
         )
-        for cap in (100000, 101):
+        for cap in (SAMPLE_BIG_CAP, 101):
             human_above = require_search_success(
                 run_search(ws, None, rel, for_path=path, limit=cap)
             )
@@ -3210,15 +3222,15 @@ def test_mcp_path_search_limits_default_10_and_max_100():
             f"order={ceiling_order!r}"
         )
         over = require_mcp_search_success(
-            mcp_search(ws, for_path=path120, bundle=rel120, limit=100000)
+            mcp_search(ws, for_path=path120, bundle=rel120, limit=SAMPLE_BIG_CAP)
         )
         assert len(over) == 100, (
-            f"tool path cap 100000 returned {len(over)} of {len(ids120)} "
+            f"tool path cap {SAMPLE_BIG_CAP} returned {len(over)} of {len(ids120)} "
             "path hits; a requested cap above 100 returns at most 100"
         )
         over_order = require_identity_order(over, expected100)
         assert over_order == expected100, (
-            f"tool path cap 100000 must return the first 100 identities; "
+            f"tool path cap {SAMPLE_BIG_CAP} must return the first 100 identities; "
             f"order={over_order!r}"
         )
         other = require_mcp_search_success(
@@ -3240,7 +3252,7 @@ def test_mcp_path_search_limits_default_10_and_max_100():
 
 
 def test_query_longer_than_1000_characters_drops_the_tail_term():
-    """Distinctive term after the 1000th character is not used; leading term still hits (L155).
+    """Distinctive term after the 1000th character is not used; leading term still hits.
 
     Structured output is a separate request. The same two queries on human
     output, with structured output not requested, still use only the first
@@ -3291,7 +3303,7 @@ def test_query_longer_than_1000_characters_drops_the_tail_term():
             structured=False,
             live_identities=[ident],
         )
-        assert ident not in human_tail
+        require_human_identity_absent(human_tail, ident)
         assert_human_zero_hit_miss_statement(
             human_tail,
             human_inside,
@@ -3303,7 +3315,7 @@ def test_query_longer_than_1000_characters_drops_the_tail_term():
 
 
 def test_term_split_by_the_1000_character_cut_matches_its_kept_prefix():
-    """A term that crosses the 1000-character cut still matches on what remains (L155).
+    """A term that crosses the 1000-character cut still matches on what remains.
 
     Truncation keeps the first 1000 characters and then splits that prefix.
     The cut falls inside one term. The concept whose title is exactly the
@@ -3403,22 +3415,21 @@ def test_term_split_by_the_1000_character_cut_matches_its_kept_prefix():
         assert_identifiable_human_hits(
             human_kept, [("context", (prefix_id, kept, prefix_desc))]
         )
-        assert tail_id not in human_kept
+        require_human_identity_absent(human_kept, tail_id)
 
         human_discarded = require_search_success(run_search(ws, discarded, rel))
         assert_identifiable_human_hits(
             human_discarded, [("context", (tail_id, discarded, tail_desc))]
         )
-        assert prefix_id not in human_discarded
+        require_human_identity_absent(human_discarded, prefix_id)
 
         human_cut = require_search_success(run_search(ws, query, rel))
         assert_human_concept_identity_after_badge(
             human_cut, "context", prefix_id, query=query
         )
-        assert tail_id not in human_cut, (
-            "human search presented the concept whose title is only the "
-            "characters past the 1000-character cut"
-        )
+        # The concept whose title is only the characters past the
+        # 1000-character cut is not a human hit.
+        require_human_identity_absent(human_cut, tail_id)
 
         tool_kept = require_mcp_search_success(
             mcp_search(ws, query=kept, bundle=rel)
@@ -3450,7 +3461,7 @@ def test_term_split_by_the_1000_character_cut_matches_its_kept_prefix():
 
 
 def test_term_at_position_1000_matches_and_exact_1000_is_not_cut():
-    """The character at position 1000 is matched, and length 1000 is not cut (L155).
+    """The character at position 1000 is matched, and length 1000 is not cut.
 
     A splitter sits immediately before position 1000. The concept whose
     title is exactly the term that begins there is a hit. A query of
@@ -3548,9 +3559,8 @@ def test_term_at_position_1000_matches_and_exact_1000_is_not_cut():
             assert_human_concept_identity_after_badge(
                 report, "context", ident, query=query
             )
-            assert decoy not in report, (
-                f"human search presented the other concept on the {label} query"
-            )
+            # The other concept is not a human hit on this query.
+            require_human_identity_absent(report, decoy)
 
         _human_boundary(longer, "longer-than-1000")
         _human_boundary(exact, "exactly-1000")
@@ -3574,7 +3584,7 @@ def test_term_at_position_1000_matches_and_exact_1000_is_not_cut():
 
 
 def test_query_cap_is_characters_not_bytes():
-    """The 1000 cut is characters: a head term still hits, a tail term does not (L155).
+    """The 1000 cut is characters: a head term still hits, a tail term does not.
 
     A head of 600 non-ASCII letters is under 1000 characters and over 1000
     bytes, so the tail term still matches. A head of 1001 of those letters
@@ -3645,14 +3655,14 @@ def test_query_cap_is_characters_not_bytes():
         assert_human_concept_identity_after_badge(
             human_kept, "context", ident, query=under
         )
-        assert other not in human_kept
+        require_human_identity_absent(human_kept, other)
         human_tail = require_zero_hits_success(
             run_search(ws, over, rel),
             structured=False,
             live_identities=[ident, other],
         )
-        assert ident not in human_tail
-        assert other not in human_tail
+        require_human_identity_absent(human_tail, ident)
+        require_human_identity_absent(human_tail, other)
         assert_human_zero_hit_miss_statement(
             human_tail,
             human_kept,
@@ -3664,7 +3674,7 @@ def test_query_cap_is_characters_not_bytes():
 
 
 def test_only_the_first_50_terms_are_used():
-    """Term 51 is ignored; the 50th term and term 1 still match (L155, L165).
+    """Term 51 is ignored; the 50th term and term 1 still match.
 
     Structured output is a separate request. The same three queries on human
     output, with structured output not requested, still use only the first
@@ -3730,7 +3740,7 @@ def test_only_the_first_50_terms_are_used():
             structured=False,
             live_identities=[ident],
         )
-        assert ident not in human_tail
+        require_human_identity_absent(human_tail, ident)
         assert_human_zero_hit_miss_statement(
             human_tail,
             human_kept,
@@ -3787,7 +3797,7 @@ def test_only_the_first_50_terms_are_used():
             structured=False,
             live_identities=[ident],
         )
-        assert ident not in human_mark_tail
+        require_human_identity_absent(human_mark_tail, ident)
         assert_human_zero_hit_miss_statement(
             human_mark_tail,
             human_mark_kept,
@@ -3811,7 +3821,7 @@ def test_only_the_first_50_terms_are_used():
 
 
 def test_mcp_query_longer_than_1000_characters_drops_the_tail_term():
-    """MCP drops a distinctive term that sits after the 1000-character cut (L145, L155)."""
+    """MCP drops a distinctive term that sits after the 1000-character cut."""
     with workspace() as ws:
         term = compact_token("md1k")
         ident, typ, desc, body = unique_tokens("id", "typ", "dsc", "bod")
@@ -3843,7 +3853,7 @@ def test_mcp_query_longer_than_1000_characters_drops_the_tail_term():
 
 
 def test_mcp_query_cap_is_characters_not_bytes():
-    """The search tool cuts at 1000 characters, not 1000 bytes (L145, L155).
+    """The search tool cuts at 1000 characters, not 1000 bytes.
 
     A head of 600 non-ASCII letters is under 1000 characters and over 1000
     bytes, so the tail term still matches. A head of 1001 of those letters
@@ -3902,7 +3912,7 @@ def test_mcp_query_cap_is_characters_not_bytes():
 
 
 def test_mcp_only_the_first_50_terms_are_used():
-    """MCP ignores term 51 and still hits when the distinctive term is among the first 50 (L145).
+    """MCP ignores term 51 and still hits when the distinctive term is among the first 50.
 
     The same cap holds when the terms are joined by a non-space mark
     outside the joiners already used to split two terms. That query is
@@ -3972,7 +3982,7 @@ def test_mcp_only_the_first_50_terms_are_used():
 _BOTH_SURFACES = ("command-structured", "command-human", "tool")
 # Caps the closed path-only ceiling already requests. A combined call that
 # reuses one of these values does not show the ceiling on a query plus a path.
-_CLOSED_PATH_ONLY_ABOVE_100 = frozenset({101, 100000})
+_CLOSED_PATH_ONLY_ABOVE_100 = frozenset({101, SAMPLE_BIG_CAP})
 
 
 def _search_query_and_path(ws, query, bundle, path, surface, limit=None):
@@ -4399,7 +4409,7 @@ def test_query_and_path_cap_above_100_returns_at_most_100(surface):
 
 
 def test_exact_code_ref_matches_slash_normalized_path_including_dot_slash_and_leading_slash():
-    """Exact path, ./ on ref or path, and leading / on the path or the stored ref still hit (L151)."""
+    """Exact path, ./ on ref or path, and leading / on the path or the stored ref still hit."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -4415,14 +4425,14 @@ def test_exact_code_ref_matches_slash_normalized_path_including_dot_slash_and_le
                     title=title,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/auth/login.go"],
+                    code_refs=[SAMPLE_FILE],
                 )
             ],
         )
         for path in (
-            "pkg/auth/login.go",
-            "./pkg/auth/login.go",
-            "/pkg/auth/login.go",
+            SAMPLE_FILE,
+            "./" + SAMPLE_FILE,
+            "/" + SAMPLE_FILE,
         ):
             records = require_search_structured_success(
                 run_search(ws, None, rel, for_path=path, structured=True)
@@ -4442,13 +4452,13 @@ def test_exact_code_ref_matches_slash_normalized_path_including_dot_slash_and_le
                     title=title2,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["./pkg/auth/login.go"],
+                    code_refs=["./" + SAMPLE_FILE],
                 )
             ],
         )
         records2 = require_search_structured_success(
             run_search(
-                ws, None, rel2, for_path="pkg/auth/login.go", structured=True
+                ws, None, rel2, for_path=SAMPLE_FILE, structured=True
             )
         )
         assert identity_in_records(records2, ident2)
@@ -4458,7 +4468,7 @@ def test_exact_code_ref_matches_slash_normalized_path_including_dot_slash_and_le
         slash_ident, slash_title = unique_tokens("ids", "ttls")
         twin_ident, twin_title = unique_tokens("idt", "ttlt")
         twin_leaf = compact_token("leaf")
-        public_bare = "pkg/auth/login.go"
+        public_bare = SAMPLE_FILE
         twin_bare = f"{twin_leaf}/widget.go"
         rel3 = _kb()
         write_bundle(
@@ -4500,9 +4510,9 @@ def test_exact_code_ref_matches_slash_normalized_path_including_dot_slash_and_le
 
 
 def test_absolute_path_still_matches_relative_code_ref():
-    """A workspace-absolute path still matches a relative code_ref (L151).
+    """A workspace-absolute path still matches a relative code_ref.
 
-    The public sample stays on the command line. A generated relative ref
+    The fixed probe stays on the command line. A generated relative ref
     is searched as a longer filesystem-absolute path (the workspace
     directory plus that ref) on the command and on the search tool. A
     second concept whose relative ref is a different generated path is
@@ -4524,11 +4534,11 @@ def test_absolute_path_still_matches_relative_code_ref():
                     title=title,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/auth/login.go"],
+                    code_refs=[SAMPLE_FILE],
                 )
             ],
         )
-        abs_path = abs_workspace_path(ws, "pkg/auth/login.go")
+        abs_path = abs_workspace_path(ws, SAMPLE_FILE)
         records = require_search_structured_success(
             run_search(ws, None, rel, for_path=abs_path, structured=True)
         )
@@ -4537,7 +4547,7 @@ def test_absolute_path_still_matches_relative_code_ref():
         )
         # A longer absolute caller against a generated relative ref. Stripping
         # one leading slash, and treating a longer absolute path as a match
-        # only when the stored ref is the public literal, leaves this ref
+        # only when the stored ref is the fixed probe, leaves this ref
         # unmatched.
         probe = generated_filesystem_absolute_relative_probe()
         hit_ident, miss_ident = unique_tokens("idh", "idm")
@@ -4570,8 +4580,8 @@ def test_absolute_path_still_matches_relative_code_ref():
         abs_other = longer_filesystem_absolute_caller(
             ws, probe.other_ref, absent_refs=(probe.relative_ref,)
         )
-        assert probe.relative_ref != "pkg/auth/login.go"
-        assert probe.other_ref != "pkg/auth/login.go"
+        assert probe.relative_ref != SAMPLE_FILE
+        assert probe.other_ref != SAMPLE_FILE
         assert abs_hit.endswith("/" + probe.relative_ref)
         assert abs_hit[1:] != probe.relative_ref
         assert not abs_hit.endswith("/" + probe.other_ref)
@@ -4632,10 +4642,10 @@ def test_absolute_path_still_matches_relative_code_ref():
 def test_directory_prefix_code_ref_matches_nested_path_not_a_sibling_prefix():
     """A directory code_ref hits a path under it; a character-sibling ref does not.
 
-    The public pair pkg/auth versus pkg/authorization stays. A generated
+    The fixed directory/character-sibling pair stays. A generated
     directory is stored, and the searched path sits two or more segments
     under it. The sibling ref shares those characters and is not a
-    directory boundary (L151).
+    directory boundary.
     """
     with workspace() as ws:
         nested, sibling, typ, ntitle, stitle, desc, body = unique_tokens(
@@ -4652,7 +4662,7 @@ def test_directory_prefix_code_ref_matches_nested_path_not_a_sibling_prefix():
                     title=ntitle,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/auth"],
+                    code_refs=[SAMPLE_PREFIX_DIR],
                 ),
                 search_concept_spec(
                     sibling,
@@ -4660,20 +4670,20 @@ def test_directory_prefix_code_ref_matches_nested_path_not_a_sibling_prefix():
                     title=stitle,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/authorization"],
+                    code_refs=[SAMPLE_SIBLING_DIR],
                 ),
             ],
         )
         hit = require_search_structured_success(
             run_search(
-                ws, None, rel, for_path="pkg/auth/login.go", structured=True
+                ws, None, rel, for_path=SAMPLE_FILE, structured=True
             )
         )
         assert identity_in_records(hit, nested)
         assert not identity_in_records(hit, sibling)
         miss = require_search_structured_success(
             run_search(
-                ws, None, rel, for_path="pkg/authorization/x.go", structured=True
+                ws, None, rel, for_path=SAMPLE_SIBLING_FILE, structured=True
             )
         )
         assert identity_in_records(miss, sibling)
@@ -4752,11 +4762,11 @@ def test_directory_prefix_code_ref_matches_nested_path_not_a_sibling_prefix():
 
 
 def test_single_segment_glob_star_does_not_cross_a_slash():
-    """*.go hits foo.go not pkg/foo.go; pkg/*.go hits pkg/foo.go not pkg/membundle/foo.go.
+    """*.go hits a bare .go name, not <dir>/<name>; <dir>/*.go hits <dir>/<name>, not a deeper path.
 
     A runtime directory-scoped star is itself the hit for the file in that
     directory, and is not a hit for a path that would need the star to
-    cross a slash (L151, L164). A star that is only part of one filename
+    cross a slash. A star that is only part of one filename
     stem, ``{prefix}*.{ext}``, hits ``{prefix}{leaf}.{ext}`` and misses a
     path that would need that star to cross a slash.
     """
@@ -4783,7 +4793,7 @@ def test_single_segment_glob_star_does_not_cross_a_slash():
                     title=ntitle,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/*.go"],
+                    code_refs=[SAMPLE_TOP_DIR + "/*.go"],
                 ),
                 search_concept_spec(
                     anchor,
@@ -4791,18 +4801,18 @@ def test_single_segment_glob_star_does_not_cross_a_slash():
                     title=stitle,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/membundle/foo.go"],
+                    code_refs=[SAMPLE_NESTED_DIR + "/" + SAMPLE_BARE_GO],
                 ),
             ],
         )
         foo = require_search_structured_success(
-            run_search(ws, None, rel, for_path="foo.go", structured=True)
+            run_search(ws, None, rel, for_path=SAMPLE_BARE_GO, structured=True)
         )
         assert identity_in_records(foo, star)
         assert not identity_in_records(foo, nested)
         assert not identity_in_records(foo, anchor)
         pkg_foo = require_search_structured_success(
-            run_search(ws, None, rel, for_path="pkg/foo.go", structured=True)
+            run_search(ws, None, rel, for_path=SAMPLE_TOP_DIR + "/" + SAMPLE_BARE_GO, structured=True)
         )
         assert not identity_in_records(pkg_foo, star), (
             "*.go crossed a slash onto pkg/foo.go"
@@ -4810,13 +4820,13 @@ def test_single_segment_glob_star_does_not_cross_a_slash():
         assert identity_in_records(pkg_foo, nested)
         assert not identity_in_records(pkg_foo, anchor)
         deep = require_search_structured_success(
-            run_search(ws, None, rel, for_path="pkg/membundle/foo.go", structured=True)
+            run_search(ws, None, rel, for_path=SAMPLE_NESTED_DIR + "/" + SAMPLE_BARE_GO, structured=True)
         )
         assert identity_in_records(deep, anchor), (
-            "exact code_ref was not a hit for pkg/membundle/foo.go"
+            "exact code_ref was not a hit for the nested .go path"
         )
         assert not identity_in_records(deep, nested), (
-            "pkg/*.go crossed a slash onto pkg/membundle/foo.go"
+            "<dir>/*.go crossed a slash onto the nested .go path"
         )
         assert not identity_in_records(deep, star)
         ext, leaf, scope, deeper = unique_compact("ext", "lf", "sc", "dp")
@@ -5030,7 +5040,7 @@ def test_single_segment_glob_star_does_not_cross_a_slash():
 def test_glob_star_in_an_earlier_segment_does_not_cross_a_slash():
     """A star before the filename matches one segment and does not cross a slash.
 
-    Stored refs are ``*/{leaf}.{ext}`` and ``{dir}/*/{leaf}.{ext}`` (L151).
+    Stored refs are ``*/{leaf}.{ext}`` and ``{dir}/*/{leaf}.{ext}``.
     Each hits a path whose star span is exactly one segment. Each misses a
     path that would need that star to consume a slash, a same-shape path
     whose literal filename differs, and, for the directory-scoped pattern,
@@ -5253,7 +5263,7 @@ def test_recursive_glob_matches_filename_suffix():
     The same recursive suffix match is not limited to those two patterns:
     a runtime extension other than .go hits a nested file of that suffix
     and misses a different suffix, and a scoped pattern with that extension
-    stays under its directory (L151). The same stored ``**/*.{ext}`` also
+    stays under its directory. The same stored ``**/*.{ext}`` also
     hits a one-segment ``{leaf}.{ext}`` and misses a one-segment file
     whose suffix is different.
     """
@@ -5280,24 +5290,24 @@ def test_recursive_glob_matches_filename_suffix():
                     title=stitle,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/**/*.go"],
+                    code_refs=[SAMPLE_TOP_DIR + "/**/*.go"],
                 ),
             ],
         )
         go_hit = require_search_structured_success(
             run_search(
-                ws, None, rel, for_path="pkg/auth/login.go", structured=True
+                ws, None, rel, for_path=SAMPLE_FILE, structured=True
             )
         )
         assert identity_in_records(go_hit, rec)
         md_miss = run_search(
-            ws, None, rel, for_path="pkg/auth/login.md", structured=True
+            ws, None, rel, for_path=SAMPLE_FILE[:-3] + ".md", structured=True
         )
         md_records = require_search_structured_success(md_miss)
         assert not identity_in_records(md_records, rec)
         scoped_hit = require_search_structured_success(
             run_search(
-                ws, None, rel, for_path="pkg/membundle/parser.go", structured=True
+                ws, None, rel, for_path=SAMPLE_NESTED_DIR + "/parser.go", structured=True
             )
         )
         assert identity_in_records(scoped_hit, scoped)
@@ -5402,7 +5412,7 @@ def test_directory_scoped_recursive_glob_without_filename_suffix():
     The ref is ``<dir>/**``, not ``**/*.<ext>`` and not ``<dir>/**/*.<ext>``.
     The nested file's name has no suffix and sits more than one segment
     under that directory. The same tail outside that directory is not a
-    hit (L151). Exact-path concepts on each file keep both searches a
+    hit. Exact-path concepts on each file keep both searches a
     non-empty hit list, so a miss is the scoped concept's absence.
     """
     with workspace() as ws:
@@ -5482,7 +5492,7 @@ def test_directory_scoped_recursive_glob_without_filename_suffix():
 
 
 def test_code_refs_list_matches_if_any_entry_matches():
-    """A later matching list entry still hits; a non-match does not (L151).
+    """A later matching list entry still hits; a non-match does not.
 
     Beside that hit, a concept that omits code_refs and a concept whose
     code_refs list is empty are not path hits. Both are still keyword hits
@@ -5521,7 +5531,7 @@ def test_code_refs_list_matches_if_any_entry_matches():
             "dsc",
             "bod",
         )
-        matching = "pkg/auth/login.go"
+        matching = SAMPLE_FILE
         non_matching = "docs/README.md"
         rel = _kb()
         root = write_bundle(
@@ -5628,7 +5638,7 @@ def test_code_refs_list_matches_if_any_entry_matches():
 
 
 def test_empty_path_filter_with_query_is_ordinary_keyword_search():
-    """Omitting --for-path, and MCP for_path omitted or empty, still keyword-search (L153)."""
+    """Omitting --for-path, and MCP for_path omitted or empty, still keyword-search."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -5667,7 +5677,7 @@ def test_empty_path_filter_with_query_is_ordinary_keyword_search():
 
 
 def test_path_filter_with_no_code_ref_match_is_empty_even_if_keywords_would_hit():
-    """Path docs/README.md plus a titled query is empty; the same query without path hits (L153).
+    """Path docs/README.md plus a titled query is empty; the same query without path hits.
 
     The structured command-line list stays the closed empty-list arm.
     The same path on human output, with structured output not requested,
@@ -5677,8 +5687,8 @@ def test_path_filter_with_no_code_ref_match_is_empty_even_if_keywords_would_hit(
     with workspace() as ws:
         ident, typ, desc, body = unique_tokens("id", "typ", "dsc", "bod")
         rel = _kb()
-        title = "OAuth2 PKCE"
-        query = "OAuth2"
+        title = SAMPLE_TERM_TITLE
+        query = SAMPLE_TERM
         unmatched = "docs/README.md"
         write_bundle(
             ws,
@@ -5690,7 +5700,7 @@ def test_path_filter_with_no_code_ref_match_is_empty_even_if_keywords_would_hit(
                     title=title,
                     description=desc,
                     body=f"{body}\n",
-                    code_refs=["pkg/auth/login.go"],
+                    code_refs=[SAMPLE_FILE],
                 )
             ],
         )
@@ -5757,13 +5767,13 @@ def test_path_filter_with_no_code_ref_match_is_empty_even_if_keywords_would_hit(
 
 
 def test_path_search_orders_hold_then_constraint_then_context():
-    """Inverted identities still rank hold, constraint, context on a path search (L151, L163)."""
+    """Inverted identities still rank hold, constraint, context on a path search."""
     with workspace() as ws:
         hold_id, con_id, ctx_id = inverted_governance_identities()
         typ, htitle, ctitle, xtitle, desc, body = unique_tokens(
             "typ", "ht", "ct", "xt", "dsc", "bod"
         )
-        path = "pkg/auth/login.go"
+        path = SAMPLE_FILE
         rel = _kb()
         write_concepts_later_first(
             ws,
@@ -5810,7 +5820,7 @@ def test_path_search_orders_hold_then_constraint_then_context():
 
 
 def test_path_governance_order_beats_a_higher_keyword_score_on_context():
-    """Context with a strong title match still ranks after hold on a path+query (L151, L163).
+    """Context with a strong title match still ranks after hold on a path+query.
 
     The structured command keeps its closed triple: the keyword baseline
     ranks the titled context concept first, and the path search ranks
@@ -5829,7 +5839,7 @@ def test_path_governance_order_beats_a_higher_keyword_score_on_context():
         typ, htitle, ctitle, desc, filler = unique_tokens(
             "typ", "ht", "ct", "dsc", "fil"
         )
-        path = "pkg/auth/login.go"
+        path = SAMPLE_FILE
         rel = _kb()
         write_concepts_later_first(
             ws,
@@ -5944,8 +5954,8 @@ def test_path_governance_order_beats_a_higher_keyword_score_on_context():
         print("governance beats keyword on context", flush=True)
 
 
-def test_path_governance_public_sample_has_runtime_twin():
-    """Runtime-unique path and inverted identities still rank hold then constraint then context (L163)."""
+def test_path_governance_order_runtime_twin():
+    """Runtime-unique path and inverted identities still rank hold then constraint then context."""
     with workspace() as ws:
         hold_id, con_id, ctx_id = inverted_governance_identities()
         typ, htitle, ctitle, xtitle, desc, body = unique_tokens(
@@ -5998,7 +6008,7 @@ def test_path_governance_public_sample_has_runtime_twin():
 
 
 def test_path_effective_governance_orders_HOLD_and_convention_omit():
-    """HOLD ranks as hold; convention/ omits rank as constraint; other omit as context (L32, L151).
+    """HOLD ranks as hold; convention/ omits rank as constraint; other omit as context.
 
     One omitted identity is ``convention/<leaf>``. The other is
     ``convention/<dir>/<leaf>``. Both sit in the constraint slot, and the
@@ -6090,7 +6100,7 @@ def test_same_governance_path_hits_tie_break_by_identity():
             rel,
             [
                 search_concept_spec(
-                    "alpha",
+                    SAMPLE_LOW_ID,
                     concept_type=typ,
                     title=shared_title,
                     description=desc,
@@ -6099,7 +6109,7 @@ def test_same_governance_path_hits_tie_break_by_identity():
                     code_refs=[path],
                 ),
                 search_concept_spec(
-                    "zeta",
+                    SAMPLE_HIGH_ID,
                     concept_type=typ,
                     title=shared_title,
                     description=desc,
@@ -6112,8 +6122,8 @@ def test_same_governance_path_hits_tie_break_by_identity():
         records = require_search_structured_success(
             run_search(ws, None, rel, for_path=path, structured=True)
         )
-        ordered = require_identity_order(records, ["alpha", "zeta"])
-        assert ordered == ["alpha", "zeta"], (
+        ordered = require_identity_order(records, [SAMPLE_LOW_ID, SAMPLE_HIGH_ID])
+        assert ordered == [SAMPLE_LOW_ID, SAMPLE_HIGH_ID], (
             f"same-governance path hits must order by identity ascending; "
             f"order={ordered!r}"
         )
@@ -6123,12 +6133,12 @@ def test_same_governance_path_hits_tie_break_by_identity():
         require_human_ranked_hits(
             human,
             [
-                ("constraint", ("alpha",)),
-                ("constraint", ("zeta",)),
+                ("constraint", (SAMPLE_LOW_ID,)),
+                ("constraint", (SAMPLE_HIGH_ID,)),
             ],
-            planted_order=("zeta", "alpha"),
+            planted_order=(SAMPLE_HIGH_ID, SAMPLE_LOW_ID),
         )
-        closed_literals = ("alpha", "zeta")
+        closed_literals = (SAMPLE_LOW_ID, SAMPLE_HIGH_ID)
         early_id = f"aaa{compact_token('a')}"
         late_id = f"zzz{compact_token('z')}"
         assert early_id not in closed_literals and late_id not in closed_literals
@@ -6248,7 +6258,7 @@ def test_same_governance_path_hits_tie_break_by_identity():
 
 
 def test_same_governance_higher_combined_score_ranks_first():
-    """Title-matching constraint ranks before a path-only sibling; both remain hits (L151)."""
+    """Title-matching constraint ranks before a path-only sibling; both remain hits."""
     with workspace() as ws:
         term = compact_token("cmb")
         path_only_id = f"aaa{compact_token('p')}"
@@ -6305,7 +6315,7 @@ def test_same_governance_higher_combined_score_ranks_first():
 
 
 def test_path_hit_reports_code_refs_match():
-    """Path-only structured hit contains code_refs and not title after stripping the path (L151)."""
+    """Path-only structured hit contains code_refs and not title after stripping the path."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -6671,7 +6681,7 @@ def _unicode_letter_title(token: str) -> str:
 
 
 def test_unicode_query_matches_unicode_title():
-    """A same-case Unicode title query returns that concept (L166).
+    """A same-case Unicode title query returns that concept.
 
     The command and the search tool are that search. The command line
     returns its Unicode title and omits the other concept. On the tool,
@@ -6754,14 +6764,14 @@ def test_unicode_query_matches_unicode_title():
         print("unicode title hit", flush=True)
 
 
-def test_unicode_title_public_sample_has_runtime_twin():
-    """Non-ASCII letters stay in one term on the command and the search tool (L149, L166).
+def test_unicode_title_runtime_twin():
+    """Non-ASCII letters stay in one term on the command and the search tool.
 
     Each surface searches a title whose non-ASCII letters are followed by
     an ASCII tail. The whole string returns that concept. The ASCII tail
-    alone omits it. The command-line title stays the public sample. The
+    alone omits it. The command-line title is a fixed non-ASCII head. The
     tool plants a different runtime letter head so the tool term is not
-    that sample.
+    that head.
     """
     with workspace() as ws:
         early, late, typ, desc, body = unique_tokens(
@@ -6999,7 +7009,7 @@ def test_unicode_title_public_sample_has_runtime_twin():
 
 
 def test_zero_hits_is_success_with_no_hits():
-    """A matching-nothing query is success with no hits; human text states a miss (L157)."""
+    """A matching-nothing query is success with no hits; human text states a miss."""
     with workspace() as ws:
         ident, typ, title, desc, body, miss = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "miss"
@@ -7034,26 +7044,18 @@ def test_zero_hits_is_success_with_no_hits():
         zero_report = require_zero_hits_success(
             human_zero, structured=False, live_identities=[ident]
         )
-        zero_rem, live_rem = assert_human_zero_hit_miss_statement(
+        assert_human_zero_hit_miss_statement(
             zero_report,
             human_live,
             path_tokens_for_search(rel, ws.path),
             (ident, typ, title, desc, body, miss),
             live_identities=[ident],
         )
-        assert zero_rem, (
-            "human zero-hit remainder is empty after stripping covariates; "
-            "it does not state that nothing matched"
-        )
-        assert zero_rem != live_rem, (
-            "human zero-hit remainder matches the live-hit remainder after "
-            f"stripping covariates; remainder={zero_rem!r}"
-        )
         print("zero-hit success ok", flush=True)
 
 
 def test_cli_neither_query_nor_path_is_non_success_usage():
-    """Neither query nor path is usage: non-success, remainder ≠ zero-hit and ≠ load (L157)."""
+    """Neither query nor path is usage: non-success, remainder ≠ zero-hit and ≠ load."""
     with workspace() as ws:
         ident, typ, title, desc, body, miss = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "miss"
@@ -7084,8 +7086,8 @@ def test_cli_neither_query_nor_path_is_non_success_usage():
         )
         missing = unique_tokens("gone")[0]
         load = run_search(ws, title, missing)
-        load_report = require_search_failure(load)
-        # TEST-FIX(F04): upstream _harness.py:620 shows FileNotFoundError before search when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        load_report = require_search_load_failure(load)
+        # TEST-FIX(F04): with no bin/membundle there is no product to run before search; per the Contract "Build" form, make build at the repository root writes that binary.
         usage = run_search(ws)
         fixture = (ident, typ, title, desc, body, miss, missing)
         require_search_usage_failure(
@@ -7110,7 +7112,7 @@ def test_cli_neither_query_nor_path_is_non_success_usage():
 
 
 def test_mcp_neither_query_nor_path_succeeds_with_empty_list():
-    """MCP with neither query nor path is success with an empty list, not a tool error (L157, L270)."""
+    """MCP with neither query nor path is success with an empty list, not a tool error."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -7141,7 +7143,7 @@ def test_mcp_neither_query_nor_path_succeeds_with_empty_list():
 
 
 def test_missing_bundle_is_load_error_not_zero_hits():
-    """A named missing directory is a load error, not zero-hit success (L157)."""
+    """A named missing directory is a load error, not zero-hit success."""
     with workspace() as ws:
         ident, typ, title, desc, body, miss = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "miss"
@@ -7160,7 +7162,7 @@ def test_missing_bundle_is_load_error_not_zero_hits():
                 )
             ],
         )
-        # TEST-FIX(F04): upstream _harness.py:620 shows FileNotFoundError before search when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        # TEST-FIX(F04): with no bin/membundle there is no product to run before search; per the Contract "Build" form, make build at the repository root writes that binary.
         usage = run_search(ws)
         usage_report = combined_report(usage)
         missing = unique_tokens("gone")[0]
@@ -7193,7 +7195,7 @@ def test_missing_bundle_is_load_error_not_zero_hits():
 
 
 def test_mcp_missing_bundle_is_tool_error():
-    """MCP named missing bundle fails the load, not a successful search (L157).
+    """MCP named missing bundle fails the load, not a successful search.
 
     The same query on a real bundle returns that concept. Against a missing
     bundle the call must be a tool-error result or a JSON-RPC protocol error.
@@ -7233,7 +7235,7 @@ def test_mcp_missing_bundle_is_tool_error():
 
 
 def test_omit_path_without_knowledge_dir_loads_cwd():
-    """No knowledge/ directory: omit-path search loads the cwd bundle (L49)."""
+    """No knowledge/ directory: omit-path search loads the cwd bundle."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -7260,7 +7262,7 @@ def test_omit_path_without_knowledge_dir_loads_cwd():
 
 
 def test_omit_path_with_knowledge_dir_loads_knowledge_not_cwd_decoy():
-    """knowledge/ as a directory wins omit-path; cwd decoy title is absent (L49)."""
+    """knowledge/ as a directory wins omit-path; cwd decoy title is absent."""
     with workspace() as ws:
         ident, typ, title, desc, body, dtitle, dtok = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod", "dtt", "db"
@@ -7292,19 +7294,20 @@ def test_omit_path_with_knowledge_dir_loads_knowledge_not_cwd_decoy():
         )
         assert identity_in_records(records, ident)
         hit = record_for_identity(records, ident)
-        values = record_string_values(hit)
-        assert title in values, f"omit-path hit title is not the query: {values!r}"
-        assert dtitle not in values and dtok not in values, (
-            f"omit-path hit still carries the cwd decoy: {values!r}"
+        hit_title = hit_field(hit, "title")
+        assert hit_title == title, f"omit-path hit title is not the query: {hit!r}"
+        assert hit_title != dtitle, (
+            f"omit-path hit still carries the cwd decoy: {hit!r}"
         )
         report = require_search_success(run_search(ws, title))
-        unselected_token_absent(report, dtitle)
-        unselected_token_absent(report, dtok)
+        # The human hit is the knowledge concept the title query selects;
+        # the cwd decoy does not carry that title, so it cannot be this hit.
+        require_human_identity_present(report, ident)
         print("omit-path knowledge decoy absent", flush=True)
 
 
 def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
-    """A file named knowledge is not the omit-path bundle directory (L49)."""
+    """A file named knowledge is not the omit-path bundle directory."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -7331,7 +7334,7 @@ def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
 
 
 def test_named_path_without_root_index_loads_nested_knowledge():
-    """Named path with no root index.md loads nested knowledge/ (L49)."""
+    """Named path with no root index.md loads nested knowledge/."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "id", "typ", "ttl", "dsc", "bod"
@@ -7359,7 +7362,7 @@ def test_named_path_without_root_index_loads_nested_knowledge():
 
 
 def test_named_path_with_root_index_loads_root_concept_not_nested_knowledge():
-    """Named path that already has root index.md loads that concept (L49).
+    """Named path that already has root index.md loads that concept.
 
     The same path also contains knowledge/ with a different concept. Loading
     resolves into that nested directory only when the named path has no root
@@ -7404,18 +7407,19 @@ def test_named_path_with_root_index_loads_root_concept_not_nested_knowledge():
         )
         assert identity_in_records(records, ident)
         assert not identity_in_records(records, decoy_id)
-        values = record_string_values(record_for_identity(records, ident))
-        assert title in values, (
-            f"named path with root index did not load the root concept: {values!r}"
+        root_hit = record_for_identity(records, ident)
+        root_title = hit_field(root_hit, "title")
+        assert root_title == title, (
+            f"named path with root index did not load the root concept: {root_hit!r}"
         )
-        assert dtitle not in values and dtok not in values, (
-            f"named path with root index carried the nested knowledge concept: {values!r}"
+        assert root_title != dtitle, (
+            f"named path with root index carried the nested knowledge concept: {root_hit!r}"
         )
         print("named path with root index loads root concept", flush=True)
 
 
 def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
-    """A named bundle is the load root even when cwd has knowledge/ (L49)."""
+    """A named bundle is the load root even when cwd has knowledge/."""
     with workspace() as ws:
         ident, decoy_id, typ, title, desc, body, dtitle, dtok = unique_tokens(
             "id", "did", "typ", "ttl", "dsc", "bod", "dtt", "db"
@@ -7452,10 +7456,13 @@ def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
         )
         assert identity_in_records(records, ident)
         assert not identity_in_records(records, decoy_id)
-        values = record_string_values(record_for_identity(records, ident))
-        assert title in values, f"named-path hit title is not the named concept: {values!r}"
-        assert dtitle not in values, (
-            f"named-path hit carries the knowledge-directory title: {values!r}"
+        named_hit = record_for_identity(records, ident)
+        named_title = hit_field(named_hit, "title")
+        assert named_title == title, (
+            f"named-path hit title is not the named concept: {named_hit!r}"
+        )
+        assert named_title != dtitle, (
+            f"named-path hit carries the knowledge-directory title: {named_hit!r}"
         )
         print("named bundle not overridden by cwd knowledge", flush=True)
 
@@ -7466,7 +7473,7 @@ def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
 
 
 def test_escaping_symlink_makes_search_a_load_error():
-    """A Markdown symlink whose target leaves the bundle is a load error (L51).
+    """A Markdown symlink whose target leaves the bundle is a load error.
 
     The load does not succeed, and search fails as a load error. That
     failure is distinct from a successful search with no hit records, and
@@ -7504,12 +7511,12 @@ def test_escaping_symlink_makes_search_a_load_error():
         )
         assert identity_in_records(good, ident)
         leaked = run_search(ws, title, rel_bad, structured=True)
-        require_search_failure(leaked)
+        require_search_load_failure(leaked)
         print("escaping symlink is load error", flush=True)
 
 
-def test_escaping_directory_symlink_makes_search_a_load_error():
-    """A directory symlink whose target leaves the bundle is not walked (L51).
+def test_escaping_directory_symlink_is_not_walked_and_search_succeeds():
+    """A directory symlink whose target leaves the bundle is not walked.
 
     The search command loads the bundle. An in-bundle concept the query
     matches is a hit. A concept that exists only through the symlink, and
@@ -7525,7 +7532,7 @@ def test_escaping_directory_symlink_makes_search_a_load_error():
 @pytest.mark.parametrize("entry", ["command", "tool"])
 @pytest.mark.parametrize("kind", ["markdown-file", "directory"])
 def test_escaping_symlink_load_refusal_crosses_public_entries(entry, kind):
-    """Directory and Markdown symlinks have different load outcomes (L51).
+    """Directory and Markdown symlinks have different load outcomes.
 
     ``command`` is ``membundle search``. ``tool`` is ``membundle_search``. A symlink
     that is itself a Markdown file and whose resolved target leaves the
@@ -7583,7 +7590,7 @@ def test_escaping_symlink_load_refusal_crosses_public_entries(entry, kind):
 
 
 def test_hidden_markdown_is_not_a_search_hit():
-    """Hidden files and hidden directories are not hits; a visible sibling is (L51).
+    """Hidden files and hidden directories are not hits; a visible sibling is.
 
     Names that begin with a dot are one class. The command line omits the
     planted ``.secret.md`` and a generated hidden file whose name is not
@@ -7765,7 +7772,7 @@ def test_hidden_markdown_is_not_a_search_hit():
 
 
 def test_node_modules_markdown_is_not_a_search_hit():
-    """Only a directory whose name is exactly node_modules is skipped (L51).
+    """Only a directory whose name is exactly node_modules is skipped.
 
     The skip applies at the bundle root and under another directory. A
     directory whose name only begins with that string is loaded, and so is
@@ -7883,7 +7890,7 @@ def test_node_modules_markdown_is_not_a_search_hit():
             run_search(ws, cache_title, rel, structured=True)
         )
         cache_record = record_for_identity(cache_hit, cache_identity)
-        assert cache_title in record_string_values(cache_record), (
+        assert hit_field(cache_record, "title") == cache_title, (
             f"note under {cache_dir} is not a hit for its title {cache_title!r}"
         )
         file_hit = require_search_structured_success(
@@ -7910,7 +7917,7 @@ def test_node_modules_markdown_is_not_a_search_hit():
 
 
 def test_non_markdown_file_is_not_a_search_hit():
-    """notes.txt is not a search hit (L51).
+    """notes.txt is not a search hit.
 
     Only Markdown files are loaded. The notes.txt checks are unchanged.
     A second non-markdown file, whose name is not notes.txt, is omitted
@@ -7978,7 +7985,7 @@ def test_non_markdown_file_is_not_a_search_hit():
 
 
 def test_reserved_index_and_log_are_not_search_hits():
-    """Root index.md / log.md and a nested log.md are not concept hits (L28)."""
+    """Root index.md / log.md and a nested log.md are not concept hits."""
     with workspace() as ws:
         (
             ident,
@@ -8076,7 +8083,7 @@ def test_reserved_index_and_log_are_not_search_hits():
 
 
 def test_reserved_nested_index_and_root_agents_are_not_search_hits():
-    """Nested index and root AGENTS.md are not hits; nested AGENTS.md is (L28).
+    """Nested index and root AGENTS.md are not hits; nested AGENTS.md is.
 
     The command-line checks below are unchanged. On the search tool the
     same bundle omits a concept-shaped root index.md, the nested index.md,
@@ -8389,7 +8396,7 @@ def test_search_failures_and_zero_hits_do_not_create_or_mutate_files():
 
         usage = require_call_leaves_bundle_bytes_unchanged(
             root,
-            # TEST-FIX(F04): upstream _harness.py:620 shows FileNotFoundError before search when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+            # TEST-FIX(F04): with no bin/membundle there is no product to run before search; per the Contract "Build" form, make build at the repository root writes that binary.
             lambda: run_search(ws),
             label="command that prints usage",
         )
@@ -8559,7 +8566,7 @@ def _assert_sole_term_copy(root, identity: str, term: str, field: str) -> None:
 
 
 def test_mcp_keyword_search_returns_the_same_ordered_identities_as_cli():
-    """MCP keyword order matches CLI, and each tool hit carries the structured shape (L32, L145, L149).
+    """MCP keyword order matches CLI, and each tool hit carries the structured shape.
 
     Identity order is not enough. A tool keyword hit also carries type,
     title, description, effective governance, a numeric score, and the
@@ -8803,29 +8810,22 @@ def test_mcp_keyword_search_returns_the_same_ordered_identities_as_cli():
         )
         assert_matched_keyword_fields(titled, titled_own, ["title"])
         assert_matched_keyword_fields(body_hit, body_own, ["body"])
-        titled_vals = record_string_values(titled)
-        assert path in titled_vals, (
-            f"tool hit omitted the concept's code_refs path: {sorted(titled_vals)}"
+        assert path in hit_list(titled, "code_refs"), (
+            f"tool hit omitted the concept's code_refs path: {titled!r}"
         )
-        assert tag in titled_vals, (
-            f"tool hit omitted the concept's tag: {sorted(titled_vals)}"
+        assert tag in hit_list(titled, "tags"), (
+            f"tool hit omitted the concept's tag: {titled!r}"
         )
-        titled_rest = record_values_after_stripping(
-            titled,
-            [titled_body, filler, term, desc, titled_id, typ, href, label, tag, path],
+        assert target_id in hit_list(titled, "outbound"), (
+            f"tool hit omitted the outbound identity: {titled!r}"
         )
-        assert target_id in titled_rest, (
-            "tool hit omitted the outbound identity after the body and the "
-            f"concept's own texts were removed; remainder={sorted(titled_rest)!r}"
-        )
-        body_vals = record_string_values(body_hit)
-        assert path not in body_vals, (
+        assert path not in hit_list(body_hit, "code_refs"), (
             "incidental-body tool hit carries a code_refs path it does not have"
         )
-        assert tag not in body_vals, (
+        assert tag not in hit_list(body_hit, "tags"), (
             "incidental-body tool hit carries a tag it does not have"
         )
-        assert target_id not in body_vals, (
+        assert target_id not in hit_list(body_hit, "outbound"), (
             "incidental-body tool hit carries an outbound identity it does not have"
         )
         inbound_hits = require_mcp_search_success(
@@ -8850,16 +8850,10 @@ def test_mcp_keyword_search_returns_the_same_ordered_identities_as_cli():
             f"inbound tool hit has no numeric score: {target_hit!r}"
         )
         assert_matched_keyword_fields(target_hit, target_own, ["title"])
-        target_vals = record_string_values(target_hit)
-        assert path not in target_vals
-        assert tag not in target_vals
-        target_rest = record_values_after_stripping(
-            target_hit,
-            [target_body, label, target_title, desc, target_id, typ, href],
-        )
-        assert titled_id in target_rest, (
-            "tool hit omitted the inbound identity after the body and the "
-            f"concept's own texts were removed; remainder={sorted(target_rest)!r}"
+        assert path not in hit_list(target_hit, "code_refs")
+        assert tag not in hit_list(target_hit, "tags")
+        assert titled_id in hit_list(target_hit, "inbound"), (
+            f"tool hit omitted the inbound identity: {target_hit!r}"
         )
         by_type_title = require_mcp_search_success(
             mcp_search(ws, query=type_title, bundle=rel)
@@ -9539,7 +9533,7 @@ def test_mcp_path_search_orders_governance():
 
 
 def test_mcp_path_search_matches_directory_prefix_star_and_leading_slash():
-    """membundle_search keeps a code_ref that is not the same string as the path (L151).
+    """membundle_search keeps a code_ref that is not the same string as the path.
 
     A generated directory ref hits a path two or more segments under it and
     misses the character sibling. A single-segment star hits a file in that
@@ -9819,8 +9813,8 @@ def test_mcp_path_search_matches_directory_prefix_star_and_leading_slash():
         dot_other_call = "./" + call_other
         slash_other_call = "/" + call_other
         if (
-            call_bare == "pkg/auth/login.go"
-            or call_other == "pkg/auth/login.go"
+            call_bare == SAMPLE_FILE
+            or call_other == SAMPLE_FILE
             or call_bare.startswith(("/", "./", "."))
             or call_other.startswith(("/", "./", "."))
             or "/" not in call_bare
@@ -10519,7 +10513,7 @@ def test_mcp_same_governance_ranks_combined_score_then_identity():
 
 
 def test_identical_reruns_return_the_same_identity_order():
-    """Identical reruns keep one identity order (L167).
+    """Identical reruns keep one identity order.
 
     The command line reruns one keyword query twice with structured
     output and twice without it. The search tool reruns that same

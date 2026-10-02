@@ -10,7 +10,7 @@ from F01_helpers import (
     assert_fired,
     assert_only_rule,
     fresh_ident,
-    require_copy_success,
+    require_copied_layout,
     snippet_no_array_filter_map,
     snippet_no_conditional_empty_object_spread,
     snippet_no_reduce_accumulator_copy,
@@ -90,7 +90,7 @@ RULE_SPR = "no-conditional-empty-object-spread"
 def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
-        specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
         print(f"F02 copied specifier={specifier}", flush=True)
         yield ws, specifier
 

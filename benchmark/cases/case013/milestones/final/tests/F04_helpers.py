@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,62 +32,54 @@ from _harness import (
 )
 from F01_helpers import (
     combined_report,
-    report_remainder_after_stripping_paths,
     split_yaml_frontmatter,
-    strip_generated_covariates,
     unique_leaf,
 )
 from F03_helpers import (
-    _normalized_remainder,
     concept_spec,
     mcp_is_protocol_error,
     mcp_is_tool_error,
-    mcp_payload_and_text,
     mcp_reply_for_id,
-    record_string_values,
     render_concept_markdown,
     snapshot_tree,
     unique_tokens,
     write_bundle,
 )
 
-# Wrapping punctuation around a human governance badge. Local to this
-# module so F04 does not close over F03's private _WRAP_PUNCT name.
-_SEARCH_WRAP_PUNCT = re.compile(r"[\"'`\[\]\(\)\{\}<>]+")
-
-_DIGITS = re.compile(r"\d+")
-_STATEMENT_TOKEN = re.compile(r"[a-z0-9]+")
-# A denial that a match occurred. The sentence is not frozen: any of these
-# tokens, next to a match-outcome token, states that nothing matched.
-# "No matching concepts found" and "nothing matched" both qualify; a
-# greeting or a status word does not.
-_MISS_NEGATION = frozenset({
-    "no",
-    "not",
-    "none",
-    "nothing",
-    "empty",
-    "zero",
-    "without",
-    "unmatched",
-    "nomatch",
-    "neither",
-    "nil",
-    "absent",
-})
-_MISS_OUTCOME_PREFIXES = ("match", "hit", "result", "found", "concept", "return")
-
 # Keyword fields a hit may name. The path channel is not a member of this set.
 MATCHED_FIELD_SET = frozenset({"title", "tags", "description", "id", "body"})
-# The path-hit channel the specification names. Presence after the concept's
-# own texts are stripped is the report; it is not a keyword-field member, and
-# the remainder does not have to equal this token alone.
+# The path-hit channel token.
 CODE_REF_MATCH_CHANNEL = "code_refs"
-# Whole words a hit uses to name a matched field. Fixture text must not
-# already contain these words, or the report cannot be told from the plant.
-_NAMED_MATCH_WORD = re.compile(
-    r"(?<![\w])(title|tags|description|id|body|code_refs)(?![\w])"
+# The six matched-field tokens of ``matched_on`` and the human ``Matches:`` line.
+HIT_MATCH_TOKENS = MATCHED_FIELD_SET | {CODE_REF_MATCH_CHANNEL}
+
+# Human ``search`` output forms.
+_HUMAN_HIT_LINE = re.compile(
+    r"^ *(\d+)\. +\[(constraint|hold|context)\] +\[([^\]]*)\] +(\S.*)$"
 )
+
+
+def _is_zero_hit_report(lines: list[str]) -> bool:
+    """Contract Output forms, ``search`` (human): zero hits is exactly one
+    non-empty line (wording free) that does not have the form of a block's
+    first line."""
+    return (
+        len(lines) == 2
+        and lines[1] == ""
+        and lines[0].strip() != ""
+        and _HUMAN_HIT_LINE.match(lines[0]) is None
+    )
+_HUMAN_INDENT = "    "
+_HUMAN_MATCHES = "    Matches: "
+
+# Command-line failure classes of ``search``.
+USAGE_FAILURE_STATUS = 1
+USAGE_LITERAL = "Usage:"
+LOAD_FAILURE_STATUS = 2
+LOAD_FAILURE_PREFIX = "Error loading bundle: "
+# Tool-level failure text when a named bundle cannot be loaded.
+TOOL_LOAD_FAILURE_PREFIX = "Failed to load bundle from "
+
 GOVERNANCE_TOKENS = frozenset({"hold", "constraint", "context"})
 
 # Recipe artifact name. The binary is built in a writable copy, not the judge cwd.
@@ -100,12 +93,10 @@ _NEVER_EXECUTED = (
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -219,7 +210,7 @@ def resolve_search_binary() -> Path:
     pass on an empty workspace.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so search never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it search never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -228,7 +219,7 @@ def _raise_if_search_binary_missing(binary: Path, exc: FileNotFoundError) -> NoR
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F04): upstream _harness.py:620 shows FileNotFoundError before search when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F04): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -490,7 +481,7 @@ def require_non_ascii_letters_then_ascii_tail(title: str, tail: str) -> str:
 
 
 # One non-ASCII letter. Greek alpha is a letter and not a digit, so a
-# term keeps it. It is not the public-sample head and not the cased
+# term keeps it. It is not the fixed-sample head and not the cased
 # Cyrillic letter already used for case folding.
 _NON_ASCII_TERM_LETTER = "\u03b1"
 
@@ -868,19 +859,46 @@ class DeepDirectoryPrefixProbe:
     segments_under: int
 
 
-# The only directory-prefix pair the public samples use. A probe that
+def _gen_hex(n: int = 6) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    return uuid.uuid4().hex[:n]
+
+
+# Generated per test process; the documents carry none of these values.
+# A two-level directory, a character-sibling of it that is not a directory
+# boundary, a ``.go`` file under each, and a bare ``.go`` file name.
+SAMPLE_TOP_DIR = f"p{_gen_hex(6)}"
+SAMPLE_PREFIX_DIR = f"{SAMPLE_TOP_DIR}/a{_gen_hex(5)}"
+SAMPLE_SIBLING_DIR = f"{SAMPLE_PREFIX_DIR}x{_gen_hex(5)}"
+SAMPLE_FILE = f"{SAMPLE_PREFIX_DIR}/l{_gen_hex(5)}.go"
+SAMPLE_SIBLING_FILE = f"{SAMPLE_SIBLING_DIR}/x.go"
+SAMPLE_BARE_GO = f"f{_gen_hex(6)}.go"
+SAMPLE_NESTED_DIR = f"{SAMPLE_TOP_DIR}/m{_gen_hex(5)}"
+# A letters-plus-digit keyword term and a two-word title that starts with it.
+SAMPLE_TERM = f"Oa{_gen_hex(5)}2"
+SAMPLE_TERM_TITLE = f"{SAMPLE_TERM} P{_gen_hex(5)}"
+# A title shared by two concepts, its first word, and two identities whose
+# ascending order is fixed.
+SAMPLE_SHARED_WORD = f"S{_gen_hex(6)}"
+SAMPLE_SHARED_TITLE = f"{SAMPLE_SHARED_WORD} t{_gen_hex(5)}"
+SAMPLE_LOW_ID = f"a{_gen_hex(6)}"
+SAMPLE_HIGH_ID = f"z{_gen_hex(6)}"
+# A cap far above the 100 ceiling (never 101).
+SAMPLE_BIG_CAP = 1000 + int(_gen_hex(5), 16) % 999000
+
+# The directory-prefix strings the fixed probes use. A generated probe that
 # lands on these strings would not show that a generated directory matches.
 _PUBLIC_DIRECTORY_PREFIX_SAMPLES = (
-    "pkg/auth",
-    "pkg/authorization",
-    "pkg/auth/login.go",
-    "pkg/authorization/x.go",
+    SAMPLE_PREFIX_DIR,
+    SAMPLE_SIBLING_DIR,
+    SAMPLE_FILE,
+    SAMPLE_SIBLING_FILE,
 )
 
-# The only relative code_ref the filesystem-absolute search plants by
-# literal. A longer absolute caller that stores this string does not show
+# The relative code_ref the filesystem-absolute search plants as a fixed
+# probe. A longer absolute caller that stores this string does not show
 # that a generated relative ref matches.
-_PUBLIC_ABSOLUTE_RELATIVE_REF = "pkg/auth/login.go"
+_PUBLIC_ABSOLUTE_RELATIVE_REF = SAMPLE_FILE
 
 
 def _segments_strictly_under(directory: str, path: str) -> list[str]:
@@ -942,7 +960,7 @@ def _build_deep_directory_prefix_probe() -> DeepDirectoryPrefixProbe:
         path_under_directory,
         path_under_sibling,
     ):
-        if value in _PUBLIC_DIRECTORY_PREFIX_SAMPLES or "pkg/auth" in value:
+        if value in _PUBLIC_DIRECTORY_PREFIX_SAMPLES or SAMPLE_PREFIX_DIR in value:
             raise HarnessError(
                 f"generated directory-prefix probe collided with a public "
                 f"sample: {value!r}"
@@ -961,7 +979,7 @@ def generated_deep_directory_prefix_probe() -> DeepDirectoryPrefixProbe:
 
     The directory name is generated. The sibling ref continues that name
     without a slash. Fixture generation that cannot satisfy those
-    constraints raises; it does not return a public sample.
+    constraints raises; it does not return a fixed probe.
     """
     last_error: HarnessError | None = None
     for _ in range(8):
@@ -1457,35 +1475,82 @@ def require_core_fields(
     title: str,
     description: str,
 ) -> None:
-    """Identity, type, title, and description each appear as exact string values."""
-    values = record_string_values(record)
+    """``concept_id``, ``type``, ``title``, and ``description`` carry these values."""
+    observed = {
+        "identity": hit_field(record, "concept_id"),
+        "type": hit_field(record, "type"),
+        "title": hit_field(record, "title"),
+        "description": hit_field(record, "description"),
+    }
+    expected = {
+        "identity": identity,
+        "type": concept_type,
+        "title": title,
+        "description": description,
+    }
     print(
-        f"[F04] core fields identity={identity in values} type={concept_type in values} "
-        f"title={title in values} description={description in values}",
+        "[F04] core fields "
+        + " ".join(f"{label}={observed[label] == expected[label]}" for label in expected),
         flush=True,
     )
-    for label, expected in (
-        ("identity", identity),
-        ("type", concept_type),
-        ("title", title),
-        ("description", description),
-    ):
-        if expected not in values:
+    for label, want in expected.items():
+        if observed[label] != want:
             raise AssertionError(
-                f"structured hit has no exact {label} value {expected!r}; "
-                f"values={sorted(values)!r}"
+                f"structured hit {label} is {observed[label]!r}, not {want!r}; "
+                f"record={record!r}"
             )
 
 
-def record_values_after_stripping(
-    record: Any, tokens: Sequence[str]
-) -> set[str]:
-    """Walked string values with named covariate strings removed."""
-    values = set(record_string_values(record))
-    for tok in tokens:
-        if tok:
-            values.discard(tok)
-    return values
+def hit_field(record: Any, key: str) -> str:
+    """A string key every hit object has: concept_id, title, type, description, governance."""
+    if not isinstance(record, Mapping):
+        raise AssertionError(f"search hit is not a JSON object: {record!r}")
+    if key not in record:
+        raise AssertionError(f"search hit has no {key!r} key: {record!r}")
+    value = record[key]
+    if not isinstance(value, str):
+        raise AssertionError(
+            f"search hit {key!r} is not a string: {value!r}; record={record!r}"
+        )
+    return value
+
+
+def hit_list(record: Any, key: str) -> list[str]:
+    """An array-of-strings key that is present only when it has members.
+
+    ``code_refs``, ``tags``, ``inbound``, and ``outbound``. An absent key
+    is no members.
+    """
+    if not isinstance(record, Mapping):
+        raise AssertionError(f"search hit is not a JSON object: {record!r}")
+    if key not in record:
+        return []
+    value = record[key]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise AssertionError(
+            f"search hit {key!r} is not an array of strings: {value!r}; "
+            f"record={record!r}"
+        )
+    return list(value)
+
+
+def hit_matched_on(record: Any) -> frozenset[str]:
+    """The ``matched_on`` tokens of one hit object."""
+    if not isinstance(record, Mapping):
+        raise AssertionError(f"search hit is not a JSON object: {record!r}")
+    if "matched_on" not in record:
+        raise AssertionError(f"search hit has no 'matched_on' key: {record!r}")
+    value = record["matched_on"]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise AssertionError(
+            f"search hit 'matched_on' is not an array of strings: {value!r}"
+        )
+    unknown = sorted(set(value) - HIT_MATCH_TOKENS)
+    if unknown:
+        raise AssertionError(
+            f"search hit 'matched_on' holds tokens outside the six: {unknown!r}"
+        )
+    return frozenset(value)
 
 
 def _yaml_quote(value: str) -> str:
@@ -1504,38 +1569,12 @@ def _is_object_array(value: Any) -> bool:
     return all(isinstance(item, Mapping) for item in value)
 
 
-def json_numbers(obj: Any) -> list[float]:
-    """JSON numbers walked from *obj*, in encounter order. Booleans are not numbers."""
-    found: list[float] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, bool):
-            return
-        if isinstance(value, (int, float)):
-            found.append(float(value))
-            return
-        if isinstance(value, Mapping):
-            for item in value.values():
-                walk(item)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            for item in value:
-                walk(item)
-
-    walk(obj)
-    return found
-
-
 def record_has_json_number(obj: Any) -> bool:
-    """True when a walked JSON value contains at least one JSON number."""
-    return bool(json_numbers(obj))
-
-
-def whole_token_present(text: str, token: str) -> bool:
-    """True when *token* appears as a whole token after wrapping punctuation."""
-    cleaned = _SEARCH_WRAP_PUNCT.sub(" ", text)
-    needle = token.lower()
-    return any(part.lower() == needle for part in cleaned.split())
+    """True when the hit object's ``score`` is a JSON number."""
+    if not isinstance(obj, Mapping) or "score" not in obj:
+        return False
+    score = obj["score"]
+    return isinstance(score, (int, float)) and not isinstance(score, bool)
 
 
 def search_concept_spec(
@@ -2689,8 +2728,12 @@ def require_call_leaves_bundle_bytes_unchanged(
 
 
 def require_search_success(result: RunResult) -> str:
-    """Human success carrier: POSIX success plus non-empty combined streams."""
-    report = combined_report(result)
+    """Human success carrier: status 0 and standard output in the human form.
+
+    Returns standard output. It is either the hit blocks or the one
+    zero-hit line; anything else fails here.
+    """
+    report = result.stdout_text
     print(
         f"[F04] search-success exit={result.returncode} report_len={len(report)}",
         flush=True,
@@ -2698,11 +2741,32 @@ def require_search_success(result: RunResult) -> str:
     if result.returncode != 0:
         raise AssertionError(
             f"search did not end successfully (exit {result.returncode}); "
-            f"report={report!r}"
+            f"report={combined_report(result)!r}"
         )
-    if not report:
-        raise AssertionError("search succeeded but combined streams were empty")
+    human_search_hits(report)
     return report
+
+
+def require_search_load_failure(result: RunResult) -> str:
+    """Load failure: status 2 and a standard-error line ``Error loading bundle: ``."""
+    report = combined_report(result)
+    print(
+        f"[F04] search-load-failure exit={result.returncode} report={report!r}",
+        flush=True,
+    )
+    assert result.returncode == LOAD_FAILURE_STATUS, (
+        f"search of a bundle that cannot be loaded ended with status "
+        f"{result.returncode}, not {LOAD_FAILURE_STATUS}; report={report!r}"
+    )
+    assert _has_line_beginning(result.stderr_text, LOAD_FAILURE_PREFIX), (
+        "search of a bundle that cannot be loaded has no standard-error line "
+        f"beginning {LOAD_FAILURE_PREFIX!r}; stderr={result.stderr_text!r}"
+    )
+    return report
+
+
+def _has_line_beginning(text: str, prefix: str) -> bool:
+    return any(line.startswith(prefix) for line in text.split("\n"))
 
 
 def require_search_failure(result: RunResult) -> str:
@@ -2721,14 +2785,11 @@ def require_search_failure(result: RunResult) -> str:
 def structured_hit_records(
     parsed: Any, *, nil_slice_is_empty: bool = False
 ) -> list[Any]:
-    """Classify a parsed JSON value as an ordered hit-list sequence.
+    """A parsed JSON array of hit objects, in rank order.
 
-    A JSON array of objects is that sequence, including an empty array
-    (zero hits). A JSON object with exactly one array-of-objects value
-    is a wrapper around that sequence. JSON null is not an empty list
-    for the search tool. The command line marshals a nil result slice as
-    JSON null; only that command may pass ``nil_slice_is_empty`` so a
-    successful null payload counts as no hits. Anything else raises.
+    Zero hits is an empty array. JSON null is zero hits only on the
+    command line, which passes ``nil_slice_is_empty``; from the search
+    tool it is not a hit list. Anything else raises.
     """
     if parsed is None:
         if nil_slice_is_empty:
@@ -2743,18 +2804,8 @@ def structured_hit_records(
             "structured search output is a list that is not a list of "
             f"objects: {parsed!r}"
         )
-    if isinstance(parsed, Mapping):
-        object_arrays = [
-            value for value in parsed.values() if _is_object_array(value)
-        ]
-        if len(object_arrays) == 1:
-            return list(object_arrays[0])
-        raise HarnessError(
-            "structured search object is not a wrapper with exactly one "
-            f"array-of-objects value; parsed={parsed!r}"
-        )
     raise HarnessError(
-        "structured search output is not a hit list "
+        "structured search output is not a JSON array of hit objects "
         f"(type={type(parsed).__name__}): {parsed!r}"
     )
 
@@ -2785,22 +2836,19 @@ def hit_identities(
     records: Sequence[Any],
     expected_identities: Sequence[str],
 ) -> list[str]:
-    """Ordered fixture identities, each in exactly one record."""
+    """Ordered ``concept_id`` values; each is one of the expected, once."""
     expected = list(expected_identities)
     if not expected:
         raise HarnessError("hit_identities requires at least one expected identity")
     ordered: list[str] = []
     seen: set[str] = set()
     for index, record in enumerate(records):
-        values = record_string_values(record)
-        found = [ident for ident in expected if ident in values]
-        if len(found) != 1:
+        ident = hit_field(record, "concept_id")
+        if ident not in expected:
             raise AssertionError(
-                f"hit record {index} does not contain exactly one of the "
-                f"expected identities {expected!r}; found={found!r} "
-                f"values={sorted(values)!r}"
+                f"hit record {index} is {ident!r}, not one of the "
+                f"expected identities {expected!r}"
             )
-        ident = found[0]
         if ident in seen:
             raise AssertionError(
                 f"identity {ident!r} appears in more than one hit record"
@@ -2810,29 +2858,139 @@ def hit_identities(
     return ordered
 
 
-def human_hit_order(report: str, identities: Sequence[str]) -> list[str]:
-    """First-occurrence order of *identities* in a human report."""
-    if not report:
-        raise HarnessError("empty human report; cannot order hit identities")
-    positions: list[tuple[int, str]] = []
-    for ident in identities:
-        index = report.find(ident)
-        if index < 0:
-            raise AssertionError(
-                f"human report does not present identity {ident!r}: {report!r}"
-            )
-        positions.append((index, ident))
-    positions.sort()
-    return [ident for _index, ident in positions]
+@dataclass(frozen=True)
+class HumanHit:
+    """One human hit block: its first line, description line, and Matches line."""
+
+    rank: int
+    governance: str
+    score: str
+    named: str
+    description: str
+    matches: tuple[str, ...]
+
+    def names(self, identity: str) -> bool:
+        """True when the first line ends ``<identity> (<type>)``."""
+        return self.named.startswith(f"{identity} (") and self.named.endswith(")")
 
 
-def _reject_structured_human_report(report: str) -> None:
-    """Structured output is a separate request from the human search report."""
-    if report_is_structured_record(report):
+def human_search_hits(report: str) -> list[HumanHit]:
+    """Hit blocks of human ``search`` standard output, in rank order.
+
+    With hits: a first line, an empty line, then per hit the line
+    ``<rank>. [<governance>] [<score>] <identity> (<type>)``, a line of
+    four spaces and the description, a line of four spaces, ``Matches: ``
+    and the matched-field tokens joined by ``, ``, and an empty line.
+    With zero hits: exactly one non-empty line that is not a hit-block
+    first line, which is an empty list. Any other text fails.
+    """
+    if not isinstance(report, str):
+        raise HarnessError("human search report is not text")
+    lines = report.split("\n")
+    if _is_zero_hit_report(lines):
+        return []
+    if len(lines) < 2 or lines[0] == "" or lines[1] != "":
         raise AssertionError(
-            "search without structured output returned a structured record "
-            f"instead of human hits: {report!r}"
+            "human search output is neither hit blocks after a first line "
+            f"and an empty line, nor the zero-hit line; report={report!r}"
         )
+    hits: list[HumanHit] = []
+    at = 2
+    while at < len(lines) and lines[at] != "":
+        block = lines[at : at + 4]
+        head = _HUMAN_HIT_LINE.match(block[0])
+        if head is None:
+            raise AssertionError(
+                "human hit line is not "
+                "'<rank>. [<governance>] [<score>] <identity> (<type>)': "
+                f"{block[0]!r}; report={report!r}"
+            )
+        if len(block) < 4 or block[3] != "":
+            raise AssertionError(
+                "human hit block is not three lines followed by an empty "
+                f"line: {block!r}; report={report!r}"
+            )
+        rank = int(head.group(1))
+        if rank != len(hits) + 1:
+            raise AssertionError(
+                f"human hit rank {rank} is not the 1-based position "
+                f"{len(hits) + 1}; report={report!r}"
+            )
+        named = head.group(4)
+        if " (" not in named or not named.endswith(")"):
+            raise AssertionError(
+                f"human hit line does not end '<identity> (<type>)': {block[0]!r}"
+            )
+        if not block[1].startswith(_HUMAN_INDENT):
+            raise AssertionError(
+                f"human hit description line does not begin with four spaces: "
+                f"{block[1]!r}; report={report!r}"
+            )
+        if not block[2].startswith(_HUMAN_MATCHES):
+            raise AssertionError(
+                f"human hit has no '    Matches: ' line: {block[2]!r}; "
+                f"report={report!r}"
+            )
+        listed = block[2][len(_HUMAN_MATCHES) :]
+        matches = tuple(listed.split(", ")) if listed else ()
+        unknown = sorted(set(matches) - HIT_MATCH_TOKENS)
+        if unknown:
+            raise AssertionError(
+                f"human Matches line holds tokens outside the six: {unknown!r}; "
+                f"line={block[2]!r}"
+            )
+        hits.append(
+            HumanHit(
+                rank=rank,
+                governance=head.group(2),
+                score=head.group(3),
+                named=named,
+                description=block[1][len(_HUMAN_INDENT) :],
+                matches=matches,
+            )
+        )
+        at += 4
+    if not hits:
+        raise AssertionError(
+            f"human search output has no hit block; report={report!r}"
+        )
+    if any(line != "" for line in lines[at:]):
+        raise AssertionError(
+            f"human search output has text after its hit blocks: {lines[at:]!r}"
+        )
+    return hits
+
+
+def human_hit_for(report: str, identity: str) -> HumanHit:
+    """The one human hit block whose first line names *identity*."""
+    if not identity:
+        raise HarnessError("human hit lookup needs an identity")
+    found = [hit for hit in human_search_hits(report) if hit.names(identity)]
+    if len(found) != 1:
+        raise AssertionError(
+            f"expected exactly one human hit for {identity!r}, found "
+            f"{len(found)}; report={report!r}"
+        )
+    return found[0]
+
+
+def human_names_identity(report: str, identity: str) -> bool:
+    """True when some human hit block names *identity*."""
+    return any(hit.names(identity) for hit in human_search_hits(report))
+
+
+def require_human_identity_absent(report: str, identity: str) -> None:
+    """No human hit block names *identity*."""
+    if not identity:
+        raise HarnessError("human identity absence needs an identity")
+    assert not human_names_identity(report, identity), (
+        f"human report presents {identity!r} as a hit; report={report!r}"
+    )
+
+
+def human_hit_order(report: str, identities: Sequence[str]) -> list[str]:
+    """Order of *identities* over the human hit blocks."""
+    return _human_badge_span_identity_order(report, identities)
 
 
 def _identities_do_not_overlap(identities: Sequence[str]) -> None:
@@ -2854,15 +3012,11 @@ def require_human_identity_prefix(
     kept: Sequence[str],
     withheld: Sequence[str],
 ) -> list[str]:
-    """Human hits inside governance-badge spans are *kept*, in that order.
+    """Human hit blocks name *kept*, in that order, and none of *withheld*.
 
     The report is the search command when structured output was not
-    requested. Order is the concept identities inside successive
-    governance-badge spans, not the first time each identity appears
-    anywhere in the report. A kept identity that appears only outside
-    those spans is not a position. A withheld identity inside a span,
-    or anywhere else in the report, means the cap did not apply. A
-    JSON record is not this human list.
+    requested. Order is the order of the hit blocks. A withheld identity
+    named by a block means the cap did not apply.
     """
     kept_list = list(kept)
     withheld_list = list(withheld)
@@ -2876,34 +3030,31 @@ def require_human_identity_prefix(
             "human identity prefix needs at least one withheld identity"
         )
     _identities_do_not_overlap(kept_list + withheld_list)
-    _reject_structured_human_report(report)
     ordered = concept_identity_order(report, kept_list, form="human")
     assert ordered == kept_list, (
-        f"human badge-span order {ordered!r} != ranked prefix {kept_list!r}"
+        f"human hit order {ordered!r} != ranked prefix {kept_list!r}"
     )
     for ident in withheld_list:
-        assert ident not in report, (
+        assert not human_names_identity(report, ident), (
             f"human report presents {ident!r} beyond the requested cap; "
             f"report={report!r}"
         )
     print(
-        f"[F04] human badge-span prefix={ordered!r} withheld={len(withheld_list)}",
+        f"[F04] human hit prefix={ordered!r} withheld={len(withheld_list)}",
         flush=True,
     )
     return ordered
 
 
 def require_human_identity_present(report: str, identity: str) -> None:
-    """*identity* appears on a non-structured search report.
+    """A human hit block names *identity*.
 
     Used as the live baseline that more hits than the cap are presented
-    when that cap is not requested. An empty report or a JSON record
-    is not that baseline.
+    when that cap is not requested.
     """
     if not identity:
         raise HarnessError("human identity presence needs an identity")
-    _reject_structured_human_report(report)
-    assert identity in report, (
+    assert human_names_identity(report, identity), (
         f"human report does not present identity {identity!r}: {report!r}"
     )
     print(f"[F04] human presents {identity!r}", flush=True)
@@ -2914,13 +3065,10 @@ def require_human_ranked_prefix(
     kept: Sequence[str],
     withheld: Sequence[str],
 ) -> list[str]:
-    """Human hits inside governance-badge spans are *kept*, in that order.
+    """Human hit blocks name *kept*, in that order, and none of *withheld*.
 
-    The order is the concept identities inside successive badge spans, not
-    the first time each identity appears anywhere in the report. A later
-    identity that also appears means the cap did not apply. A JSON record
-    is not this list. An identity that is missing from the spans is not
-    a shorter legal prefix.
+    A later identity that is also named means the cap did not apply. An
+    identity that no block names is not a shorter legal prefix.
     """
     kept_list = list(kept)
     withheld_list = list(withheld)
@@ -2934,10 +3082,10 @@ def require_human_ranked_prefix(
     _identities_do_not_overlap(kept_list + withheld_list)
     ordered = concept_identity_order(report, kept_list, form="human")
     assert ordered == kept_list, (
-        f"human badge-span order {ordered!r} != ranked prefix {kept_list!r}"
+        f"human hit order {ordered!r} != ranked prefix {kept_list!r}"
     )
     for ident in withheld_list:
-        assert ident not in report, (
+        assert not human_names_identity(report, ident), (
             f"human report presents {ident!r} beyond the cap"
         )
     print(
@@ -2951,17 +3099,13 @@ def matched_field_tokens(
     record: Any,
     stripped_texts: Sequence[str],
 ) -> frozenset[str]:
-    """Matched-field set members remaining after stripping fixture texts.
+    """Keyword members of the hit's ``matched_on`` tokens.
 
-    Keeping only members of the set is the observation, not a verdict.
-    A hit that names an extra member of that set still returns it.
+    Keeping only title, tags, description, id, and body is the
+    observation, not a verdict. *stripped_texts* is unused: the tokens
+    are read from ``matched_on``.
     """
-    values = set(record_string_values(record))
-    for text in stripped_texts:
-        if not text:
-            continue
-        values.discard(text)
-    remaining = frozenset(value for value in values if value in MATCHED_FIELD_SET)
+    remaining = frozenset(hit_matched_on(record) & MATCHED_FIELD_SET)
     print(f"[F04] matched-field tokens={sorted(remaining)}", flush=True)
     return remaining
 
@@ -2995,18 +3139,9 @@ def assert_matched_keyword_fields(
 
 
 def code_ref_match_reported(record: Any, stripped_texts: Sequence[str]) -> bool:
-    """True when a path hit still names the code-ref channel after field texts go.
-
-    Keyword tokens stay in ``MATCHED_FIELD_SET``. This channel is not added
-    to that set, and other leftover values may remain beside it.
-    """
-    values = record_values_after_stripping(record, stripped_texts)
-    reported = CODE_REF_MATCH_CHANNEL in values
-    print(
-        f"[F04] code-ref channel present={reported} "
-        f"remainder_size={len(values)}",
-        flush=True,
-    )
+    """True when the hit's ``matched_on`` tokens include ``code_refs``."""
+    reported = CODE_REF_MATCH_CHANNEL in hit_matched_on(record)
+    print(f"[F04] code-ref channel present={reported}", flush=True)
     return reported
 
 
@@ -3032,74 +3167,6 @@ def assert_path_hit_reports(
     return tokens
 
 
-def _reject_field_words_in_fixture(texts: Sequence[str]) -> None:
-    """Fixture strings must not already be the words a hit uses to name fields."""
-    for text in texts:
-        if not text:
-            continue
-        hit = _NAMED_MATCH_WORD.search(text)
-        if hit:
-            raise HarnessError(
-                "fixture text already contains the matched-field word "
-                f"{hit.group(1)!r}, so a hit report cannot be read from it: "
-                f"{text!r}"
-            )
-
-
-def _human_badge_span_containing(
-    report: str,
-    identity: str,
-    cohort: Sequence[str],
-) -> str:
-    """Governance-badge span that contains *identity* and no other cohort identity.
-
-    The span starts after the badge word and runs until the next badge.
-    A report that is empty, structured, or missing a badge raises. A span
-    that holds two cohort identities does not name one hit.
-    """
-    if not isinstance(report, str) or not report.strip():
-        raise HarnessError("empty human report; cannot read a path hit")
-    if not identity:
-        raise HarnessError("human path hit needs an identity")
-    cohort_list = list(cohort)
-    if identity not in cohort_list:
-        raise HarnessError(
-            f"path-hit identity {identity!r} is not in the cohort {cohort_list!r}"
-        )
-    _identities_do_not_overlap(cohort_list)
-    _reject_structured_human_report(report)
-    marks = list(_GOVERNANCE_BADGE.finditer(report))
-    if not marks:
-        raise AssertionError(
-            "human report has no governance-badge hit span; "
-            f"report={report!r}"
-        )
-    found: str | None = None
-    for index, mark in enumerate(marks):
-        span_end = marks[index + 1].start() if index + 1 < len(marks) else len(report)
-        span = report[mark.end() : span_end]
-        located = [item for item in cohort_list if item in span]
-        if identity not in located:
-            continue
-        if located != [identity]:
-            raise AssertionError(
-                "governance-badge span does not identify one path hit; "
-                f"identity={identity!r} found={located!r} span={span!r}"
-            )
-        if found is not None:
-            raise AssertionError(
-                f"identity {identity!r} is inside more than one "
-                "governance-badge span"
-            )
-        found = span
-    if found is None:
-        raise AssertionError(
-            f"human path hit {identity!r} is not inside a governance-badge "
-            f"span; report={report!r}"
-        )
-    return found
-
-
 def assert_human_path_hit_reports(
     report: str,
     identity: str,
@@ -3110,14 +3177,11 @@ def assert_human_path_hit_reports(
 ) -> frozenset[str]:
     """A human path hit names code_refs and exactly the keyword fields that matched.
 
-    The hit is the governance-badge span that contains *identity*. Whole
-    words in that span, from title, tags, description, id, body, and
-    code_refs, are the names the hit reports. *keyword_fields* is empty
-    when no keyword member matched. A member that matched and is absent
-    fails. A member that did not match and is present fails. A path hit
-    that does not name code_refs fails the same way. Fixture texts that
-    already contain those words fail closed, because the span would then
-    be naming the plant rather than the hit.
+    The hit is the block whose first line names *identity*; its
+    ``Matches:`` line lists the tokens. *keyword_fields* is empty when no
+    keyword member matched. A member that matched and is absent fails. A
+    member that did not match and is present fails. A path hit that does
+    not list code_refs fails the same way.
     """
     expected = frozenset(keyword_fields)
     unknown = expected - MATCHED_FIELD_SET
@@ -3126,9 +3190,12 @@ def assert_human_path_hit_reports(
             "expected human keyword fields are outside the keyword set: "
             f"{sorted(unknown)!r}"
         )
-    _reject_field_words_in_fixture([identity, *cohort, *strip_texts])
-    span = _human_badge_span_containing(report, identity, cohort)
-    found = frozenset(_NAMED_MATCH_WORD.findall(span))
+    if identity not in list(cohort):
+        raise HarnessError(
+            f"path-hit identity {identity!r} is not in the cohort {list(cohort)!r}"
+        )
+    hit = human_hit_for(report, identity)
+    found = frozenset(hit.matches)
     keywords = found - {CODE_REF_MATCH_CHANNEL}
     print(
         f"[F04] human path hit {identity!r} names={sorted(found)}",
@@ -3137,13 +3204,13 @@ def assert_human_path_hit_reports(
     if CODE_REF_MATCH_CHANNEL not in found:
         raise AssertionError(
             "human path hit does not name code_refs; "
-            f"identity={identity!r} span={span!r}"
+            f"identity={identity!r} matches={hit.matches!r}"
         )
     if keywords != expected:
         raise AssertionError(
             f"human path hit keyword fields {sorted(keywords)!r} "
             f"are not exactly {sorted(expected)!r}; "
-            f"identity={identity!r} span={span!r}"
+            f"identity={identity!r} matches={hit.matches!r}"
         )
     return keywords
 
@@ -3153,20 +3220,14 @@ def assert_single_effective_governance(
     expected: str,
     strip_tokens: Sequence[str],
 ) -> None:
-    """One governance word remains after the concept's own texts are removed.
-
-    Field name is not required. A hit that still carries more than one of
-    hold, constraint, and context, including the raw declared spelling beside
-    the lowercase word, does not pass.
-    """
+    """The hit's ``governance`` is *expected*."""
     if expected not in GOVERNANCE_TOKENS:
         raise HarnessError(f"expected governance is not one of the three words: {expected!r}")
-    values = record_values_after_stripping(record, strip_tokens)
-    found = sorted(value for value in values if value.lower() in GOVERNANCE_TOKENS)
-    print(f"[F04] effective governance values={found!r} expected={expected!r}", flush=True)
-    assert found == [expected], (
-        f"structured hit does not carry exactly the effective governance "
-        f"{expected!r} after its own field texts are removed; found={found!r}"
+    found = hit_field(record, "governance")
+    print(f"[F04] effective governance value={found!r} expected={expected!r}", flush=True)
+    assert found == expected, (
+        f"structured hit governance is {found!r}, not the effective "
+        f"governance {expected!r}"
     )
 
 
@@ -3175,41 +3236,25 @@ def assert_lowercase_effective_governance(
     expected: str,
     strip_tokens: Sequence[str],
 ) -> None:
-    """The lowercase governance word is on the hit; other casings may remain.
+    """The hit's ``governance`` is the lowercase word *expected*.
 
     Declared values are compared case-insensitively and the effective
-    value is the lowercase word. A different governance word fails. The
-    spelling written in the file is not required to be absent, so
-    ``HOLD`` or ``Hold`` beside ``hold`` still passes. ``HOLD`` or
-    ``Hold`` alone does not, because the effective value is missing.
+    value is the lowercase word. ``HOLD`` or ``Hold`` in that key fails,
+    and so does a different governance word.
     """
     if expected not in GOVERNANCE_TOKENS:
         raise HarnessError(
             f"expected governance is not one of the three words: {expected!r}"
         )
-    for tok in strip_tokens:
-        if isinstance(tok, str) and tok.lower() in GOVERNANCE_TOKENS:
-            raise HarnessError(
-                "strip token casefolds to a governance word, so the "
-                f"effective value cannot be read: {tok!r}"
-            )
-    values = record_values_after_stripping(record, strip_tokens)
-    found = sorted(
-        value for value in values if value.lower() in GOVERNANCE_TOKENS
-    )
-    folded = {value.lower() for value in found}
+    found = hit_field(record, "governance")
     print(
-        f"[F04] lowercase effective governance values={found!r} "
+        f"[F04] lowercase effective governance value={found!r} "
         f"expected={expected!r}",
         flush=True,
     )
-    assert expected in found, (
-        f"structured hit does not carry the lowercase effective governance "
-        f"{expected!r}; found={found!r}"
-    )
-    assert folded == {expected}, (
-        f"structured hit carries a governance word other than {expected!r}; "
-        f"found={found!r}"
+    assert found == expected, (
+        f"structured hit governance is {found!r}, not the lowercase "
+        f"effective governance {expected!r}"
     )
 
 
@@ -3245,67 +3290,17 @@ def assert_folded_declared_governance(
     assert_lowercase_effective_governance(record, effective, strip_tokens)
 
 
-def hit_prefix_remainder(
-    report: str,
-    identity: str,
-    previous_identity: str | None,
-    strip_tokens: Sequence[str],
-) -> str:
-    """Text from the previous identity (or start) up to *identity*, stripped."""
-    if identity not in report:
-        raise HarnessError(
-            f"identity {identity!r} is absent from the human report; "
-            f"cannot take a prefix remainder: {report!r}"
-        )
-    start = 0
-    if previous_identity is not None:
-        prev_at = report.find(previous_identity)
-        if prev_at < 0:
-            raise HarnessError(
-                f"previous identity {previous_identity!r} is absent from "
-                f"the human report; cannot slice a prefix: {report!r}"
-            )
-        start = prev_at + len(previous_identity)
-    end = report.find(identity, start)
-    if end < 0:
-        raise HarnessError(
-            f"identity {identity!r} does not occur after previous identity "
-            f"{previous_identity!r}: {report!r}"
-        )
-    text = report[start:end]
-    for tok in sorted({item for item in strip_tokens if item}, key=len, reverse=True):
-        text = text.replace(tok, "")
-    text = _DIGITS.sub("", text)
-    return text
-
-
-def _reject_printed_live_concepts(
-    report: str, live_identities: Sequence[str]
-) -> None:
-    """Human zero-hit text that still prints a live concept is not a miss."""
-    printed = [ident for ident in live_identities if ident and ident in report]
-    if printed:
-        raise AssertionError(
-            "human zero-hit report prints the live concept "
-            f"{printed!r}; printing the concept is not a statement that "
-            f"nothing matched; report={report!r}"
-        )
-
-
 def require_zero_hits_success(
     result: RunResult,
     *,
     structured: bool,
     live_identities: Sequence[str] = (),
 ) -> str:
-    """Zero-hit success: a successful empty hit list, or human text that misses.
+    """Zero-hit success: an empty hit list, or the human zero-hit line.
 
-    On the human path, *live_identities* are used: printing one of those
-    concepts fails. A successful command whose structured payload is JSON
-    null has no hits: that command marshals a nil slice that way. A
-    non-empty list still fails. Ancillary text around that structured
-    payload is not required to omit the identity. The search tool does
-    not use this allowance.
+    Structured: status 0 and ``[]`` or ``null`` on standard output. Human:
+    status 0 and standard output is the one zero-hit line (exactly one
+    non-empty line, not a hit-block line). Returns standard output.
     """
     if structured:
         records = require_search_structured_success(result)
@@ -3314,10 +3309,10 @@ def require_zero_hits_success(
                 f"zero-hit structured search returned {len(records)} hits: "
                 f"{records!r}"
             )
-        report = combined_report(result)
+        report = result.stdout_text
     else:
         report = require_search_success(result)
-        _reject_printed_live_concepts(report, live_identities)
+        require_human_zero_hit_line(report)
     print(
         f"[F04] zero-hit success structured={structured} "
         f"identities={list(live_identities)!r} report_len={len(report)}",
@@ -3326,94 +3321,17 @@ def require_zero_hits_success(
     return report
 
 
-def human_search_class_remainder(
-    report: str,
-    path_tokens: Sequence[str],
-    fixture_tokens: Sequence[str],
-) -> str:
-    """Human-report remainder after paths, generated covariates, and fixture tokens.
-
-    Empty *report* cannot be classified (Rule 1). Fixture tokens are the
-    live identity, type, title, description, body, and the queries — the
-    covariates that necessarily differ between a hit and a miss.
-    """
-    if not report:
-        raise HarnessError(
-            "empty human report; cannot compute a search-class remainder"
-        )
-    text = usage_class_remainder(report, path_tokens)
-    for tok in sorted({item for item in fixture_tokens if item}, key=len, reverse=True):
-        text = text.replace(tok, "")
-    return _normalized_remainder(text)
-
-
-def _miss_class_tokens(fixture_tokens: Sequence[str]) -> list[str]:
-    """Fixture covariates plus governance badge words, which a live hit carries."""
-    return [item for item in fixture_tokens if item] + [
-        "constraint",
-        "hold",
-        "context",
-    ]
-
-
-def _statement_tokens(text: str) -> set[str]:
-    """Alphanumeric tokens, with contracted negation unfolded. Drops 1-letter noise."""
-    folded = text.lower().replace("n't", " not ")
-    return {tok for tok in _STATEMENT_TOKEN.findall(folded) if len(tok) > 1}
-
-
-def _token_is_match_outcome(token: str) -> bool:
-    if token in {"unmatched", "nomatch"}:
-        return True
-    return token.startswith(_MISS_OUTCOME_PREFIXES)
-
-
-def _denial_marks(text: str) -> set[tuple[str, ...]]:
-    """Ways *text* denies a match: negation words and denial-outcome pairs.
-
-    A mark is ``("neg", word)`` for each negation word, or
-    ``("pair", denial, outcome)`` when a negation word or a literal zero
-    count sits right next to a match-outcome token. Read before digit
-    stripping, so a zero count is still visible.
-    """
-    folded = text.lower().replace("n't", " not ")
-    tokens = _STATEMENT_TOKEN.findall(folded)
-    marks: set[tuple[str, ...]] = set()
-    for index, token in enumerate(tokens):
-        is_zero = token.strip("0") == ""
-        if token in _MISS_NEGATION:
-            marks.add(("neg", token))
-        elif not is_zero:
-            continue
-        denial = "0" if is_zero else token
-        for other in (index - 1, index + 1):
-            if 0 <= other < len(tokens) and _token_is_match_outcome(tokens[other]):
-                marks.add(("pair", denial, tokens[other]))
-    return marks
-
-
-def _remainder_states_nothing_matched(
-    zero_before_digits: str,
-    zero_tokens: set[str],
-    live_before_digits: str,
-) -> bool:
-    """True when stripped zero-hit text states a miss the live hit does not.
-
-    The exact sentence is not fixed, and a live hit may carry no words of its
-    own once its concept fields, badge, paths, and digits are stripped (a
-    bare ``[badge] identity`` line is a legal hit). The zero-hit text states
-    that nothing matched when it carries a match-outcome token and a denial
-    mark the live-hit report lacks: a negation word the live report does not
-    use, or a negation word or zero count right next to a match-outcome token
-    in a pairing the live report does not contain. A denial shared with the
-    live report, such as a constant header, a greeting, or a status word, is
-    not that statement.
-    """
-    outcomes = {token for token in zero_tokens if _token_is_match_outcome(token)}
-    if not outcomes:
-        return False
-    fresh = _denial_marks(zero_before_digits) - _denial_marks(live_before_digits)
-    return bool(fresh)
+def require_human_zero_hit_line(report: str) -> str:
+    """*report* is the one zero-hit line: exactly one non-empty line that is
+    not a hit-block first line (Contract Output forms, ``search`` human)."""
+    if not isinstance(report, str):
+        raise HarnessError("human zero-hit report is not text")
+    lines = report.split("\n")
+    assert _is_zero_hit_report(lines), (
+        "human zero-hit output is not exactly one non-empty line that is "
+        f"not a hit block; report={report!r}"
+    )
+    return lines[0]
 
 
 def assert_human_zero_hit_miss_statement(
@@ -3423,56 +3341,22 @@ def assert_human_zero_hit_miss_statement(
     fixture_tokens: Sequence[str],
     live_identities: Sequence[str] = (),
 ) -> tuple[str, str]:
-    """Human zero-hit text states that nothing matched, and does not print the concept.
+    """Human zero-hit output is the zero-hit line; the live report has hit blocks.
 
-    Paths, generated covariates, queries, live concept fields, governance
-    badge words, and digits are stripped from both reports. The zero-hit
-    remainder must be non-empty, must differ from the live-hit remainder,
-    and must deny a match in a way the live-hit report does not: a new
-    negation word, or a negation or zero count next to a match-outcome
-    token in a new pairing (see ``_remainder_states_nothing_matched``).
-    The live hit itself may leave no words after that strip.
-    *live_identities* are read on the raw report, before that strip, so
-    printing the concept fails. Does not freeze one sentence or which
-    stream carries it.
+    *zero_report* is the one zero-hit line. *live_hit_report* is the contrast on the same bundle and
+    holds at least one hit block. The wording of the zero-hit line is not read.
     """
-    _reject_printed_live_concepts(zero_report, live_identities)
-    assert zero_report.strip(), (
-        "human zero-hit report is empty; it does not state that nothing matched"
-    )
-    extras = _miss_class_tokens(fixture_tokens)
-    zero_before = _normalized_remainder(
-        human_search_class_remainder(zero_report, path_tokens, extras)
-    )
-    live_before = _normalized_remainder(
-        human_search_class_remainder(live_hit_report, path_tokens, extras)
-    )
-    zero_rem = _normalized_remainder(_DIGITS.sub("", zero_before))
-    live_rem = _normalized_remainder(_DIGITS.sub("", live_before))
-    zero_tokens = _statement_tokens(zero_rem)
-    live_tokens = _statement_tokens(live_rem)
+    line = require_human_zero_hit_line(zero_report)
+    live_hits = human_search_hits(live_hit_report)
     print(
-        f"[F04] human zero-hit remainder={zero_rem!r} live-hit remainder={live_rem!r} "
-        f"zero_tokens={sorted(zero_tokens)} live_tokens={sorted(live_tokens)}",
+        f"[F04] human zero-hit line={line!r} live hits={len(live_hits)}",
         flush=True,
     )
-    assert zero_rem, (
-        "human zero-hit report is empty after stripping queries, paths, "
-        "live concept fields, and governance badges; it does not state "
-        "that nothing matched"
+    assert live_hits, (
+        "the live-hit contrast is itself a zero-hit report; "
+        f"report={live_hit_report!r}"
     )
-    assert zero_rem != live_rem, (
-        "human zero-hit remainder is not distinguishable from a live hit "
-        "after stripping queries, paths, live concept fields, and "
-        f"governance badges; remainder={zero_rem!r}"
-    )
-    assert _remainder_states_nothing_matched(zero_before, zero_tokens, live_before), (
-        "human zero-hit text does not state that nothing matched after "
-        "stripping paths, the live concept, the query, governance words, "
-        "and digits; a greeting, a status line, or a denial the live-hit "
-        f"report also carries does not; zero={zero_rem!r} live={live_rem!r}"
-    )
-    return zero_rem, live_rem
+    return line, live_hit_report
 
 
 def require_unmatched_path_filter_is_miss(
@@ -3533,31 +3417,6 @@ def require_unmatched_path_filter_is_miss(
     )
 
 
-def usage_class_remainder(report: str, path_tokens: Sequence[str]) -> str:
-    """Strip paths and generated covariates from a usage/load/zero-hit report."""
-    if not report:
-        raise HarnessError("empty report; cannot compute a usage-class remainder")
-    return report_remainder_after_stripping_paths(
-        strip_generated_covariates(report), path_tokens
-    )
-
-
-def _classified_failure_remainder(
-    report: str,
-    path_tokens: Sequence[str],
-    fixture_tokens: Sequence[str],
-) -> str:
-    """Remainder after paths, fixture tokens, governance words, and digits.
-
-    Whitespace, a bare path, or a digits-only line becomes empty. An empty
-    source report cannot be classified.
-    """
-    extras = _miss_class_tokens(fixture_tokens)
-    text = human_search_class_remainder(report, path_tokens, extras)
-    text = _DIGITS.sub("", text)
-    return _normalized_remainder(text)
-
-
 def require_search_usage_failure(
     result: RunResult,
     zero_hit_report: str,
@@ -3565,54 +3424,29 @@ def require_search_usage_failure(
     path_tokens: Sequence[str],
     fixture_tokens: Sequence[str] = (),
 ) -> str:
-    """Neither-query-nor-path: non-success usage, not a miss, not a load error.
+    """Neither-query-nor-path: status 1 and usage text carrying ``Usage:``.
 
-    After paths, fixture tokens, and digits are stripped, the usage remainder
-    stays non-empty. The zero-hit remainder and the load remainder must each
-    stay non-empty as well, so an empty baseline is not the contrast.
+    The zero-hit contrast is the zero-hit line and the missing-bundle
+    contrast carries a line beginning ``Error loading bundle: ``; the
+    usage run is neither: its status is 1, not 0 and not 2.
     """
     report = combined_report(result)
     print(
         f"[F04] usage-failure exit={result.returncode} report={report!r}",
         flush=True,
     )
-    assert result.returncode != 0, (
-        f"search with neither query nor path succeeded; report={report!r}"
+    assert result.returncode == USAGE_FAILURE_STATUS, (
+        "search with neither query nor path ended with status "
+        f"{result.returncode}, not {USAGE_FAILURE_STATUS}; report={report!r}"
     )
-    assert report, (
-        "search with neither query nor path produced empty combined streams"
+    assert USAGE_LITERAL in report, (
+        "search with neither query nor path printed no usage text "
+        f"carrying {USAGE_LITERAL!r}; report={report!r}"
     )
-    usage_rem = _classified_failure_remainder(report, path_tokens, fixture_tokens)
-    zero_rem = _classified_failure_remainder(
-        zero_hit_report, path_tokens, fixture_tokens
-    )
-    load_rem = _classified_failure_remainder(
-        load_error_report, path_tokens, fixture_tokens
-    )
-    print(
-        f"[F04] usage remainder={usage_rem!r} zero={zero_rem!r} load={load_rem!r}",
-        flush=True,
-    )
-    assert usage_rem, (
-        "neither-query-nor-path report is empty after stripping paths, "
-        "fixture tokens, and digits; whitespace, a bare path, or digits are "
-        f"not a usage report; raw={report!r}"
-    )
-    assert zero_rem, (
-        "zero-hit contrast is empty after the same strip; it does not state "
-        "that nothing matched"
-    )
-    assert load_rem, (
-        "missing-bundle contrast is empty after the same strip; it is not a "
-        "load report"
-    )
-    assert usage_rem != zero_rem, (
-        "neither-query-nor-path report is not distinguishable from a live "
-        f"zero-hit remainder on the same bundle; remainder={usage_rem!r}"
-    )
-    assert usage_rem != load_rem, (
-        "neither-query-nor-path report is the load-error class remainder; "
-        f"remainder={usage_rem!r}"
+    require_human_zero_hit_line(zero_hit_report)
+    assert _has_line_beginning(load_error_report, LOAD_FAILURE_PREFIX), (
+        "missing-bundle contrast has no line beginning "
+        f"{LOAD_FAILURE_PREFIX!r}; report={load_error_report!r}"
     )
     return report
 
@@ -3624,46 +3458,34 @@ def require_search_load_error(
     fixture_tokens: Sequence[str] = (),
     zero_hit_report: str | None = None,
 ) -> str:
-    """Load error: non-success, unlike a non-empty usage report and a miss.
+    """Load error: status 2 and a standard-error ``Error loading bundle: `` line.
 
-    An empty usage remainder is not the contrast. Digits and paths are
-    stripped before the remainders are compared.
+    The usage contrast carries ``Usage:`` and the zero-hit contrast is
+    the zero-hit line.
     """
-    report = require_search_failure(result)
-    assert report, "load-error search produced empty combined streams"
-    load_rem = _classified_failure_remainder(report, path_tokens, fixture_tokens)
-    usage_rem = _classified_failure_remainder(
-        usage_report, path_tokens, fixture_tokens
-    )
-    print(
-        f"[F04] load remainder={load_rem!r} usage remainder={usage_rem!r}",
-        flush=True,
-    )
-    assert load_rem, (
-        "load-error report is empty after stripping paths, fixture tokens, "
-        f"and digits; raw={report!r}"
-    )
-    assert usage_rem, (
-        "usage contrast is empty after the same strip; an empty baseline is "
-        "not a usage report"
-    )
-    assert load_rem != usage_rem, (
-        "load-error report is not distinguishable from usage after stripping "
-        f"paths, queries, and fixture tokens; remainder={load_rem!r}"
+    report = require_search_load_failure(result)
+    assert USAGE_LITERAL in usage_report, (
+        f"usage contrast carries no {USAGE_LITERAL!r}; report={usage_report!r}"
     )
     if zero_hit_report is not None:
-        zero_rem = _classified_failure_remainder(
-            zero_hit_report, path_tokens, fixture_tokens
-        )
-        assert zero_rem, (
-            "zero-hit contrast is empty after the same strip; it does not "
-            "state that nothing matched"
-        )
-        assert load_rem != zero_rem, (
-            "load-error report is not distinguishable from zero-hit success "
-            f"after stripping queries and fixture tokens; remainder={load_rem!r}"
-        )
+        require_human_zero_hit_line(zero_hit_report)
     return report
+
+
+def _tool_first_text(reply: Mapping[str, Any]) -> str:
+    """Text of the first content item of a tools/call result."""
+    result = reply.get("result")
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"tools/call reply has no result object: {reply!r}")
+    content = result.get("content")
+    if not isinstance(content, list) or not content:
+        raise AssertionError(f"tool result has no content items: {result!r}")
+    first = content[0]
+    if not isinstance(first, Mapping) or not isinstance(first.get("text"), str):
+        raise AssertionError(
+            f"tool result's first content item has no text: {first!r}"
+        )
+    return first["text"]
 
 
 def mcp_membundle_search(
@@ -3700,7 +3522,14 @@ def mcp_membundle_search(
     except FileNotFoundError as exc:
         _raise_if_search_binary_missing(binary, exc)
     reply = mcp_reply_for_id(batch, request_id)
-    payload, report_text = mcp_payload_and_text(reply)
+    if mcp_is_protocol_error(reply):
+        payload, report_text = None, str(reply.get("error"))
+    else:
+        report_text = _tool_first_text(reply)
+        try:
+            payload = json.loads(report_text)
+        except json.JSONDecodeError:
+            payload = None
     print(
         f"[F04] mcp reply protocol_error={mcp_is_protocol_error(reply)} "
         f"tool_error={mcp_is_tool_error(reply)} text={report_text!r}",
@@ -3735,7 +3564,7 @@ def mcp_search(
 
 
 def require_mcp_search_success(outcome: McpSearchOutcome) -> list[Any]:
-    """MCP success: not a tool/protocol error, payload is a hit list.
+    """MCP success: not a tool/protocol error; the result text is a JSON hit array.
 
     JSON null is not an empty list. A character-cut miss, a fifty-term
     miss, and the neither-query-nor-path tool call all use this rule.
@@ -3750,7 +3579,14 @@ def require_mcp_search_success(outcome: McpSearchOutcome) -> list[Any]:
             f"membundle_search marked a tool error on a successful search: "
             f"{outcome.report_text!r}"
         )
-    records = structured_hit_records(outcome.payload)
+    text = _tool_first_text(outcome.reply)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"membundle_search result text is not JSON ({exc}): {text!r}"
+        ) from exc
+    records = structured_hit_records(parsed)
     print(f"[F04] mcp hits={len(records)}", flush=True)
     return records
 
@@ -3766,38 +3602,30 @@ def require_mcp_empty_success(outcome: McpSearchOutcome) -> list[Any]:
 
 
 def require_mcp_search_load_failure(outcome: McpSearchOutcome) -> str:
-    """Missing-bundle search fails on a tool error or a protocol error.
+    """A bundle that cannot be loaded is a tool-level failure with the stated text.
 
-    This feature says the call fails as a load error and does not name
-    the channel. A tool-error result and a JSON-RPC protocol error both
-    fail the load. Any successful tools/call does not: a hit list, an
-    empty list, JSON null, and a payload that is not a hit list are all
-    success. Failing to classify that payload is not a load failure.
+    The result has ``isError`` true and the text of its first content
+    item begins ``Failed to load bundle from ``. Any successful tools/call
+    is not that failure: a hit list, an empty list, and JSON null are all
+    success.
     """
-    protocol = mcp_is_protocol_error(outcome.reply)
     tool = mcp_is_tool_error(outcome.reply)
     print(
-        f"[F04] mcp load-failure protocol_error={protocol} tool_error={tool}",
+        f"[F04] mcp load-failure protocol_error="
+        f"{mcp_is_protocol_error(outcome.reply)} tool_error={tool}",
         flush=True,
     )
-    assert protocol or tool, (
-        "membundle_search of a missing bundle returned a successful tools/call "
-        "(neither a tool error nor a protocol error); JSON null, an "
-        "unclassified object, an empty list, and a hit list are all "
-        "success, not a load failure; "
-        f"payload={outcome.payload!r} reply={outcome.reply!r}"
+    assert tool, (
+        "membundle_search of a bundle that cannot be loaded is not a "
+        "tool-level failure (isError true); "
+        f"reply={outcome.reply!r}"
     )
-    return outcome.report_text
-
-
-def _payload_text(payload: Any) -> str:
-    """Serialize a classified payload. A value that cannot be serialized raises."""
-    try:
-        return json.dumps(payload, ensure_ascii=False, default=None)
-    except (TypeError, ValueError) as exc:
-        raise HarnessError(
-            f"search payload cannot be serialized to look for a returned title: {exc}"
-        ) from exc
+    text = _tool_first_text(outcome.reply)
+    assert text.startswith(TOOL_LOAD_FAILURE_PREFIX), (
+        "membundle_search load failure text does not begin "
+        f"{TOOL_LOAD_FAILURE_PREFIX!r}: {text!r}"
+    )
+    return text
 
 
 def require_search_entry_load_refusal(
@@ -3811,10 +3639,9 @@ def require_search_entry_load_refusal(
     *entry* is ``command`` (``membundle search``) or ``tool`` (``membundle_search``).
     Returning *outside_title* as a hit is success, not a load refusal: that
     outcome fails here. A zero-hit success also fails here. The command's
-    carrier is a non-success process status. The tool's carrier is a tool
-    error or a JSON-RPC protocol error, the same load-failure classification
-    as a missing bundle. An error report may mention the title; that is not
-    a hit.
+    carrier is the load-failure class: status 2 and a standard-error line
+    beginning ``Error loading bundle: ``. The tool's carrier is a
+    tool-level failure whose text begins ``Failed to load bundle from ``.
     """
     if entry not in ("command", "tool"):
         raise HarnessError(
@@ -3826,34 +3653,13 @@ def require_search_entry_load_refusal(
         )
     if entry == "command":
         result = run_search(ws, outside_title, bundle, structured=True)
-        report = combined_report(result)
-        if result.returncode == 0 and outside_title in report:
-            raise AssertionError(
-                "search command returned the outside concept instead of "
-                "failing the load; "
-                f"title={outside_title!r} report={report!r}"
-            )
-        require_search_failure(result)
+        require_search_load_failure(result)
         print(
             f"[F04] command load refusal bundle={bundle!r} title={outside_title!r}",
             flush=True,
         )
         return
     outcome = mcp_search(ws, query=outside_title, bundle=bundle)
-    delivered = outside_title in outcome.report_text or outside_title in _payload_text(
-        outcome.payload
-    )
-    if (
-        delivered
-        and not mcp_is_protocol_error(outcome.reply)
-        and not mcp_is_tool_error(outcome.reply)
-    ):
-        raise AssertionError(
-            "membundle_search returned the outside concept instead of failing the "
-            "load; "
-            f"title={outside_title!r} payload={outcome.payload!r} "
-            f"text={outcome.report_text!r}"
-        )
     require_mcp_search_load_failure(outcome)
     print(
         f"[F04] tool load refusal bundle={bundle!r} title={outside_title!r}",
@@ -3892,7 +3698,7 @@ def _assert_no_hit_carries(
     *,
     label: str,
 ) -> None:
-    """No hit record carries any *markers* as an exact string value."""
+    """No hit's identity, type, title, or description is one of *markers*."""
     expected = list(markers)
     if not expected:
         raise HarnessError(f"{label} needs at least one outside marker")
@@ -3900,11 +3706,14 @@ def _assert_no_hit_carries(
         if not marker:
             raise HarnessError(f"{label} has an empty outside marker")
     for index, record in enumerate(records):
-        values = record_string_values(record)
+        values = [
+            hit_field(record, key)
+            for key in ("concept_id", "type", "title", "description")
+        ]
         found = [marker for marker in expected if marker in values]
         assert not found, (
             f"{label} returned the outside concept on hit {index}; "
-            f"markers={found!r} values={sorted(values)!r}"
+            f"markers={found!r} values={values!r}"
         )
 
 
@@ -4026,8 +3835,8 @@ def require_escaping_directory_symlink_not_walked(
 
 
 def identity_in_records(records: Sequence[Any], identity: str) -> bool:
-    """True when *identity* is an exact string value on some hit."""
-    return any(identity in record_string_values(record) for record in records)
+    """True when some hit's ``concept_id`` is *identity*."""
+    return any(hit_field(record, "concept_id") == identity for record in records)
 
 
 def require_search_tool_title_hit(
@@ -4099,73 +3908,39 @@ def require_identity_order(
     return ordered
 
 
-# Same badge boundary as ``assert_identifiable_human_hits``: a governance
-# word as a whole token. Punctuation around the word is not part of the match.
-_GOVERNANCE_BADGE = re.compile(r"(?<![\w])(constraint|hold|context)(?![\w])")
-
-
 def _human_badge_span_identity_order(
     report: str,
     identities: Sequence[str],
 ) -> list[str]:
-    """Concept identities inside successive governance-badge hit spans.
+    """Which of *identities* the successive human hit blocks name, in order.
 
-    A span starts at a governance badge, one of constraint, hold, or
-    context, and runs until the next badge. The identity for that hit is
-    the one inside the span, the same region a single human ranking reads
-    (after the badge word, before the next badge). An identity that
-    appears only outside those spans contributes no position. A span that
-    contains more than one of *identities* does not identify one concept.
-    A badge span that contains none is not a position.
+    A block that names none of *identities* is not a position. An
+    identity named by two blocks fails.
     """
-    if not isinstance(report, str) or not report.strip():
-        raise HarnessError("empty human report; cannot order badge spans")
     expected = list(identities)
     if len(expected) < 2:
         raise HarnessError(
-            "badge-span identity order needs at least two identities, "
+            "human identity order needs at least two identities, "
             f"got {expected!r}"
         )
     if len(set(expected)) != len(expected):
         raise HarnessError(f"matching identities are not unique: {expected!r}")
     _identities_do_not_overlap(expected)
-    if report_is_structured_record(report):
-        raise AssertionError(
-            "human search returned a structured record instead of "
-            f"badge-prefixed hits: {report!r}"
-        )
-    marks = list(_GOVERNANCE_BADGE.finditer(report))
-    if not marks:
-        raise AssertionError(
-            "human report has no governance-badge hit span; "
-            f"report={report!r}"
-        )
     ordered: list[str] = []
-    seen: set[str] = set()
-    for index, mark in enumerate(marks):
-        span_end = marks[index + 1].start() if index + 1 < len(marks) else len(report)
-        span = report[mark.end() : span_end]
-        located: list[tuple[int, str]] = []
-        for ident in expected:
-            at = span.find(ident)
-            if at >= 0:
-                located.append((at, ident))
-        if not located:
+    for hit in human_search_hits(report):
+        found = [ident for ident in expected if hit.names(ident)]
+        if not found:
             continue
-        located.sort()
-        found = [ident for _at, ident in located]
         if len(found) != 1:
             raise AssertionError(
-                "governance-badge span does not identify one concept; "
-                f"badge={mark.group(1)!r} found={found!r} span={span!r}"
+                "human hit line does not name one concept; "
+                f"found={found!r} line={hit.named!r}"
             )
-        ident = found[0]
-        if ident in seen:
+        if found[0] in ordered:
             raise AssertionError(
-                f"identity {ident!r} is inside more than one governance-badge span"
+                f"identity {found[0]!r} is named by more than one human hit"
             )
-        seen.add(ident)
-        ordered.append(ident)
+        ordered.append(found[0])
     return ordered
 
 
@@ -4299,22 +4074,22 @@ def require_cap_above_100_returns_at_most_100(
     planted: int,
     surface: str,
 ) -> list[str]:
-    """A requested cap above 100, other than 100000, returns at most 100.
+    """A requested cap above 100, other than the fixed large cap, returns at most 100.
 
     *ranked_prefix* is the first 100 identities in the order a cap of 100
     returns on the same hits. *planted* must be greater than 100 so an
     implementation that returns every hit fails. *requested_cap* must be
-    an integer above 100 and must not be the literal 100000; that literal
-    is a separate ceiling check.
+    an integer above 100 and must not be ``SAMPLE_BIG_CAP``; that cap is a
+    separate ceiling check.
     """
     if isinstance(requested_cap, bool) or not isinstance(requested_cap, int):
         raise HarnessError(
             f"{surface} requested cap must be an int, got {requested_cap!r}"
         )
-    if requested_cap <= 100 or requested_cap == 100000:
+    if requested_cap <= 100 or requested_cap == SAMPLE_BIG_CAP:
         raise HarnessError(
             f"{surface} above-ceiling probe requested cap {requested_cap}; "
-            "need an integer above 100 other than 100000"
+            f"need an integer above 100 other than {SAMPLE_BIG_CAP}"
         )
     if not isinstance(planted, int) or isinstance(planted, bool) or planted <= 100:
         raise HarnessError(
@@ -4340,11 +4115,11 @@ def require_cap_above_100_returns_at_most_100(
 
 
 def record_for_identity(records: Sequence[Any], identity: str) -> Any:
-    """The unique hit record that carries *identity* as an exact value."""
+    """The unique hit object whose ``concept_id`` is *identity*."""
     matches = [
         record
         for record in records
-        if identity in record_string_values(record)
+        if hit_field(record, "concept_id") == identity
     ]
     if len(matches) != 1:
         raise AssertionError(
@@ -4353,84 +4128,44 @@ def record_for_identity(records: Sequence[Any], identity: str) -> Any:
     return matches[0]
 
 
-def report_is_structured_record(report: str) -> bool:
-    """True when the whole report is a JSON array or object."""
-    text = report.strip()
-    if not text:
-        raise HarnessError("empty report; cannot tell human text from a record")
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return False
-    return isinstance(parsed, (list, dict))
-
-
 def assert_identifiable_human_hits(
     report: str,
     hits: Sequence[tuple[str, Sequence[str]]],
 ) -> None:
-    """Each human hit is identifiable and prefixed by its governance badge.
+    """Each human hit block carries its identity and its governance badge.
 
-    The badge is the lowercase word constraint, hold, or context. A
-    different spelling of that word, including the spelling declared in
-    the file, is not that badge. Punctuation may join the badge to the
-    hit. A detached badge word, a legend of the three words, or a JSON
-    record in place of the text does not pass. Any one of a hit's own
-    strings identifies it; which one is the implementer's.
+    Each item is ``(lowercase governance badge, identifying strings)``;
+    the first string is the concept identity. The blocks that name those
+    identities come in the order given, and each block's badge is the
+    lowercase word constraint, hold, or context given for it. A
+    different spelling of that word is not that badge.
     """
-    if not report or not report.strip():
-        raise HarnessError("empty human report; cannot read governance badges")
     if not hits:
         raise HarnessError("identifiable-hit check needs at least one hit")
-    if report_is_structured_record(report):
-        raise AssertionError(
-            "human search returned a structured record instead of a human hit: "
-            f"{report!r}"
-        )
-    cursor = 0
-    for index, (badge, identifiers) in enumerate(hits):
+    wanted: list[tuple[str, str]] = []
+    for badge, identifiers in hits:
         if badge not in GOVERNANCE_TOKENS:
             raise HarnessError(f"badge is not a governance word: {badge!r}")
         own = [item for item in identifiers if item]
         if not own:
             raise HarnessError(f"hit {badge!r} has no identifying strings")
-        pattern = re.compile(rf"(?<![\w]){re.escape(badge)}(?![\w])")
-        found = pattern.search(report, cursor)
-        if found is None:
-            raise AssertionError(
-                f"human report does not prefix a hit with governance badge "
-                f"{badge!r}; report={report!r}"
-            )
-        span_start = found.end()
-        if index + 1 < len(hits):
-            next_badge = hits[index + 1][0]
-            next_pattern = re.compile(
-                rf"(?<![\w]){re.escape(next_badge)}(?![\w])"
-            )
-            nxt = next_pattern.search(report, span_start)
-            if nxt is None:
-                raise AssertionError(
-                    f"human report is missing the later badge {next_badge!r} "
-                    f"after {badge!r}; report={report!r}"
-                )
-            span_end = nxt.start()
-            cursor = nxt.start()
-        else:
-            span_end = len(report)
-            cursor = span_end
-        span = report[span_start:span_end]
-        identified = any(token in span for token in own)
-        print(
-            f"[F04] human badge={badge!r} identified={identified} "
-            f"span_len={len(span)}",
-            flush=True,
+        wanted.append((badge, own[0]))
+    identities = [ident for _badge, ident in wanted]
+    blocks = human_search_hits(report)
+    ordered: list[str] = []
+    for block in blocks:
+        ordered.extend(ident for ident in identities if block.names(ident))
+    print(f"[F04] human hits named={ordered!r} wanted={identities!r}", flush=True)
+    assert ordered == identities, (
+        f"human hit blocks name {ordered!r}, not {identities!r} in that "
+        f"order; report={report!r}"
+    )
+    for badge, ident in wanted:
+        block = human_hit_for(report, ident)
+        assert block.governance == badge, (
+            f"human hit {ident!r} carries governance badge "
+            f"{block.governance!r}, not {badge!r}; report={report!r}"
         )
-        if not identified:
-            raise AssertionError(
-                f"governance badge {badge!r} is not a prefix of an "
-                f"identifiable hit; a detached word or a legend does not "
-                f"pass; span={span!r} report={report!r}"
-            )
 
 
 def assert_human_concept_identity_after_badge(
@@ -4863,7 +4598,7 @@ class FilesystemAbsoluteRelativeProbe:
     """Two generated relative code_refs, neither the public absolute sample.
 
     ``relative_ref`` and ``other_ref`` are plain relative paths. Neither
-    begins with ``./`` or ``/``, neither is ``pkg/auth/login.go``, and
+    begins with ``./`` or ``/``, neither is ``SAMPLE_FILE``, and
     neither is a suffix or a directory prefix of the other.
     """
 
@@ -4904,7 +4639,7 @@ def _build_filesystem_absolute_relative_probe() -> FilesystemAbsoluteRelativePro
             ref == _PUBLIC_ABSOLUTE_RELATIVE_REF
             or ref.endswith("/" + _PUBLIC_ABSOLUTE_RELATIVE_REF)
             or _PUBLIC_ABSOLUTE_RELATIVE_REF.endswith("/" + ref)
-            or "pkg/auth" in ref
+            or SAMPLE_PREFIX_DIR in ref
         ):
             raise HarnessError(
                 f"generated relative ref collided with the public absolute "
@@ -4920,9 +4655,8 @@ def _build_filesystem_absolute_relative_probe() -> FilesystemAbsoluteRelativePro
 def generated_filesystem_absolute_relative_probe() -> FilesystemAbsoluteRelativeProbe:
     """Two generated relative code_refs for a longer filesystem-absolute search.
 
-    Neither ref is the public sample ``pkg/auth/login.go``. Fixture
-    generation that cannot satisfy that raises; it does not return the
-    public sample.
+    Neither ref is the fixed probe ``SAMPLE_FILE``. Fixture generation that
+    cannot satisfy that raises; it does not return the fixed probe.
     """
     last_error: HarnessError | None = None
     for _ in range(8):
@@ -4946,13 +4680,13 @@ def longer_filesystem_absolute_caller(
     The prefix is a real absolute directory, longer than ``/``. Stripping
     one leading slash does not yield *relative_ref*. *absent_refs* are not
     suffixes of the caller path, and none of the ref segments appear in
-    the prefix. The public literal ``pkg/auth/login.go`` is not a suffix.
+    the prefix. The fixed probe ``SAMPLE_FILE`` is not a suffix.
     """
     text = str(relative_ref).replace("\\", "/")
     _plain_relative_code_ref(text)
     if text == _PUBLIC_ABSOLUTE_RELATIVE_REF:
         raise HarnessError(
-            "filesystem-absolute caller reused the public literal relative ref"
+            "filesystem-absolute caller reused the fixed relative probe"
         )
     prefix = str(ws.path.resolve()).replace("\\", "/")
     if not prefix.startswith("/") or prefix in ("", "/"):

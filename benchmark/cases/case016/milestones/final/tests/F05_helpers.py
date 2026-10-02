@@ -32,7 +32,6 @@ from _harness import (
     node_executable,
     read_file,
 )
-import F01_helpers
 from F01_helpers import (
     AI_REGISTER,
     BAND_RANGES,
@@ -43,26 +42,14 @@ from F01_helpers import (
     SHORT_SLOP,
     SNOW_AND_ROAD,
     band_named_for_score,
-    band_of,
-    bind_core_metric_paths,
-    confidence_of,
-    finding_records,
-    findings_from_report,
-    metrics_from_report,
     neutral_words,
     pad_human,
-    parse_structured_mapping,
-    reason_of,
-    require_success_report,
     scan_path,
     scan_stdin,
-    score_of,
-    unicode_len,
 )
 from F02_helpers import (
     NOTEBOOK_EXT,
     ZIP_EXTS,
-    _hook_strings,
     runtime_token,
     standalone_int_present,
     write_notebook,
@@ -74,7 +61,7 @@ PRODUCT_NAME = "prosecheck"
 WINDOW_PLAIN = 262144
 WINDOW_GROUPED = "262,144"
 PLAIN_KB = 512
-ARCHIVE_KB_FIGURES = (4000, 4096)
+ARCHIVE_KB_FIGURES = (4096,)
 LEVEL_WORDS = ("lite", "full", "strict", "off")
 CONFIDENCE_WORDS = ("none", "low", "moderate", "high")
 
@@ -95,11 +82,7 @@ BETWEEN_CAPS = 600 * 1024
 OVER_BOTH_4MB = 4 * 1024 * 1024 + 64 * 1024
 OVER_BOTH_4MB_OTHER = 4 * 1024 * 1024 + 256 * 1024
 
-_BOUND = False
 _CACHE: dict[str, "Measured"] = {}
-# Full reports of the two binding probes (short factual, short slop), kept to
-# find every place a report repeats its score, band, or hook phrase.
-_BIND_REPORTS: list[dict[str, Any]] = []
 
 
 @dataclass(frozen=True)
@@ -128,58 +111,48 @@ class Standin:
         return len([line for line in body.splitlines() if line.strip()])
 
 
+# ---------------------------------------------------------------------------
+# Detector report, read as the Interface Contract states it: one JSON object;
+# ``_metrics`` carries ``ai_tell_score`` / ``ai_tell_band`` / ``confidence`` /
+# ``confidence_reason``; every other member is one fired finding whose
+# ``label`` is a string.
+# ---------------------------------------------------------------------------
+
+METRICS_KEY = "_metrics"
+SCORE_KEY = "ai_tell_score"
+BAND_KEY = "ai_tell_band"
+CONFIDENCE_KEY = "confidence"
+REASON_KEY = "confidence_reason"
+
+
+def detector_report(text: str, *, source: str = "detector stdout") -> dict[str, Any]:
+    """Parse a detector success report: one JSON object with a ``_metrics`` object."""
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"{source} is not one JSON object: {exc}; text={text[:400]!r}")
+    assert isinstance(obj, dict), f"{source} is not a JSON object: {type(obj).__name__}"
+    metrics = obj.get(METRICS_KEY)
+    assert isinstance(metrics, dict), f"{source} has no {METRICS_KEY} object"
+    return obj
+
+
 def bind_guard_metrics() -> None:
-    """Bind score, band, and confidence once, on the sealed short probes."""
-    global _BOUND
-    if _BOUND:
-        return
-    fact = scan_stdin(SHORT_FACTUAL)
-    slop = scan_stdin(SHORT_SLOP)
-    if fact.returncode != 0 or slop.returncode != 0:
-        raise HarnessError(
-            "short factual / slop probes must succeed before the guard is observed; "
-            f"factual={fact.returncode} slop={slop.returncode}"
-        )
-    _, fact_metrics = require_success_report(
-        fact, input_chars=unicode_len(SHORT_FACTUAL)
-    )
-    _, slop_metrics = require_success_report(
-        slop, input_chars=unicode_len(SHORT_SLOP)
-    )
-    none_text = neutral_words(39)
-    high_text = pad_human(300)
-    none_run = scan_stdin(none_text)
-    high_run = scan_stdin(high_text)
-    if none_run.returncode != 0 or high_run.returncode != 0:
-        raise HarnessError("confidence-binding probes must succeed")
-    _, none_metrics = require_success_report(
-        none_run, input_chars=unicode_len(none_text)
-    )
-    _, high_metrics = require_success_report(
-        high_run, input_chars=unicode_len(high_text)
-    )
-    bind_core_metric_paths(
-        fact_metrics,
-        slop_metrics,
-        none_metrics=none_metrics,
-        high_conf_metrics=high_metrics,
-        scanned_metrics=fact_metrics,
-        scanned_chars=unicode_len(SHORT_FACTUAL),
-    )
-    _BIND_REPORTS[:] = [
-        parse_structured_mapping(fact.stdout_text, source="factual probe stdout"),
-        parse_structured_mapping(slop.stdout_text, source="slop probe stdout"),
-    ]
-    _BOUND = True
-    print("[F05] bound detector score, band, and confidence", flush=True)
+    """Kept for callers; the report members are stated, nothing is bound."""
+    return None
 
 
 def _from_report(text: str, report: Mapping[str, Any]) -> Measured:
-    metrics = metrics_from_report(report)
-    findings = findings_from_report(report, metrics)
-    score = score_of(metrics, findings=findings)
-    band = band_of(metrics)
-    confidence = confidence_of(metrics)
+    metrics = report[METRICS_KEY]
+    score = metrics.get(SCORE_KEY)
+    assert isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100, (
+        f"{METRICS_KEY}.{SCORE_KEY} is not an integer 0-100: {score!r}"
+    )
+    band = metrics.get(BAND_KEY)
+    confidence = metrics.get(CONFIDENCE_KEY)
+    assert confidence in CONFIDENCE_LABELS, (
+        f"{METRICS_KEY}.{CONFIDENCE_KEY} is not a confidence word: {confidence!r}"
+    )
     expected_band = band_named_for_score(score)
     if band != expected_band:
         raise HarnessError(
@@ -188,12 +161,18 @@ def _from_report(text: str, report: Mapping[str, Any]) -> Measured:
         )
     reason = ""
     if confidence != "high":
-        reason = reason_of(metrics)
+        reason = metrics.get(REASON_KEY)
+        assert isinstance(reason, str) and reason.strip(), (
+            f"confidence {confidence!r} without a readable {REASON_KEY}"
+        )
     labels = tuple(
         dict.fromkeys(
-            rec["label"]
-            for rec in finding_records(findings)
-            if isinstance(rec.get("label"), str) and rec["label"].strip()
+            value["label"]
+            for key, value in report.items()
+            if key != METRICS_KEY
+            and isinstance(value, Mapping)
+            and isinstance(value.get("label"), str)
+            and value["label"].strip()
         )
     )
     return Measured(
@@ -207,16 +186,13 @@ def _from_report(text: str, report: Mapping[str, Any]) -> Measured:
 
 
 def measure_text(text: str) -> Measured:
-    bind_guard_metrics()
     result = scan_stdin(text)
     if result.returncode != 0:
         raise HarnessError(
             "detector did not score the probe text: "
             f"exit={result.returncode} stderr={result.stderr_text[:400]!r}"
         )
-    require_success_report(result, input_chars=unicode_len(text))
-    full = parse_structured_mapping(result.stdout_text, source="detector stdout")
-    measured = _from_report(text, full)
+    measured = _from_report(text, detector_report(result.stdout_text))
     print(
         f"[F05] measured score={measured.score} band={measured.band!r} "
         f"confidence={measured.confidence!r} labels={len(measured.labels)} "
@@ -227,17 +203,15 @@ def measure_text(text: str) -> Measured:
 
 
 def measure_path(ws, relpath: str) -> Measured:
-    bind_guard_metrics()
     result = scan_path(ws, relpath)
     if result.returncode != 0:
         raise HarnessError(
             f"detector did not score {relpath}: "
             f"exit={result.returncode} stderr={result.stderr_text[:400]!r}"
         )
-    full = parse_structured_mapping(
-        result.stdout_text, source=f"detector report for {relpath}"
+    measured = _from_report(
+        "", detector_report(result.stdout_text, source=f"detector report for {relpath}")
     )
-    measured = _from_report("", full)
     print(
         f"[F05] measured path {relpath} score={measured.score} "
         f"band={measured.band!r} confidence={measured.confidence!r} "
@@ -268,43 +242,38 @@ def plant_prose(ws, relpath: str, text: str) -> Path:
 
 
 def nudge_text(result: RunResult) -> str:
-    """Joined strings of a successful hook envelope.
+    """The guard's nudge, read from the stated post-tool-use envelope.
 
-    Silence is empty standard output and no JSON envelope. A JSON object
-    is an envelope even when it holds no text: an empty object, an object
-    whose values are only numbers, booleans, or null, and an object whose
-    strings are all empty. Those are not silence.
-
-    A non-zero exit, non-JSON stdout, or a JSON value that is not an object
-    is an observation failure, not silence.
+    Silence is empty standard output. Anything else on standard output is
+    exactly one JSON object whose ``hookSpecificOutput`` object carries
+    ``hookEventName`` ``PostToolUse`` and a non-empty ``additionalContext``
+    string; that string is returned. The hook always exits 0.
     """
-    if result.returncode != 0:
-        raise HarnessError(
-            "hook exited non-zero; that is not silence: "
-            f"exit={result.returncode} stderr={result.stderr_text[:400]!r} "
-            f"stdout={result.stdout_text[:400]!r}"
-        )
+    assert result.returncode == 0, (
+        "hook exited non-zero; that is not silence: "
+        f"exit={result.returncode} stderr={result.stderr_text[:400]!r} "
+        f"stdout={result.stdout_text[:400]!r}"
+    )
     raw = result.stdout_text
     if raw == "":
         return ""
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise HarnessError(
-            f"hook stdout is not a JSON envelope: {exc}; text={raw[:400]!r}"
+        raise AssertionError(
+            f"hook stdout is not the JSON envelope: {exc}; text={raw[:400]!r}"
         ) from exc
-    if not isinstance(obj, dict):
-        raise HarnessError(
-            "hook stdout JSON is not an object; a string or array is not "
-            f"the envelope: {type(obj).__name__}"
-        )
-    parts = _hook_strings(result)
-    if not any(part != "" for part in parts):
-        raise HarnessError(
-            "hook printed a JSON envelope with no text; silence is empty "
-            f"stdout and no envelope: {raw[:400]!r}"
-        )
-    return "\n".join(parts)
+    assert isinstance(obj, dict), f"hook stdout JSON is not an object: {raw[:400]!r}"
+    inner = obj.get("hookSpecificOutput")
+    assert isinstance(inner, dict), f"envelope has no hookSpecificOutput object: {raw[:400]!r}"
+    assert inner.get("hookEventName") == "PostToolUse", (
+        f"hookEventName is not PostToolUse: {inner.get('hookEventName')!r}"
+    )
+    context = inner.get("additionalContext")
+    assert isinstance(context, str) and context != "", (
+        f"additionalContext is not a non-empty string: {raw[:400]!r}"
+    )
+    return context
 
 
 def require_silent(result: RunResult) -> None:
@@ -312,19 +281,185 @@ def require_silent(result: RunResult) -> None:
     assert text == "", f"hook emitted a nudge; text={text[:400]!r}"
 
 
+def block_reply(result: RunResult) -> str:
+    """The ``reason`` of the stated command block object."""
+    assert result.returncode == 0, (
+        f"prompt-submit exited {result.returncode}; stderr={result.stderr_text[:400]!r}"
+    )
+    raw = result.stdout_text
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"command reply is not JSON: {exc}; text={raw[:400]!r}") from exc
+    assert isinstance(obj, dict) and obj.get("decision") == "block", (
+        f"command reply is not a block decision: {raw[:400]!r}"
+    )
+    reason = obj.get("reason")
+    assert isinstance(reason, str), f"block reason is not a string: {raw[:400]!r}"
+    return reason
+
+
 def show_text(ws, session_id: str | None = None) -> str:
     payload: dict[str, Any] = {"prompt": "/prosecheck show"}
     if session_id is not None:
         payload["session_id"] = session_id
     result = ws.invoke_hook("prompt-submit", payload=payload)
-    text = nudge_text(result)
-    if not text.strip():
-        raise HarnessError("show returned an empty envelope")
+    text = block_reply(result)
+    assert text.strip(), "show returned an empty reply"
     print(
         f"[F05] show session={session_id!r} chars={len(text)}",
         flush=True,
     )
     return text
+
+
+# ---------------------------------------------------------------------------
+# Stated text forms
+#
+# Nudge, one line per flagged file (several lines joined by a newline):
+#   prosecheck: <base> <phrase> (score <n>, band <band>[<coverage>]). Flagged: <l1>; <l2>. <ask containing the word fix>
+# Show scored row:
+#   <base> - <phrase> (score <n>/<band>[<coverage>])[ - <state>: <labels>]  (state carries flagged or under)
+# Show other rows:
+#   <base> - not scored: <free text naming <KB> KB>
+#   <base> - <free text containing "not re-scored", not "not scored:">
+#   <base> - not scored: <reason>
+# <coverage> is exactly ", first 262,144 characters only".
+# ---------------------------------------------------------------------------
+
+COVERAGE_NOTE = ", first 262,144 characters only"
+FIX_WORD = re.compile(r"(?i)(?<![a-z])fix")
+_PHRASES_ALT = "|".join(
+    re.escape(p) for p in sorted(PHRASE_BY_BAND.values(), key=len, reverse=True)
+)
+_BANDS_ALT = "|".join(re.escape(b) for b in sorted(BAND_RANGES, key=len, reverse=True))
+
+
+@dataclass(frozen=True)
+class Nudge:
+    base: str
+    phrase: str
+    score: int
+    band: str
+    truncated: bool
+    labels: tuple[str, ...]
+
+
+def nudge_lines(text: str) -> list[str]:
+    return [line for line in text.split("\n")]
+
+
+def parse_nudge(text: str, base: str) -> Nudge:
+    """The single nudge line for *base*, parsed in its stated form."""
+    head = f"prosecheck: {base} "
+    lines = [line for line in nudge_lines(text) if line.startswith(head)]
+    assert len(lines) == 1, (
+        f"expected exactly one nudge line for {base!r}, got {len(lines)}; text={text[:600]!r}"
+    )
+    line = lines[0]
+    pattern = (
+        r"^prosecheck: " + re.escape(base) + r" (?P<phrase>" + _PHRASES_ALT + r")"
+        r" \(score (?P<score>\d+), band (?P<band>" + _BANDS_ALT + r")"
+        r"(?P<cov>" + re.escape(COVERAGE_NOTE) + r")?\)\. Flagged: (?P<labels>.+?)\. "
+        r"(?P<ask>.*)$"
+    )
+    match = re.match(pattern, line)
+    assert match, f"nudge line for {base!r} is not in the stated form: {line!r}"
+    assert FIX_WORD.search(match.group("ask")), (
+        f"nudge line for {base!r} does not ask for a fix: {line!r}"
+    )
+    return Nudge(
+        base=base,
+        phrase=match.group("phrase"),
+        score=int(match.group("score")),
+        band=match.group("band"),
+        truncated=match.group("cov") is not None,
+        labels=tuple(match.group("labels").split("; ")),
+    )
+
+
+def nudge_bases(text: str) -> list[str]:
+    """Base names of the nudge lines in *text*, in order (first token after the prefix)."""
+    out = []
+    for line in nudge_lines(text):
+        if line.startswith("prosecheck: "):
+            out.append(line[len("prosecheck: "):].split(" ", 1)[0])
+    return out
+
+
+@dataclass(frozen=True)
+class ShowRow:
+    kind: str  # "scored", "size", "binary", "failed"
+    line: str
+    phrase: str | None = None
+    score: int | None = None
+    band: str | None = None
+    truncated: bool = False
+    status: str | None = None  # "flagged", "under", or None (no labels clause)
+    labels: tuple[str, ...] = ()
+    kb: int | None = None
+    reason: str | None = None
+
+
+def show_rows_for(text: str, base: str) -> list[str]:
+    head = f"{base} - "
+    return [line.strip() for line in text.split("\n") if line.strip().startswith(head)]
+
+
+def show_row(text: str, base: str) -> ShowRow:
+    """The single show row for *base*, parsed in its stated form."""
+    rows = show_rows_for(text, base)
+    assert len(rows) == 1, (
+        f"expected exactly one show row for {base!r}, got {len(rows)}; text={text[:600]!r}"
+    )
+    line = rows[0]
+    rest = line[len(base) + 3:]
+    scored = re.match(
+        r"^(?P<phrase>" + _PHRASES_ALT + r") \(score (?P<score>\d+)/(?P<band>" + _BANDS_ALT
+        + r")(?P<cov>, first (?:262,144|262144) characters only)?\)(?P<tail>.*)$",
+        rest,
+    )
+    if scored:
+        tail = scored.group("tail")
+        status = None
+        labels: tuple[str, ...] = ()
+        if tail:
+            clause = re.match(r"^ - (?P<state>[^:]*): (?P<labels>.+)$", tail)
+            if not clause:
+                raise AssertionError(f"scored row has an unstated tail: {line!r}")
+            state = clause.group("state")
+            if re.search(r"(?i)(?<![a-z])flagged(?![a-z])", state):
+                status = "flagged"
+            elif re.search(r"(?i)(?<![a-z])under(?![a-z])", state):
+                status = "under"
+            else:
+                raise AssertionError(f"scored row clause names neither flagged nor under: {line!r}")
+            labels = tuple(clause.group("labels").split("; "))
+        return ShowRow(
+            kind="scored", line=line, phrase=scored.group("phrase"),
+            score=int(scored.group("score")), band=scored.group("band"),
+            truncated=scored.group("cov") is not None, status=status, labels=labels,
+        )
+    size = re.match(r"^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$", rest)
+    if size:
+        return ShowRow(kind="size", line=line, kb=int(size.group(1)))
+    if "not re-scored" in rest and "not scored:" not in rest:
+        return ShowRow(kind="binary", line=line)
+    if rest.startswith("not scored: "):
+        reason = rest[len("not scored: "):]
+        assert reason.strip(), f"failed row has no reason: {line!r}"
+        assert not re.search(r"(?<![0-9])\d+ KB(?![A-Za-z])", reason), f"failed row reads as a size skip: {line!r}"
+        return ShowRow(kind="failed", line=line, reason=reason)
+    raise AssertionError(f"show row for {base!r} is not in a stated form: {line!r}")
+
+
+def require_scored_row(text: str, base: str, measured: "Measured") -> ShowRow:
+    row = show_row(text, base)
+    assert row.kind == "scored", f"{base!r} is not a scored row: {row.line!r}"
+    assert row.score == measured.score, f"row score {row.score} != {measured.score}: {row.line!r}"
+    assert row.band == measured.band, f"row band {row.band!r} != {measured.band!r}"
+    assert row.phrase == phrase_for_band(measured.band), f"row phrase {row.phrase!r}"
+    return row
 
 
 def fire_tool(
@@ -371,202 +506,45 @@ def fire_tool(
     return result, text
 
 
-def labels_in(text: str, labels: Sequence[str]) -> list[str]:
-    """Detector labels that occur in *text*, longest first, without double-counting a substring."""
-    found: list[str] = []
-    occupied: list[tuple[int, int]] = []
-    for label in sorted((lab for lab in labels if lab), key=len, reverse=True):
-        start = 0
-        while True:
-            index = text.find(label, start)
-            if index < 0:
-                break
-            end = index + len(label)
-            if any(not (end <= lo or index >= hi) for lo, hi in occupied):
-                start = index + 1
-                continue
-            found.append(label)
-            occupied.append((index, end))
-            break
-    return found
-
-
 def require_flagged_envelope(
     text: str,
     *,
     base: str,
     measured: Measured,
-) -> None:
+) -> Nudge:
+    """The nudge line for *base* carries the stated facts of *measured*.
+
+    Base name, hook phrase for the band, score, band, one to five of the
+    detector's fired labels, and the stated fix ask. More than five fired
+    labels are never all listed.
+    """
     assert text.strip(), "flagged save emitted an empty envelope"
-    assert PRODUCT_NAME in text, (
-        f"nudge does not name {PRODUCT_NAME}; text={text[:400]!r}"
+    nudge = parse_nudge(text, base)
+    assert nudge.score == measured.score, (
+        f"nudge score {nudge.score} is not the detector score {measured.score}"
     )
-    assert base in text, f"nudge does not name {base!r}; text={text[:400]!r}"
-    phrase = phrase_for_band(measured.band)
-    assert phrase in text, (
-        f"nudge does not carry the hook phrase for band {measured.band!r}; "
-        f"text={text[:400]!r}"
+    assert nudge.band == measured.band, (
+        f"nudge band {nudge.band!r} is not the detector band {measured.band!r}"
     )
-    assert measured.band in text, (
-        f"nudge does not name band {measured.band!r}; text={text[:400]!r}"
+    assert nudge.phrase == phrase_for_band(measured.band), (
+        f"nudge phrase {nudge.phrase!r} is not the phrase for {measured.band!r}"
     )
-    score_view = text.replace(base, " ")
-    assert standalone_int_present(score_view, measured.score), (
-        f"nudge does not carry score {measured.score} as its own integer; "
-        f"text={text[:400]!r}"
+    assert 1 <= len(nudge.labels) <= 5, (
+        f"nudge lists {len(nudge.labels)} labels; it must list one to five: {nudge.labels!r}"
     )
-    present = labels_in(text, measured.labels)
-    assert present, (
-        f"nudge carries none of the detector labels {measured.labels!r}; "
-        f"text={text[:400]!r}"
-    )
-    assert len(present) <= 5, (
-        f"nudge carries {len(present)} detector labels; the cap is five: {present!r}"
-    )
-    if len(measured.labels) > 5:
-        assert len(present) < len(measured.labels), (
-            "detector fired more than five labels and the nudge kept every one"
+    assert len(set(nudge.labels)) == len(nudge.labels), f"repeated label: {nudge.labels!r}"
+    for label in nudge.labels:
+        assert label in measured.labels, (
+            f"nudge label {label!r} is not one the detector fired: {measured.labels!r}"
         )
-    # Named facts are not the ask. What remains has to be a request to
-    # fix the flagged spans. A pass count and rhythm wording are not
-    # required, and neither spelling of that request is pinned.
-    _require_correction_request(text, base=base, measured=measured)
+    if len(measured.labels) > 5:
+        assert len(nudge.labels) < len(measured.labels)
     print(
         f"[F05] envelope names {base!r} score={measured.score} "
-        f"band={measured.band!r} labels={len(present)}/{len(measured.labels)}",
+        f"band={measured.band!r} labels={len(nudge.labels)}/{len(measured.labels)}",
         flush=True,
     )
-
-
-# Open readings of "asks for the flagged spans to be fixed".
-# "correct the flagged passages" is the same ask. A pass count and the
-# word rhythm are not part of either slot, so they neither satisfy it
-# nor have to appear.
-_REPAIR_WORD = re.compile(
-    r"\b(?:fix(?:es|ed|ing)?|correct(?:s|ed|ing|ion|ions)?|"
-    r"revis(?:e|es|ed|ing|ion|ions)|rewrit(?:e|es|ing|ten)|"
-    r"repair(?:s|ed|ing)?|edit(?:s|ed|ing)?|rework(?:s|ed|ing)?|"
-    r"amend(?:s|ed|ing)?|address(?:es|ed|ing)?|"
-    r"tidy|tidies|tidied|tidying)\b"
-)
-_FLAGGED_WRITING = re.compile(
-    r"\b(?:spans?|passages?|stretches?|sections?|wordings?|prose|"
-    r"sentences?|excerpts?|regions?|clauses?|writing|draft)\b"
-)
-
-
-def _require_correction_request(text: str, *, base: str, measured: Measured) -> None:
-    """The leftover, after named facts are gone, has to ask for a fix.
-
-    Product name, base name, score, band, hook phrase, detector labels,
-    and the truncation window are not that request. A leftover token that
-    does not itself ask for the flagged writing to be changed fails.
-    How many passes the ask names, and any rhythm wording, are ignored.
-    """
-    tokens: list[object] = [
-        PRODUCT_NAME,
-        base,
-        measured.score,
-        measured.band,
-        phrase_for_band(measured.band),
-        *measured.labels,
-        *PHRASE_BY_BAND.values(),
-        *BAND_RANGES,
-        "score",
-        "band",
-        "flagged",
-        "first",
-        "only",
-        "characters",
-        "scored",
-        WINDOW_PLAIN,
-        WINDOW_GROUPED,
-        "262144",
-    ]
-    lowered = [
-        token.lower() if isinstance(token, str) else token for token in tokens
-    ]
-    left = remainder(text.lower(), lowered)
-    assert _REPAIR_WORD.search(left) and _FLAGGED_WRITING.search(left), (
-        "leftover text does not ask for the flagged spans to be fixed; "
-        f"remainder={left!r} text={text[:400]!r}"
-    )
-
-
-def grouped_int_present(text: str, value: int) -> bool:
-    """True when *text* names *value*, including a comma-grouped spelling.
-
-    4096 and 4,096 are one integer, the same way 262144 and 262,144 are.
-    A longer integer that only begins with those digits, such as 4,096,000,
-    is a different number.
-    """
-    if standalone_int_present(text, value):
-        return True
-    grouped = f"{value:,}"
-    if "," not in grouped:
-        return False
-    # The comma is grouping punctuation, not a boundary. Do not start or
-    # end in the middle of a longer grouped integer.
-    pattern = rf"(?<![\d,]){re.escape(grouped)}(?!\d)(?!,\d)"
-    return re.search(pattern, str(text)) is not None
-
-
-def names_window(text: str) -> bool:
-    return standalone_int_present(text, WINDOW_PLAIN) or WINDOW_GROUPED in text
-
-
-# L230: when the scan is truncated, the extra context states that only the
-# first 262,144 characters were scored. The digits alone are not that
-# statement. Spellings are not pinned; the same clause as the digits has
-# to carry the prefix, the character unit, and a limit or scoring word.
-_WINDOW_TOKEN = re.compile(r"(?<!\d)(?:262,144|262144)(?!\d)")
-_PREFIX_WORD = re.compile(
-    r"(?i)(?<![A-Za-z])(?:first|prefix|initial|leading|opening|beginning)(?![A-Za-z])"
-)
-_UNIT_WORD = re.compile(
-    r"(?i)(?<![A-Za-z])(?:characters?|chars)(?![A-Za-z])"
-)
-_LIMIT_WORD = re.compile(
-    r"(?i)(?<![A-Za-z])(?:only|solely|merely|just|scored|scoring|scores|"
-    r"scanned|scanning|coverage|limited|capped|partial|truncated|truncation)"
-    r"(?![A-Za-z])"
-)
-
-
-def _clause_around(text: str, start: int, end: int) -> str:
-    """The sentence that holds the window digits. A period ends it.
-
-    The comma inside 262,144 is not a boundary. A later sentence, such as
-    the fix ask or a fired label, does not supply words for this one.
-    """
-    left = -1
-    for mark in ("\n", ".", "!", "?"):
-        found = text.rfind(mark, 0, start)
-        if found > left:
-            left = found
-    right = len(text)
-    for mark in ("\n", ".", "!", "?"):
-        found = text.find(mark, end)
-        if found >= 0 and found < right:
-            right = found
-    return text[left + 1:right]
-
-
-def states_scored_prefix(text: str) -> bool:
-    """True when *text* states that only the first 262,144 characters were scored.
-
-    A clause that only prints 262144 or 262,144 is false. The bare noun
-    "score" next to the integer score is not the scoring word.
-    """
-    for match in _WINDOW_TOKEN.finditer(text):
-        clause = _clause_around(text, match.start(), match.end())
-        if (
-            _PREFIX_WORD.search(clause)
-            and _UNIT_WORD.search(clause)
-            and _LIMIT_WORD.search(clause)
-        ):
-            return True
-    return False
+    return nudge
 
 
 def snapshot_config(config_dir: Path) -> dict[str, bytes]:
@@ -686,90 +664,14 @@ def assert_private_ledger_snapshot(
     return holders
 
 
-def _cut_token(text: str, token: str) -> str:
-    if not token:
-        return text
-    if token.isdigit():
-        return re.sub(rf"(?<!\d){re.escape(token)}(?!\d)", " ", text)
-    if re.fullmatch(r"[A-Za-z][A-Za-z ]*", token):
-        return re.sub(rf"(?<!\w){re.escape(token)}(?!\w)", " ", text)
-    return text.replace(token, " ")
-
-
-def remainder(text: str, tokens: Sequence[object]) -> str:
-    """Strip named facts, then punctuation, and require a non-empty remainder."""
-    ordered = sorted(
-        {str(token) for token in tokens if token is not None and str(token) != ""},
-        key=len,
-        reverse=True,
-    )
-    out = text
-    for token in ordered:
-        out = _cut_token(out, token)
-    out = re.sub(r"[^\w\s]+", " ", out, flags=re.UNICODE)
-    out = re.sub(r"\s+", " ", out).strip()
-    if not out:
-        raise HarnessError(
-            "nothing remained after stripping named facts; "
-            f"tokens={ordered[:12]!r} text={text[:400]!r}"
-        )
-    return out
-
-
 def own_nudge_section(text: str, name: str, others: Sequence[str]) -> str:
-    """The slice that belongs to *name* alone.
-
-    It starts at this name, or at the product-name token that sits after
-    the previous other name, and stops at the next other name. Facts that
-    sit on a later line, before that next name, stay in the slice. A later
-    name does not inherit an earlier name's phrase, score, or band.
-    """
-    at = text.find(name)
-    if at < 0:
-        raise HarnessError(f"nudge has no section for {name!r}; text={text[:400]!r}")
-    prev_end = 0
-    for other in others:
-        if not other or other == name:
-            continue
-        index = 0
-        while True:
-            found = text.find(other, index)
-            if found < 0 or found >= at:
-                break
-            prev_end = max(prev_end, found + len(other))
-            index = found + 1
-    next_at = len(text)
-    for other in others:
-        if not other or other == name:
-            continue
-        found = text.find(other, at + len(name))
-        if found >= 0 and found < next_at:
-            next_at = found
-    gap = text[prev_end:at]
-    mark = gap.rfind(PRODUCT_NAME)
-    start = prev_end + mark if mark >= 0 else at
-    return text[start:next_at]
-
-
-def row_around(text: str, name: str, others: Sequence[str]) -> str:
-    """The line that names *name*, through the start of the next other name.
-
-    The product name sits before the file name on a nudge line. Starting at
-    the file name would drop it from the last line of a joined nudge.
-    """
-    at = text.find(name)
-    if at < 0:
-        raise HarnessError(f"show has no row for {name!r}; text={text[:400]!r}")
-    line = text.rfind("\n", 0, at)
-    start = 0 if line < 0 else line + 1
-    end = len(text)
-    for other in others:
-        if not other or other == name:
-            continue
-        index = text.find(other, start)
-        if index > at and index < end:
-            end = index
-    return text[start:end]
+    """The nudge line that belongs to *name* (one stated line per flagged file)."""
+    head = f"prosecheck: {name} "
+    lines = [line for line in nudge_lines(text) if line.startswith(head)]
+    assert len(lines) == 1, (
+        f"expected one nudge line for {name!r}, got {len(lines)}; text={text[:600]!r}"
+    )
+    return lines[0]
 
 
 def status_remainder(
@@ -781,46 +683,13 @@ def status_remainder(
     directory: str | None = None,
     others: Sequence[str] = (),
 ) -> str:
-    """Ledger row after the facts that are not the flagged bit are gone.
+    """Flagged bit of the scored row for *name*, read from its stated clause.
 
-    Score, band, hook phrase, labels, confidence, level, truncation, the
-    file name, the session id, and the workspace directory are covariates.
-    What remains is the flagged-bit wording.
+    Returns ``"flagged"`` (state word flagged), ``"under"`` (state word
+    under), or ``"none"`` (no labels clause).
     """
-    row = row_around(text, name, others)
-    tokens: list[object] = [
-        name,
-        *scored_fact_tokens(measured),
-        *CONFIDENCE_WORDS,
-        WINDOW_PLAIN,
-        WINDOW_GROUPED,
-        "262144",
-        *others,
-    ]
-    if session_id:
-        tokens.append(session_id)
-    if directory:
-        tokens.append(directory)
-        tokens.append(str(Path(directory).name))
-    return remainder(row, tokens)
-
-
-def scored_fact_tokens(measured: Measured, *extra: object) -> list[object]:
-    tokens: list[object] = [
-        measured.score,
-        measured.band,
-        phrase_for_band(measured.band),
-        measured.reason,
-        *measured.labels,
-        *BAND_RANGES,
-        *LEVEL_WORDS,
-        *extra,
-    ]
-    if measured.score != 20:
-        tokens.append(20)
-    if measured.score != 40:
-        tokens.append(40)
-    return tokens
+    row = require_scored_row(text, name, measured)
+    return row.status or "none"
 
 
 def find_exact(target: int) -> Measured:
@@ -1130,221 +999,34 @@ def _walk_integers(obj: Any) -> list[int]:
     return found
 
 
-def _delete_bound_score(metrics: dict) -> int:
-    path = F01_helpers._PATHS.get("score")
-    if not path:
-        raise HarnessError("score path is not bound; cannot remove the numeric score")
-    score = score_of(metrics)
-    parent: Any = metrics
-    for part in path[:-1]:
-        if not isinstance(parent, Mapping) or part not in parent:
-            raise HarnessError(f"score path {path!r} is missing from metrics")
-        parent = parent[part]
-    key = path[-1]
-    if not isinstance(parent, dict) or key not in parent:
-        raise HarnessError(f"score path {path!r} is missing from metrics")
-    held = parent[key]
-    if isinstance(held, bool) or held != score:
-        raise HarnessError(
-            f"bound score path holds {held!r}, not the numeric score {score}"
-        )
-    del parent[key]
-    return score
-
-
-def _require_structured_without_score(report: Mapping[str, Any]) -> None:
-    metrics = metrics_from_report(report)
-    findings = findings_from_report(report, metrics)
-    if not findings:
-        raise HarnessError(
-            "structured report lost its findings when the numeric score was removed"
-        )
-    try:
-        still = score_of(metrics, findings=findings)
-    except HarnessError:
-        return
-    raise HarnessError(
-        f"numeric score {still} is still on the structured report after removal"
-    )
-
-
-def _plant_nonscore_integer(metrics: dict, value: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise HarnessError(f"leftover must be an integer, got {value!r}")
-    path = F01_helpers._PATHS.get("score")
-    if not path:
-        raise HarnessError("score path is not bound; cannot plant a non-score integer")
-    score_key = path[-1]
-    key = None
-    for candidate in ("n", "leftover", "count_not_score"):
-        if candidate != score_key and candidate not in metrics:
-            key = candidate
-            break
-    if key is None:
-        raise HarnessError("metrics object has no free key for a non-score integer")
-    metrics[key] = value
-
-
-def _detector_encoding(text: str) -> str:
-    """Encoding family of a report the shared reader already accepted.
-
-    The reader tries JSON first, then a Python literal mapping. Replay
-    must stay in that same family: a literal report re-serialized as JSON
-    is a different encoding than the detector printed.
-    """
-    stripped = text.strip()
-    parsed: Any
-    try:
-        parsed = json.loads(stripped)
-    except json.JSONDecodeError:
-        return "literal"
-    if isinstance(parsed, dict):
-        return "json"
-    return "literal"
-
-
-def _replay_detector_report(report: Mapping[str, Any], encoding: str) -> str:
-    """Serialize *report* in the detector's own encoding family."""
-    if encoding == "json":
-        try:
-            text = json.dumps(report, ensure_ascii=False)
-        except (TypeError, ValueError) as exc:
-            raise HarnessError(
-                f"could not replay the detector report as JSON: {exc}"
-            ) from exc
-    elif encoding == "literal":
-        try:
-            text = repr(report)
-        except (TypeError, ValueError) as exc:
-            raise HarnessError(
-                f"could not replay the detector report as a Python literal: {exc}"
-            ) from exc
-    else:
-        raise HarnessError(
-            f"detector encoding {encoding!r} is not a structured-mapping encoding"
-        )
-    parse_structured_mapping(text, source="replayed detector report")
-    replayed = _detector_encoding(text)
-    if replayed != encoding:
-        raise HarnessError(
-            "replayed detector report changed encoding from "
-            f"{encoding!r} to {replayed!r}"
-        )
-    return text
-
-
-def _report_paths(obj: Any, prefix: tuple = ()) -> Iterator[tuple[tuple, Any]]:
-    if isinstance(obj, Mapping):
-        for key, value in obj.items():
-            yield from _report_paths(value, prefix + (key,))
-    elif isinstance(obj, (list, tuple)):
-        for index, value in enumerate(obj):
-            yield from _report_paths(value, prefix + (index,))
-    else:
-        yield prefix, obj
-
-
-def _mirror_paths(kind: str) -> list[tuple]:
-    """Every path in a full detector report that repeats its *kind*.
-
-    *kind* is ``score``, ``band``, or ``phrase``. A path is a copy when it
-    holds that report's value on both binding probes (short factual and short
-    slop, which differ in score and band), so an unrelated field that only
-    happens to share one value is not a copy. The bound metrics path is one of
-    them; a report may carry others, for example at the top level.
-    """
-    bind_guard_metrics()
-    if len(_BIND_REPORTS) != 2:
-        raise HarnessError("binding reports are unavailable")
-    wanted: list[Any] = []
-    for report in _BIND_REPORTS:
-        metrics = metrics_from_report(report)
-        score = score_of(metrics)
-        band = band_of(metrics)
-        wanted.append(
-            {"score": score, "band": band, "phrase": phrase_for_band(band)}[kind]
-        )
-    if len(set(map(repr, wanted))) < 2:
-        raise HarnessError(f"binding probes share one {kind}; cannot tell copies apart")
-    paths: list[tuple] = []
-    first = dict(_report_paths(_BIND_REPORTS[0]))
-    second = dict(_report_paths(_BIND_REPORTS[1]))
-    for path, value in first.items():
-        if isinstance(value, bool) or type(value) is not type(wanted[0]):
-            continue
-        if value == wanted[0] and second.get(path) == wanted[1]:
-            paths.append(path)
-    if kind in ("score", "band") and not paths:
-        raise HarnessError(f"no {kind} path repeats the bound {kind} on both probes")
-    return paths
-
-
-def _set_path(obj: Any, path: tuple, value: Any, *, delete: bool = False) -> bool:
-    parent = obj
-    for part in path[:-1]:
-        try:
-            parent = parent[part]
-        except (KeyError, IndexError, TypeError):
-            return False
-    key = path[-1]
-    try:
-        parent[key]
-    except (KeyError, IndexError, TypeError):
-        return False
-    if delete:
-        del parent[key]
-    else:
-        parent[key] = value
-    return True
-
-
-def _delete_score_mirrors(report: dict) -> int:
-    """Remove every copy of the numeric score from a full report; return it."""
-    metrics = metrics_from_report(report)
-    score = score_of(metrics)
-    removed = 0
-    for path in sorted(_mirror_paths("score"), key=len, reverse=True):
-        if _set_path(report, path, None, delete=True):
-            removed += 1
-    if not removed:
-        raise HarnessError("no copy of the numeric score was removed from the report")
-    return score
-
-
-def pinned_score(score: int) -> tuple[Measured, str]:
-    """A real detector report whose score is set to *score*, for the guard.
-
-    The report is this detector's own output for the dense sample, in its own
-    encoding, with every copy of the score set to *score* and every copy of the
-    band (and hook phrase, if the report carries one) set to the band named
-    for that score. Confidence and labels stay as the detector reported them.
-    The guard reads it through an interpreter stand-in, so its threshold
-    behaviour is observed at an exact score without searching for prose that
-    lands there.
-    """
-    if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
-        raise HarnessError(f"pinned score must be an integer 0-100, got {score!r}")
-    key = f"pinned:{score}"
+def _dense_report_text() -> str:
     dense = prose_dense()
     result = scan_stdin(dense.text)
     if result.returncode != 0:
         raise HarnessError(
             f"detector did not score the dense sample: exit={result.returncode}"
         )
-    report = parse_structured_mapping(result.stdout_text, source="detector stdout")
-    encoding = _detector_encoding(result.stdout_text)
+    return result.stdout_text
+
+
+def pinned_score(score: int) -> tuple[Measured, str]:
+    """A real detector report whose score is set to *score*, for the guard.
+
+    The report is this detector's own JSON for the dense sample with
+    ``_metrics.ai_tell_score`` set to *score* and ``_metrics.ai_tell_band``
+    set to the band named for that score. Confidence and labels stay as the
+    detector reported them. The guard reads it through an interpreter
+    stand-in, so its threshold behaviour is observed at an exact score.
+    """
+    if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= 100:
+        raise HarnessError(f"pinned score must be an integer 0-100, got {score!r}")
+    dense = prose_dense()
+    pinned = copy.deepcopy(detector_report(_dense_report_text()))
     band = band_named_for_score(score)
-    pinned = copy.deepcopy(report)
-    for kind, value in (("score", score), ("band", band), ("phrase", phrase_for_band(band))):
-        for path in _mirror_paths(kind):
-            _set_path(pinned, path, value)
-    text = _replay_detector_report(pinned, encoding)
-    measured = _from_report(dense.text, parse_structured_mapping(text, source=key))
-    if measured.score != score or measured.band != band:
-        raise HarnessError(
-            f"pinned report reads as score={measured.score} band={measured.band!r}, "
-            f"not {score} / {band!r}"
-        )
+    pinned[METRICS_KEY][SCORE_KEY] = score
+    pinned[METRICS_KEY][BAND_KEY] = band
+    text = json.dumps(pinned, ensure_ascii=False)
+    measured = _from_report(dense.text, detector_report(text, source=f"pinned:{score}"))
     if measured.confidence == "none" or not measured.labels:
         raise HarnessError("dense sample has confidence none or no labels")
     print(f"[F05] pinned score={score} band={band!r} conf={measured.confidence!r}", flush=True)
@@ -1363,50 +1045,39 @@ def fire_pinned(ws, report_text: str, **fire_kwargs: Any) -> tuple[RunResult, st
 
 
 def missing_score_arms(leftover: int) -> tuple[str, str, tuple[int, ...]]:
-    """A successful detector report with the numeric score removed.
+    """A successful detector report with ``_metrics.ai_tell_score`` removed.
 
-    Both strings are that same report, in the detector's own encoding.
-    The second also carries *leftover* on the metrics object, at a key
-    that is not the score. The third value is every integer still on
-    that second report. Findings stay in place.
+    Both strings are that same JSON report. The second also carries
+    *leftover* on a ``_metrics`` member that is not the score (other
+    ``_metrics`` members are free). The third value is every integer still
+    on that second report. Findings stay in place.
     """
-    bind_guard_metrics()
+    if isinstance(leftover, bool) or not isinstance(leftover, int):
+        raise HarnessError(f"leftover must be an integer, got {leftover!r}")
     result = scan_stdin(SHORT_SLOP)
     if result.returncode != 0:
         raise HarnessError(
             "detector did not produce a successful report to strip: "
             f"exit={result.returncode} stderr={result.stderr_text[:400]!r}"
         )
-    require_success_report(result, input_chars=unicode_len(SHORT_SLOP))
-    report = parse_structured_mapping(result.stdout_text, source="detector stdout")
-    encoding = _detector_encoding(result.stdout_text)
+    report = detector_report(result.stdout_text)
     bare = copy.deepcopy(report)
-    removed = _delete_score_mirrors(bare)
-    _require_structured_without_score(bare)
+    assert SCORE_KEY in bare[METRICS_KEY]
+    del bare[METRICS_KEY][SCORE_KEY]
+    if not [key for key in bare if key != METRICS_KEY]:
+        raise HarnessError("short slop report has no findings")
     counted = copy.deepcopy(bare)
-    counted_metrics = metrics_from_report(counted)
-    _plant_nonscore_integer(counted_metrics, leftover)
-    _require_structured_without_score(counted)
-    if leftover not in _walk_integers(counted):
-        raise HarnessError("planted non-score integer is not on the report")
+    free_key = next(
+        key for key in ("n", "leftover", "count_not_score") if key not in counted[METRICS_KEY]
+    )
+    counted[METRICS_KEY][free_key] = leftover
     leftovers = tuple(dict.fromkeys(_walk_integers(counted)))
-    if not leftovers:
-        raise HarnessError("report has no leftover integer after the score was removed")
-    without_score = _replay_detector_report(bare, encoding)
-    with_leftover = _replay_detector_report(counted, encoding)
-    replayed_bare = parse_structured_mapping(
-        without_score, source="replayed report without a score"
-    )
-    replayed_counted = parse_structured_mapping(
-        with_leftover, source="replayed report with a leftover integer"
-    )
-    _require_structured_without_score(replayed_bare)
-    _require_structured_without_score(replayed_counted)
-    if leftover not in _walk_integers(replayed_counted):
-        raise HarnessError("replayed report dropped the planted non-score integer")
+    if leftover not in leftovers:
+        raise HarnessError("planted non-score integer is not on the report")
+    without_score = json.dumps(bare, ensure_ascii=False)
+    with_leftover = json.dumps(counted, ensure_ascii=False)
     print(
-        f"[F05] missing-score report removed={removed} leftover={leftover} "
-        f"integers={leftovers}",
+        f"[F05] missing-score report leftover={leftover} integers={leftovers}",
         flush=True,
     )
     return without_score, with_leftover, leftovers
@@ -1506,21 +1177,6 @@ def relocated_plugin_root() -> tuple[Path, dict[str, str]]:
 
 def basename_absent(text: str, base: str) -> None:
     assert base not in text, f"{base!r} was recorded; text={text[:400]!r}"
-
-
-def basename_mentions(text: str, base: str) -> int:
-    """How many times *base* is named in a listing already read.
-
-    An empty listing is not zero mentions. Zero is only a non-empty
-    listing that does not name *base*.
-    """
-    if text is None or text == "" or not str(text).strip():
-        raise HarnessError(
-            "basename count has no listing; an empty read is not zero mentions"
-        )
-    if not base:
-        raise HarnessError("basename count has no name")
-    return str(text).count(base)
 
 
 def config_omits(paths: Sequence[Path], base: str) -> None:
@@ -1784,6 +1440,17 @@ def guard_connect_observer() -> Iterator[Any]:
 
 
 __all__ = [
+    "COVERAGE_NOTE",
+    "FIX_ASK",
+    "Nudge",
+    "ShowRow",
+    "block_reply",
+    "detector_report",
+    "nudge_bases",
+    "parse_nudge",
+    "require_scored_row",
+    "show_row",
+    "show_rows_for",
     "ARCHIVE_KB_FIGURES",
     "BETWEEN_CAPS",
     "DECIMAL_512_KB",
@@ -1798,24 +1465,20 @@ __all__ = [
     "WINDOW_PLAIN",
     "assert_private_ledger_snapshot",
     "basename_absent",
-    "basename_mentions",
     "changed_config_files",
     "config_omits",
     "elapsed_call",
     "find_exact",
     "fire_tool",
     "fresh_name",
-    "grouped_int_present",
     "guard_connect_observer",
     "interpreter_standin",
-    "labels_in",
     "ledger_file_is_private",
     "measure_path",
     "measure_text",
     "missing_score_arms",
     "pinned_score",
     "fire_pinned",
-    "names_window",
     "nudge_text",
     "phrase_for_band",
     "plant_prose",
@@ -1825,14 +1488,10 @@ __all__ = [
     "prose_none",
     "prose_under",
     "relocated_plugin_root",
-    "remainder",
     "repeat_to",
     "require_flagged_envelope",
     "require_silent",
-    "row_around",
-    "scored_fact_tokens",
     "show_text",
-    "states_scored_prefix",
     "similar_clean",
     "status_remainder",
     "snapshot_config",

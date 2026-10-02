@@ -7,7 +7,7 @@ Context Protocol tool. Observations go through the sealed harness
 the relate rewrote or refused to rewrite. These tests do not import Go
 packages, do not call internal RelateConcepts helpers, and do not use
 ``membundle show`` / ``membundle validate`` / ``membundle create`` / ``membundle update`` /
-``membundle init`` as an oracle.
+``membundle init`` to judge results.
 """
 
 from __future__ import annotations
@@ -35,13 +35,12 @@ from F05_helpers import (
     concept_file,
     concept_filename,
     generated_by_and_at,
-    report_names_named_bundle,
 )
 from F06_helpers import SEED_GENERATED_AT, SEED_GENERATED_BY
 from F07_helpers import (
-    PUBLIC_SAMPLE_PROSE,
-    PUBLIC_SAMPLE_SOURCE,
-    PUBLIC_SAMPLE_TARGET,
+    SAMPLE_PROSE,
+    SAMPLE_SOURCE,
+    SAMPLE_TARGET,
     _inline_links,
     assert_deeper_heading_not_reused,
     assert_distinct_related_list_items,
@@ -64,8 +63,12 @@ from F07_helpers import (
     related_section_items,
     require_mcp_relate_non_success,
     require_mcp_relate_success,
+    require_mcp_relate_success_text,
     require_mcp_relate_tool_error,
+    require_relate_endpoint_not_found,
+    require_relate_error_line,
     require_relate_failure,
+    require_relate_human_success,
     require_relate_success,
     require_relate_usage_failure,
     run_relate,
@@ -73,6 +76,11 @@ from F07_helpers import (
     write_relatable_concept,
 )
 
+
+
+# Generated per test process: the leaf a ``..`` identity aims at, outside
+# the bundle (the documents carry no such value).
+_OUTSIDE_LEAF = f"o{__import__('uuid').uuid4().hex[:8]}"
 
 def _bundle() -> str:
     return unique_tokens("kb")[0]
@@ -392,8 +400,8 @@ def _live_mcp_relate(ws, rel: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_public_sample_relate_writes_relative_link_prose_heading_and_log():
-    """CLI relate of architecture/tooling to architecture/layers writes named href, prose, heading, log (L219)."""
+def test_cli_generated_sample_relate_writes_relative_link_prose_heading_and_log():
+    """CLI relate of a generated same-directory pair writes named href, prose, heading, log."""
     with workspace() as ws:
         source_title, target_title, source_body, target_body = unique_tokens(
             "pstl", "pttl", "psbd", "ptbd"
@@ -401,23 +409,23 @@ def test_cli_public_sample_relate_writes_relative_link_prose_heading_and_log():
         extra = _extras("pxk1", "pxv1", "pxk2", "pxv2")
         rel = _bundle()
         fields = {
-            "source_id": PUBLIC_SAMPLE_SOURCE,
-            "target_id": PUBLIC_SAMPLE_TARGET,
+            "source_id": SAMPLE_SOURCE,
+            "target_id": SAMPLE_TARGET,
             "source_type": unique_tokens("psty")[0],
             "target_type": unique_tokens("ptty")[0],
             "source_title": source_title,
             "target_title": target_title,
             "source_body": source_body,
             "target_body": target_body,
-            "prose": PUBLIC_SAMPLE_PROSE,
+            "prose": SAMPLE_PROSE,
             "unused_prose": unique_tokens("punp")[0],
             "extra": extra,
         }
         root = seed_relatable_pair(
             ws,
             rel,
-            PUBLIC_SAMPLE_SOURCE,
-            PUBLIC_SAMPLE_TARGET,
+            SAMPLE_SOURCE,
+            SAMPLE_TARGET,
             source_type=fields["source_type"],
             source_title=source_title,
             source_body=source_body,
@@ -429,16 +437,13 @@ def test_cli_public_sample_relate_writes_relative_link_prose_heading_and_log():
         before_snap = snapshot_tree(ws.path)
         result = run_relate(
             ws,
-            PUBLIC_SAMPLE_SOURCE,
-            PUBLIC_SAMPLE_TARGET,
+            SAMPLE_SOURCE,
+            SAMPLE_TARGET,
             rel,
-            description=PUBLIC_SAMPLE_PROSE,
+            description=SAMPLE_PROSE,
         )
         report = require_relate_success(result)
-        assert PUBLIC_SAMPLE_SOURCE == "architecture/tooling"
-        assert PUBLIC_SAMPLE_TARGET == "architecture/layers"
-        assert PUBLIC_SAMPLE_PROSE == "implements the 5-layer architecture"
-        assert path_is_file(concept_file(root, PUBLIC_SAMPLE_SOURCE))
+        assert path_is_file(concept_file(root, SAMPLE_SOURCE))
         assert_no_new_concept_file(ws.path, before_snap, bundle_rel=rel)
         _assert_writing(
             root,
@@ -446,20 +451,20 @@ def test_cli_public_sample_relate_writes_relative_link_prose_heading_and_log():
             generated_by="agent/cli",
             path_tokens=path_tokens_for(rel, ws.path),
             href_mode="named",
-            prose=PUBLIC_SAMPLE_PROSE,
+            prose=SAMPLE_PROSE,
             new_heading=True,
         )
         assert_no_reciprocal_on_target(
-            concept_file(root, PUBLIC_SAMPLE_TARGET),
-            PUBLIC_SAMPLE_TARGET,
-            PUBLIC_SAMPLE_SOURCE,
+            concept_file(root, SAMPLE_TARGET),
+            SAMPLE_TARGET,
+            SAMPLE_SOURCE,
         )
-        report_names_named_bundle(report, rel)
+        require_relate_human_success(result, SAMPLE_SOURCE, SAMPLE_TARGET, rel)
         print("cli public-sample relate wrote named relative link, heading, and Update", flush=True)
 
 
-def test_mcp_public_sample_relate_writes_relative_link_and_agent_mcp():
-    """MCP relate of the public-sample pair writes named href and generated.by agent/mcp (L219)."""
+def test_mcp_generated_sample_relate_writes_relative_link_and_agent_mcp():
+    """MCP relate of the public-sample pair writes named href and generated.by agent/mcp."""
     with workspace() as ws:
         source_title, target_title, source_body, target_body = unique_tokens(
             "mstl", "mttl", "msbd", "mtbd"
@@ -467,23 +472,23 @@ def test_mcp_public_sample_relate_writes_relative_link_and_agent_mcp():
         extra = _extras("mxk1", "mxv1", "mxk2", "mxv2")
         rel = _bundle()
         fields = {
-            "source_id": PUBLIC_SAMPLE_SOURCE,
-            "target_id": PUBLIC_SAMPLE_TARGET,
+            "source_id": SAMPLE_SOURCE,
+            "target_id": SAMPLE_TARGET,
             "source_type": unique_tokens("msty")[0],
             "target_type": unique_tokens("mtty")[0],
             "source_title": source_title,
             "target_title": target_title,
             "source_body": source_body,
             "target_body": target_body,
-            "prose": PUBLIC_SAMPLE_PROSE,
+            "prose": SAMPLE_PROSE,
             "unused_prose": unique_tokens("munp")[0],
             "extra": extra,
         }
         root = seed_relatable_pair(
             ws,
             rel,
-            PUBLIC_SAMPLE_SOURCE,
-            PUBLIC_SAMPLE_TARGET,
+            SAMPLE_SOURCE,
+            SAMPLE_TARGET,
             source_type=fields["source_type"],
             source_title=source_title,
             source_body=source_body,
@@ -494,9 +499,9 @@ def test_mcp_public_sample_relate_writes_relative_link_and_agent_mcp():
         )
         outcome = mcp_relate(
             ws,
-            PUBLIC_SAMPLE_SOURCE,
-            PUBLIC_SAMPLE_TARGET,
-            description=PUBLIC_SAMPLE_PROSE,
+            SAMPLE_SOURCE,
+            SAMPLE_TARGET,
+            description=SAMPLE_PROSE,
             bundle=rel,
         )
         require_mcp_relate_success(outcome)
@@ -506,20 +511,20 @@ def test_mcp_public_sample_relate_writes_relative_link_and_agent_mcp():
             generated_by="agent/mcp",
             path_tokens=path_tokens_for(rel, ws.path),
             href_mode="named",
-            prose=PUBLIC_SAMPLE_PROSE,
+            prose=SAMPLE_PROSE,
             new_heading=True,
         )
         assert_no_reciprocal_on_target(
-            concept_file(root, PUBLIC_SAMPLE_TARGET),
-            PUBLIC_SAMPLE_TARGET,
-            PUBLIC_SAMPLE_SOURCE,
+            concept_file(root, SAMPLE_TARGET),
+            SAMPLE_TARGET,
+            SAMPLE_SOURCE,
         )
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_relate_success_text(outcome, SAMPLE_SOURCE, SAMPLE_TARGET, root)
         print("mcp public-sample relate wrote named relative link and agent/mcp", flush=True)
 
 
-def test_cli_public_sample_shape_has_runtime_twin():
-    """CLI same-directory runtime twin uses filename.md / ./filename.md href (L219)."""
+def test_cli_generated_sample_shape_has_runtime_twin():
+    """CLI same-directory runtime twin uses filename.md / ./filename.md href."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -546,12 +551,12 @@ def test_cli_public_sample_shape_has_runtime_twin():
             fields["target_id"],
             fields["source_id"],
         )
-        report_names_named_bundle(report, rel)
+        require_relate_human_success(result, fields["source_id"], fields["target_id"], rel)
         print("cli public-sample shape has a runtime twin", flush=True)
 
 
-def test_mcp_public_sample_shape_has_runtime_twin():
-    """MCP same-directory runtime twin uses filename.md / ./filename.md href (L219)."""
+def test_mcp_generated_sample_shape_has_runtime_twin():
+    """MCP same-directory runtime twin uses filename.md / ./filename.md href."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -578,7 +583,7 @@ def test_mcp_public_sample_shape_has_runtime_twin():
             fields["target_id"],
             fields["source_id"],
         )
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_relate_success_text(outcome, fields["source_id"], fields["target_id"], root)
         print("mcp public-sample shape has a runtime twin", flush=True)
 
 
@@ -588,7 +593,7 @@ def test_mcp_public_sample_shape_has_runtime_twin():
 
 
 def test_cli_cross_directory_href_resolves_relative_to_source_directory():
-    """CLI nested-versus-sibling href POSIX-resolves to the target file (L213)."""
+    """CLI nested-versus-sibling href POSIX-resolves to the target file."""
     with workspace() as ws:
         fields = _cross_pair()
         rel = _bundle()
@@ -614,7 +619,7 @@ def test_cli_cross_directory_href_resolves_relative_to_source_directory():
 
 
 def test_mcp_cross_directory_href_resolves_relative_to_source_directory():
-    """MCP nested-versus-sibling href POSIX-resolves to the target file (L213)."""
+    """MCP nested-versus-sibling href POSIX-resolves to the target file."""
     with workspace() as ws:
         fields = _cross_pair()
         rel = _bundle()
@@ -640,7 +645,7 @@ def test_mcp_cross_directory_href_resolves_relative_to_source_directory():
 
 
 def test_cli_parent_directory_source_href_resolves_to_nested_target():
-    """CLI parent-directory source href POSIX-resolves to a nested target (L213)."""
+    """CLI parent-directory source href POSIX-resolves to a nested target."""
     with workspace() as ws:
         fields = _parent_nested_pair()
         rel = _bundle()
@@ -666,7 +671,7 @@ def test_cli_parent_directory_source_href_resolves_to_nested_target():
 
 
 def test_mcp_parent_directory_source_href_resolves_to_nested_target():
-    """MCP parent-directory source href POSIX-resolves to a nested target (L213)."""
+    """MCP parent-directory source href POSIX-resolves to a nested target."""
     with workspace() as ws:
         fields = _parent_nested_pair()
         rel = _bundle()
@@ -697,7 +702,7 @@ def test_mcp_parent_directory_source_href_resolves_to_nested_target():
 
 
 def test_cli_empty_target_title_uses_final_identity_segment_as_link_text():
-    """CLI empty target title (omitted key and empty scalar) uses the final identity segment (L213)."""
+    """CLI empty target title (omitted key and empty scalar) uses the final identity segment."""
     with workspace() as ws:
         for encoding, title in (("omitted", None), ("empty_scalar", "")):
             fields = _same_fields(encoding)
@@ -754,7 +759,7 @@ def test_cli_empty_target_title_uses_final_identity_segment_as_link_text():
 
 
 def test_mcp_empty_target_title_uses_final_identity_segment_as_link_text():
-    """MCP empty target title (omitted key and empty scalar) uses the final identity segment (L213)."""
+    """MCP empty target title (omitted key and empty scalar) uses the final identity segment."""
     with workspace() as ws:
         for encoding, title in (("omitted", None), ("empty_scalar", "")):
             fields = _same_fields(f"m{encoding}")
@@ -814,7 +819,7 @@ def test_mcp_empty_target_title_uses_final_identity_segment_as_link_text():
 
 
 def test_cli_omitted_empty_and_whitespace_prose_each_write_a_related_to_link():
-    """CLI omit, empty, and whitespace prose each write a Related to link (L213)."""
+    """CLI omit, empty, and whitespace prose each write a Related to link."""
     with workspace() as ws:
         for kind in ("omit", "empty", "whitespace"):
             fields = _same_fields(kind)
@@ -846,7 +851,7 @@ def test_cli_omitted_empty_and_whitespace_prose_each_write_a_related_to_link():
 
 
 def test_mcp_omitted_empty_and_whitespace_prose_each_write_a_related_to_link():
-    """MCP omit, empty, and whitespace description each write a Related to link (L213)."""
+    """MCP omit, empty, and whitespace description each write a Related to link."""
     with workspace() as ws:
         for kind in ("omit", "empty", "whitespace"):
             fields = _same_fields(f"m{kind}")
@@ -931,7 +936,7 @@ def _relate_via(ws, fields, rel: str, via: str):
 
 
 def test_cli_and_mcp_existing_level1_related_concepts_heading_is_reused():
-    """Existing level-1 Related Concepts is reused on CLI and MCP; following token remains (L213)."""
+    """Existing level-1 Related Concepts is reused on CLI and MCP; following token remains."""
     with workspace() as ws:
         rel = _bundle()
         following_cli, following_mcp = unique_tokens("fcli", "fmcp")
@@ -998,7 +1003,7 @@ def test_cli_and_mcp_existing_level1_related_concepts_heading_is_reused():
 
 
 def test_cli_and_mcp_existing_level1_related_heading_is_reused_and_does_not_create_related_concepts():
-    """Existing level-1 Related is reused before a following Notes heading; Related Concepts is not created (L213)."""
+    """Existing level-1 Related is reused before a following Notes heading; Related Concepts is not created."""
     with workspace() as ws:
         rel = _bundle()
         following_cli, following_mcp, notes_cli, notes_mcp = unique_tokens(
@@ -1085,7 +1090,7 @@ def test_cli_and_mcp_existing_level1_related_heading_is_reused_and_does_not_crea
 
 
 def test_cli_and_mcp_deeper_related_concepts_or_related_heading_is_not_reused():
-    """A deeper Related Concepts or Related heading is not reused on CLI and MCP (L213)."""
+    """A deeper Related Concepts or Related heading is not reused on CLI and MCP."""
     with workspace() as ws:
         rel = _bundle()
         root = None
@@ -1126,7 +1131,7 @@ def test_cli_and_mcp_deeper_related_concepts_or_related_heading_is_not_reused():
 
 
 def test_cli_and_mcp_fenced_related_concepts_heading_is_not_reused():
-    """A fenced Related Concepts or Related heading is not reused on CLI and MCP (L213)."""
+    """A fenced Related Concepts or Related heading is not reused on CLI and MCP."""
     with workspace() as ws:
         rel = _bundle()
         root = None
@@ -1163,7 +1168,7 @@ def test_cli_and_mcp_fenced_related_concepts_heading_is_not_reused():
 
 
 def test_cli_and_mcp_list_item_is_placed_under_existing_heading_before_a_following_level1():
-    """The new list item sits under Related Concepts and before a following Notes heading (L213)."""
+    """The new list item sits under Related Concepts and before a following Notes heading."""
     with workspace() as ws:
         rel = _bundle()
         follow_cli, notes_cli, follow_mcp, notes_mcp = unique_tokens(
@@ -1248,7 +1253,7 @@ def test_cli_and_mcp_list_item_is_placed_under_existing_heading_before_a_followi
 
 
 def test_cli_and_mcp_setext_related_heading_is_not_reused_and_new_related_concepts_is_created():
-    """Setext equals Related Concepts or Related is otherwise-create on CLI and MCP (L213, L220)."""
+    """Setext equals Related Concepts or Related is otherwise-create on CLI and MCP."""
     with workspace() as ws:
         rel = _bundle()
         root = None
@@ -1293,7 +1298,7 @@ def test_cli_and_mcp_setext_related_heading_is_not_reused_and_new_related_concep
 
 
 def test_cli_and_mcp_setext_hyphen_related_heading_is_not_reused():
-    """Setext hyphen-underline Related Concepts or Related is a deeper heading, not reused (L213)."""
+    """Setext hyphen-underline Related Concepts or Related is a deeper heading, not reused."""
     with workspace() as ws:
         rel = _bundle()
         root = None
@@ -1342,7 +1347,7 @@ def test_cli_and_mcp_setext_hyphen_related_heading_is_not_reused():
 
 
 def test_cli_omitted_actor_writes_agent_cli_not_seed_actor():
-    """CLI omit actor writes generated.by agent/cli, not the seed actor (L211, L219)."""
+    """CLI omit actor writes generated.by agent/cli, not the seed actor."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1369,7 +1374,7 @@ def test_cli_omitted_actor_writes_agent_cli_not_seed_actor():
 
 
 def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
-    """CLI empty and whitespace actor each write generated.by agent/membundle-tool (L211)."""
+    """CLI empty and whitespace actor each write generated.by agent/membundle-tool."""
     with workspace() as ws:
         for actor in ("", "   "):
             fields = _same_fields("act")
@@ -1397,7 +1402,7 @@ def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
 
 
 def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
-    """A supplied producer-slash-version actor is written through as generated.by (L32, L211)."""
+    """A supplied producer-slash-version actor is written through as generated.by."""
     with workspace() as ws:
         fields = _same_fields("psa", "psb")
         left, right = fields["rest"]
@@ -1426,7 +1431,7 @@ def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
 
 
 def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
-    """A supplied prefix-colon-id actor is written through as generated.by (L32, L211)."""
+    """A supplied prefix-colon-id actor is written through as generated.by."""
     with workspace() as ws:
         fields = _same_fields("pca", "pcb")
         left, right = fields["rest"]
@@ -1455,7 +1460,7 @@ def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
 
 
 def test_mcp_generated_by_is_agent_mcp():
-    """MCP relate writes generated.by agent/mcp (L211, L219)."""
+    """MCP relate writes generated.by agent/mcp."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1481,7 +1486,7 @@ def test_mcp_generated_by_is_agent_mcp():
 
 
 def test_cli_generated_at_differs_from_seed_on_writing_relate():
-    """CLI writing relate refreshes source generated.at (L213)."""
+    """CLI writing relate refreshes source generated.at."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1507,7 +1512,7 @@ def test_cli_generated_at_differs_from_seed_on_writing_relate():
 
 
 def test_mcp_generated_at_differs_from_seed_on_writing_relate():
-    """MCP writing relate refreshes source generated.at (L213)."""
+    """MCP writing relate refreshes source generated.at."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1538,7 +1543,7 @@ def test_mcp_generated_at_differs_from_seed_on_writing_relate():
 
 
 def test_log_gains_an_update_bullet_naming_both_files():
-    """After a writing relate, log.md has an Update item naming both files (L213, L219)."""
+    """After a writing relate, log.md has an Update item naming both files."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1577,7 +1582,7 @@ def test_log_gains_an_update_bullet_naming_both_files():
 
 
 def test_relate_does_not_add_a_reciprocal_link_on_the_target():
-    """Source-to-target adds no source-pointing link on the target; reverse on a fresh copy does (L213)."""
+    """Source-to-target adds no source-pointing link on the target; reverse on a fresh copy does."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1651,7 +1656,7 @@ def test_relate_does_not_add_a_reciprocal_link_on_the_target():
 
 
 def test_cli_second_same_triple_succeeds_without_rewriting_source_or_log():
-    """A second CLI relate of the same source, target, and prose does not rewrite (L215, L221)."""
+    """A second CLI relate of the same source, target, and prose does not rewrite."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1706,7 +1711,7 @@ def test_cli_second_same_triple_succeeds_without_rewriting_source_or_log():
 
 
 def test_mcp_second_same_triple_succeeds_without_rewriting_source_or_log():
-    """A second MCP relate of the same unique-prose triple does not rewrite (L215, L221)."""
+    """A second MCP relate of the same unique-prose triple does not rewrite."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1753,7 +1758,7 @@ def test_mcp_second_same_triple_succeeds_without_rewriting_source_or_log():
 
 
 def test_cli_second_trim_empty_prose_does_not_duplicate_related_to_line():
-    """CLI omit then omit (and a packed empty follow-up) keeps one Related to line (L215)."""
+    """CLI omit then omit (and a packed empty follow-up) keeps one Related to line."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1799,7 +1804,7 @@ def test_cli_second_trim_empty_prose_does_not_duplicate_related_to_line():
 
 
 def test_mcp_second_trim_empty_prose_does_not_duplicate_related_to_line():
-    """MCP omit then omit keeps one Related to item; source and log bytes unchanged (L215)."""
+    """MCP omit then omit keeps one Related to item; source and log bytes unchanged."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -1859,7 +1864,7 @@ def test_mcp_second_trim_empty_prose_does_not_duplicate_related_to_line():
 
 
 def test_cli_distinct_prose_on_same_pair_adds_a_second_line():
-    """A second CLI relate of the same pair with different prose adds a second line (L215)."""
+    """A second CLI relate of the same pair with different prose adds a second line."""
     with workspace() as ws:
         fields = _same_fields("p2")
         prose2 = fields["rest"][0]
@@ -1930,7 +1935,7 @@ def test_cli_distinct_prose_on_same_pair_adds_a_second_line():
 
 
 def test_mcp_distinct_prose_on_same_pair_adds_a_second_line():
-    """A second MCP relate of the same pair with different prose adds a second line (L215)."""
+    """A second MCP relate of the same pair with different prose adds a second line."""
     with workspace() as ws:
         fields = _same_fields("mp2")
         prose2 = fields["rest"][0]
@@ -2004,7 +2009,7 @@ def test_mcp_distinct_prose_on_same_pair_adds_a_second_line():
 
 
 def test_cli_second_target_same_prose_adds_a_line():
-    """A second CLI relate from the same source to a different target with the same prose adds (L215)."""
+    """A second CLI relate from the same source to a different target with the same prose adds."""
     with workspace() as ws:
         fields = _same_fields("t2d", "t2s", "t2t", "t2ty", "t2tl", "t2bd")
         t2_dir, t2_src, t2_leaf, t2_type, t2_title, t2_body = fields["rest"]
@@ -2079,7 +2084,7 @@ def test_cli_second_target_same_prose_adds_a_line():
 
 
 def test_mcp_second_target_same_prose_adds_a_line():
-    """A second MCP relate from the same source to a different target with the same prose adds (L215)."""
+    """A second MCP relate from the same source to a different target with the same prose adds."""
     with workspace() as ws:
         fields = _same_fields("mt2", "mt2t", "mt2ty", "mt2tl", "mt2bd")
         t2_leaf, t2_type, t2_title, t2_body = fields["rest"][:4]
@@ -2159,7 +2164,7 @@ def test_mcp_second_target_same_prose_adds_a_line():
 
 
 def test_cli_second_target_omit_prose_adds_a_related_to_line():
-    """A second CLI omit-prose relate to a third present target adds another Related to (L215)."""
+    """A second CLI omit-prose relate to a third present target adds another Related to."""
     with workspace() as ws:
         fields = _same_fields("t3", "t3ty", "t3tl", "t3bd")
         t3_leaf, t3_type, t3_title, t3_body = fields["rest"][:4]
@@ -2229,7 +2234,7 @@ def test_cli_second_target_omit_prose_adds_a_related_to_line():
 
 
 def test_mcp_second_target_omit_prose_adds_a_related_to_line():
-    """A second MCP omit-prose relate to a third present target adds another Related to (L215)."""
+    """A second MCP omit-prose relate to a third present target adds another Related to."""
     with workspace() as ws:
         fields = _same_fields("mt3", "mt3ty", "mt3tl", "mt3bd")
         t3_leaf, t3_type, t3_title, t3_body = fields["rest"][:4]
@@ -2303,7 +2308,7 @@ def test_mcp_second_target_omit_prose_adds_a_related_to_line():
 
 
 def test_cli_existing_body_link_outside_related_section_still_appends_related_item():
-    """An unfenced outside-section link to the target is not already-present; CLI still writes (L215)."""
+    """An unfenced outside-section link to the target is not already-present; CLI still writes."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -2345,7 +2350,7 @@ def test_cli_existing_body_link_outside_related_section_still_appends_related_it
 
 
 def test_mcp_existing_body_link_outside_related_section_still_appends_related_item():
-    """An unfenced outside-section link to the target is not already-present; MCP still writes (L215)."""
+    """An unfenced outside-section link to the target is not already-present; MCP still writes."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -2392,7 +2397,7 @@ def test_mcp_existing_body_link_outside_related_section_still_appends_related_it
 
 
 def test_omit_path_without_knowledge_dir_relates_cwd():
-    """Omit bundle path with no knowledge/ directory relates the cwd pair (L49, L211)."""
+    """Omit bundle path with no knowledge/ directory relates the cwd pair."""
     with workspace() as ws:
         fields = _same_fields()
         root = _seed(ws, ".", fields)
@@ -2419,7 +2424,7 @@ def test_omit_path_without_knowledge_dir_relates_cwd():
 
 
 def test_omit_path_with_knowledge_dir_relates_knowledge_not_cwd():
-    """Omit bundle path with knowledge/ as a directory relates knowledge/, not a cwd decoy (L49)."""
+    """Omit bundle path with knowledge/ as a directory relates knowledge/, not a cwd decoy."""
     with workspace() as ws:
         fields = _same_fields("dk")
         decoy = fields["rest"][0]
@@ -2448,7 +2453,7 @@ def test_omit_path_with_knowledge_dir_relates_knowledge_not_cwd():
 
 
 def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
-    """A file named knowledge is not a directory, so omit-path uses cwd (L49)."""
+    """A file named knowledge is not a directory, so omit-path uses cwd."""
     with workspace() as ws:
         fields = _same_fields()
         root = _seed(ws, ".", fields)
@@ -2477,7 +2482,7 @@ def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
 
 
 def test_mcp_omit_bundle_knowledge_file_is_not_treated_as_bundle_dir():
-    """MCP omit-bundle: a file named knowledge is not a directory, so omit-path uses cwd (L49, L211)."""
+    """MCP omit-bundle: a file named knowledge is not a directory, so omit-path uses cwd."""
     with workspace() as ws:
         fields = _same_fields()
         root = _seed(ws, ".", fields)
@@ -2506,7 +2511,7 @@ def test_mcp_omit_bundle_knowledge_file_is_not_treated_as_bundle_dir():
 
 
 def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
-    """A named bundle path is the write target even when cwd has knowledge/ (L49, L211)."""
+    """A named bundle path is the write target even when cwd has knowledge/."""
     with workspace() as ws:
         fields = _same_fields("dk")
         decoy = fields["rest"][0]
@@ -2535,12 +2540,12 @@ def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
             new_heading=True,
         )
         assert decoy_path.read_text(encoding="utf-8") == decoy
-        report_names_named_bundle(combined_report(result), rel)
+        require_relate_human_success(result, fields["source_id"], fields["target_id"], rel)
         print("named bundle was not overridden by cwd knowledge/", flush=True)
 
 
 def test_named_path_without_root_index_relates_named_path_nested_files_unchanged():
-    """Named path with no root index.md relates the named path; nested knowledge/ stays (L223)."""
+    """Named path with no root index.md relates the named path; nested knowledge/ stays."""
     with workspace() as ws:
         fields = _same_fields()
         rel = unique_tokens("nkrel")[0]
@@ -2579,12 +2584,12 @@ def test_named_path_without_root_index_relates_named_path_nested_files_unchanged
             titles=_titles(fields),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(report, rel)
+        require_relate_human_success(result, fields["source_id"], fields["target_id"], rel)
         print("cli named path related named root; nested unchanged", flush=True)
 
 
 def test_mcp_omit_bundle_without_knowledge_dir_relates_cwd():
-    """MCP omit bundle, no knowledge/ directory: rewrite lands at cwd (L49, L211)."""
+    """MCP omit bundle, no knowledge/ directory: rewrite lands at cwd."""
     with workspace() as ws:
         fields = _same_fields()
         root = _seed(ws, ".", fields)
@@ -2611,7 +2616,7 @@ def test_mcp_omit_bundle_without_knowledge_dir_relates_cwd():
 
 
 def test_mcp_omit_bundle_with_knowledge_dir_relates_knowledge_not_cwd():
-    """MCP omit bundle with knowledge/ as a directory relates knowledge/, not a cwd decoy (L49)."""
+    """MCP omit bundle with knowledge/ as a directory relates knowledge/, not a cwd decoy."""
     with workspace() as ws:
         fields = _same_fields("dk")
         decoy = fields["rest"][0]
@@ -2640,7 +2645,7 @@ def test_mcp_omit_bundle_with_knowledge_dir_relates_knowledge_not_cwd():
 
 
 def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
-    """MCP named bundle writes there even when cwd has a knowledge/ decoy (L49, L211)."""
+    """MCP named bundle writes there even when cwd has a knowledge/ decoy."""
     with workspace() as ws:
         fields = _same_fields("dk")
         decoy = fields["rest"][0]
@@ -2669,12 +2674,12 @@ def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
             new_heading=True,
         )
         assert decoy_path.read_text(encoding="utf-8") == decoy
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_relate_success_text(outcome, fields["source_id"], fields["target_id"], root)
         print("mcp named bundle ignored cwd knowledge decoy", flush=True)
 
 
 def test_mcp_named_path_without_root_index_relates_named_path_nested_files_unchanged():
-    """MCP named path with no root index.md relates the named path; nested knowledge/ stays (L223)."""
+    """MCP named path with no root index.md relates the named path; nested knowledge/ stays."""
     with workspace() as ws:
         fields = _same_fields()
         rel = unique_tokens("mnkrel")[0]
@@ -2712,7 +2717,7 @@ def test_mcp_named_path_without_root_index_relates_named_path_nested_files_uncha
             titles=_titles(fields),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_relate_success_text(outcome, fields["source_id"], fields["target_id"], named)
         print("mcp named path related named root; nested unchanged", flush=True)
 
 
@@ -2722,7 +2727,7 @@ def test_mcp_named_path_without_root_index_relates_named_path_nested_files_uncha
 
 
 def test_empty_identity_as_source_or_target_fails_without_successful_relate():
-    """Empty string as source or as target fails without a successful relate on CLI and MCP (L177, L215)."""
+    """Empty string as source or as target fails without a successful relate on CLI and MCP."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -2754,7 +2759,7 @@ def test_empty_identity_as_source_or_target_fails_without_successful_relate():
 
 
 def test_absolute_identity_as_source_or_target_fails_without_successful_relate():
-    """An absolute-path identity as source or as target fails without a successful relate (L177, L215)."""
+    """An absolute-path identity as source or as target fails without a successful relate."""
     with workspace() as ws:
         fields = _same_fields("ab")
         leaf = fields["rest"][0]
@@ -2790,17 +2795,17 @@ def test_absolute_identity_as_source_or_target_fails_without_successful_relate()
 
 
 def test_dotdot_identity_as_source_or_target_fails_and_does_not_write_outside_the_bundle():
-    """../outside and foo/../outside as source or target fail; nothing is written outside (L51, L215)."""
+    """../outside and foo/../outside as source or target fail; nothing is written outside."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
         root = _seed(ws, rel, fields)
         assert_snapshot_helper_sees_write(ws, unique_tokens("snap")[0])
-        outside = ws.path / "outside.md"
-        nested_outside = ws.path / "outside"
+        outside = ws.path / f"{_OUTSIDE_LEAF}.md"
+        nested_outside = ws.path / _OUTSIDE_LEAF
         src_before = read_bytes(concept_file(root, fields["source_id"]))
         tgt_before = read_bytes(concept_file(root, fields["target_id"]))
-        for aimed in ("../outside", "foo/../outside"):
+        for aimed in (f"../{_OUTSIDE_LEAF}", f"foo/../{_OUTSIDE_LEAF}"):
             for aimed_s, aimed_t in (
                 (aimed, fields["target_id"]),
                 (fields["source_id"], aimed),
@@ -2830,7 +2835,7 @@ def test_dotdot_identity_as_source_or_target_fails_and_does_not_write_outside_th
 
 
 def test_leading_hyphen_identity_as_source_or_target_fails_without_successful_relate():
-    """A leading-hyphen identity as source or as target fails without a successful relate (L177, L215)."""
+    """A leading-hyphen identity as source or as target fails without a successful relate."""
     with workspace() as ws:
         fields = _same_fields("hy")
         aimed = f"-{fields['rest'][0]}"
@@ -2865,7 +2870,7 @@ def test_leading_hyphen_identity_as_source_or_target_fails_without_successful_re
 
 
 def test_cli_newline_cr_and_tab_identities_each_fail_without_successful_relate():
-    """CLI newline, CR, and tab identities each fail as source and as target (L177, L215)."""
+    """CLI newline, CR, and tab identities each fail as source and as target."""
     with workspace() as ws:
         fields = _same_fields("cl", "cr")
         left, right = fields["rest"][:2]
@@ -2891,7 +2896,7 @@ def test_cli_newline_cr_and_tab_identities_each_fail_without_successful_relate()
 
 
 def test_mcp_newline_cr_and_tab_identities_each_are_non_success_and_write_nothing():
-    """MCP newline, CR, and tab identities as source or target are non-success and write nothing (L177)."""
+    """MCP newline, CR, and tab identities as source or target are non-success and write nothing."""
     with workspace() as ws:
         fields = _same_fields("ml", "mr")
         left, right = fields["rest"][:2]
@@ -2926,7 +2931,7 @@ def test_mcp_newline_cr_and_tab_identities_each_are_non_success_and_write_nothin
 
 
 def test_mcp_nul_identity_as_source_or_target_is_tool_error_and_writes_nothing():
-    """MCP null-byte identity as source_id or target_id is a tool error and writes nothing (L177)."""
+    """MCP null-byte identity as source_id or target_id is a tool error and writes nothing."""
     with workspace() as ws:
         fields = _same_fields("nl", "nr")
         left, right = fields["rest"][:2]
@@ -2959,7 +2964,7 @@ def test_mcp_nul_identity_as_source_or_target_is_tool_error_and_writes_nothing()
 
 
 def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_successful_relate():
-    """Reserved index, nested index, root log, and root AGENTS fail as source or target (L28, L177)."""
+    """Reserved index, nested index, root log, and root AGENTS fail as source or target."""
     with workspace() as ws:
         fields = _same_fields("rs")
         nest = fields["rest"][0]
@@ -2999,7 +3004,7 @@ def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_succe
 
 
 def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_non_success_and_write_nothing():
-    """MCP reserved index / nested index / root log / root AGENTS are non-success (L28, L177)."""
+    """MCP reserved index / nested index / root log / root AGENTS are non-success."""
     with workspace() as ws:
         fields = _same_fields("mr")
         nest = fields["rest"][0]
@@ -3039,7 +3044,7 @@ def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_non_succes
 
 
 def test_nested_log_is_missing_and_nested_agents_is_relatable():
-    """Nested log.md is missing-class; nested AGENTS.md is relatable as source and as target (L28, L215)."""
+    """Nested log.md is missing-class; nested AGENTS.md is relatable as source and as target."""
     with workspace() as ws:
         fields = _same_fields("nld", "nla", "nlt")
         nest, agents_leaf_unused, note_leaf = fields["rest"][:3]
@@ -3150,7 +3155,7 @@ def test_nested_log_is_missing_and_nested_agents_is_relatable():
 
 
 def test_mcp_nested_log_is_missing_and_nested_agents_is_relatable():
-    """MCP nested log.md is missing-class; nested AGENTS.md is relatable as source and as target (L28)."""
+    """MCP nested log.md is missing-class; nested AGENTS.md is relatable as source and as target."""
     with workspace() as ws:
         fields = _same_fields("mld")
         nest = fields["rest"][0]
@@ -3238,7 +3243,7 @@ def test_mcp_nested_log_is_missing_and_nested_agents_is_relatable():
 
 
 def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_non_success_and_write_nothing():
-    """MCP ../outside, absolute, empty, and leading-hyphen identities are non-success (L177, L215)."""
+    """MCP ../outside, absolute, empty, and leading-hyphen identities are non-success."""
     with workspace() as ws:
         fields = _same_fields("ab", "hy")
         leaf, hyphen_leaf = fields["rest"][:2]
@@ -3246,7 +3251,7 @@ def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_non_success_and_write_
         root = _seed(ws, rel, fields)
         src_before = read_bytes(concept_file(root, fields["source_id"]))
         request_id = 80
-        for aimed in ("../outside", f"/{leaf}", "", f"-{hyphen_leaf}"):
+        for aimed in (f"../{_OUTSIDE_LEAF}", f"/{leaf}", "", f"-{hyphen_leaf}"):
             for aimed_s, aimed_t in (
                 (aimed, fields["target_id"]),
                 (fields["source_id"], aimed),
@@ -3271,7 +3276,7 @@ def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_non_success_and_write_
 
 
 def test_cli_escaping_symlink_write_is_refused():
-    """CLI write through a .md symlink whose target leaves the bundle is refused (L51, L215)."""
+    """CLI write through a .md symlink whose target leaves the bundle is refused."""
     with workspace() as ws:
         fields = _same_fields("sc")
         secret_leaf = fields["rest"][0]
@@ -3299,7 +3304,7 @@ def test_cli_escaping_symlink_write_is_refused():
 
 
 def test_mcp_escaping_symlink_write_is_refused():
-    """MCP write through a .md symlink whose target leaves the bundle is refused (L51, L215)."""
+    """MCP write through a .md symlink whose target leaves the bundle is refused."""
     with workspace() as ws:
         fields = _same_fields("msc")
         secret_leaf = fields["rest"][0]
@@ -3332,7 +3337,7 @@ def test_mcp_escaping_symlink_write_is_refused():
 
 
 def test_fewer_than_two_identities_is_non_success_usage_and_does_not_write():
-    """membundle relate with zero or one identity is usage-class, unlike empty/reserved/self/missing/success (L215)."""
+    """membundle relate with zero or one identity is usage-class, unlike empty/reserved/self/missing/success."""
     with workspace() as ws:
         fields = _same_fields("nf")
         missing_id = fields["rest"][0]
@@ -3349,12 +3354,17 @@ def test_fewer_than_two_identities_is_non_success_usage_and_does_not_write():
             description=fields["prose"],
         )
         success_report = require_relate_success(success)
+        require_relate_human_success(
+            success, fields["source_id"], fields["target_id"], rel
+        )
         empty = run_relate(ws, "", fields["target_id"], rel, description=fields["prose"])
         require_relate_failure(empty)
+        require_relate_error_line(empty)
         reserved = run_relate(
             ws, "index", fields["target_id"], rel, description=fields["prose"]
         )
         require_relate_failure(reserved)
+        require_relate_error_line(reserved)
         self_rel = run_relate(
             ws,
             fields["source_id"],
@@ -3363,10 +3373,14 @@ def test_fewer_than_two_identities_is_non_success_usage_and_does_not_write():
             description=fields["prose"],
         )
         require_relate_failure(self_rel)
+        require_relate_error_line(self_rel)
         missing = run_relate(
             ws, fields["source_id"], missing_id, rel, description=fields["prose"]
         )
         require_relate_failure(missing)
+        require_relate_endpoint_not_found(
+            missing, endpoint="target", identity=missing_id
+        )
         empty_report = combined_report(empty)
         reserved_report = combined_report(reserved)
         self_report = combined_report(self_rel)
@@ -3395,7 +3409,7 @@ def test_fewer_than_two_identities_is_non_success_usage_and_does_not_write():
 
 
 def test_mcp_missing_source_or_target_key_is_tool_error_and_writes_no_link():
-    """MCP relate missing source_id, target_id, or both is a tool error and writes no link (L215)."""
+    """MCP relate missing source_id, target_id, or both is a tool error and writes no link."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -3423,7 +3437,7 @@ def test_mcp_missing_source_or_target_key_is_tool_error_and_writes_no_link():
 
 
 def test_cli_self_relate_fails_without_writing():
-    """CLI relate of a present concept to itself does not succeed and does not write (L215, L222)."""
+    """CLI relate of a present concept to itself does not succeed and does not write."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -3468,7 +3482,7 @@ def test_cli_self_relate_fails_without_writing():
 
 
 def test_mcp_self_relate_is_non_success_and_does_not_write():
-    """MCP self-relate of a present concept is non-success and does not write (L215, L222)."""
+    """MCP self-relate of a present concept is non-success and does not write."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -3513,7 +3527,7 @@ def test_mcp_self_relate_is_non_success_and_does_not_write():
 
 
 def test_cli_missing_source_or_missing_target_fails_without_writing():
-    """CLI missing source or missing target fails without writing or creating a file (L215, L222)."""
+    """CLI missing source or missing target fails without writing or creating a file."""
     with workspace() as ws:
         fields = _same_fields("ms", "mt")
         missing_source, missing_target = fields["rest"][:2]
@@ -3554,7 +3568,7 @@ def test_cli_missing_source_or_missing_target_fails_without_writing():
 
 
 def test_mcp_missing_source_or_missing_target_is_non_success_and_does_not_write():
-    """MCP missing source or missing target is non-success and writes nothing (L215, L222)."""
+    """MCP missing source or missing target is non-success and writes nothing."""
     with workspace() as ws:
         fields = _same_fields("mms", "mmt")
         missing_source, missing_target = fields["rest"][:2]
@@ -3599,7 +3613,7 @@ def test_mcp_missing_source_or_missing_target_is_non_success_and_does_not_write(
 
 
 def test_structured_cli_still_writes_source_link_and_log():
-    """Structured CLI success still writes the source link, log Update, and generated.by agent/cli (L211, L219)."""
+    """Structured CLI success still writes the source link, log Update, and generated.by agent/cli."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()
@@ -3626,7 +3640,7 @@ def test_structured_cli_still_writes_source_link_and_log():
 
 
 def test_structured_cli_supplied_actor_is_written_as_generated_by():
-    """Structured CLI with a supplied actor writes that actor as generated.by (L211, L219)."""
+    """Structured CLI with a supplied actor writes that actor as generated.by."""
     with workspace() as ws:
         fields = _same_fields("jsa", "jsb")
         left, right = fields["rest"]
@@ -3656,7 +3670,7 @@ def test_structured_cli_supplied_actor_is_written_as_generated_by():
 
 
 def test_structured_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
-    """Structured CLI empty and whitespace actor each write generated.by agent/membundle-tool (L211)."""
+    """Structured CLI empty and whitespace actor each write generated.by agent/membundle-tool."""
     with workspace() as ws:
         for actor in ("", "   "):
             fields = _same_fields("jact")
@@ -3685,7 +3699,7 @@ def test_structured_cli_empty_and_whitespace_actor_each_write_agent_membundle_to
 
 
 def test_human_mode_still_writes_source_link_and_log():
-    """Default human mode on a twin still writes the source link, log Update, and agent/cli (L211, L219)."""
+    """Default human mode on a twin still writes the source link, log Update, and agent/cli."""
     with workspace() as ws:
         fields = _same_fields()
         rel = _bundle()

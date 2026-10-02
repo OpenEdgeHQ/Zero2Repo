@@ -62,7 +62,7 @@ from F05_helpers import EXIT_DWELL_S, EXIT_POS_BAD, FREEZE_11S, UNFUSABLE_POS_ST
 from F06_helpers import _tok, runtime_att_yaw_rad, runtime_z_rate_rps
 from F07_helpers import runtime_climb_m, tropospheric_isa_pressure_pa
 
-# Named numeric oracles from FP-08 (L319–L320, L326, L338) and sealed
+# Fixed inputs and tolerances for FP-08 and sealed
 # instruments from FP-02 / FP-05.
 OUTAGE_3S = 3.0
 AIDING_FULL_S = 1.9
@@ -76,8 +76,8 @@ MAG_YEAR = 2025.0
 MAG_VAR = (1.0, 1.0, 1.0)
 ABSURD_NORTH_ACC = (3.2, 0.0, -G_MPS2)
 # The spec leaves the default stillness magnitude bounds to the implementer
-# (L180), so the standstill test sets them through the public INS options
-# (L327) and keeps its residual inside them.
+#, so the standstill test sets them through the public INS options
+# and keeps its residual inside them.
 STILL_GYR_BOUND_RPS = math.radians(5.0)
 STILL_ACC_BOUND_MPS2 = 0.5
 STILL_Z_RATE_RPS = math.radians(2.3)
@@ -173,9 +173,28 @@ static void print_triple(const char *key, int ok, const float *v)
     }
 }
 
+/* Mode name from the four published nav_suite_mode_t constants. */
+static const char *mode_text(nav_suite_mode_t m)
+{
+    if (m == NAV_SUITE_MODE_FULL) {
+        return "FULL";
+    }
+    if (m == NAV_SUITE_MODE_COASTING) {
+        return "COASTING";
+    }
+    if (m == NAV_SUITE_MODE_ATTITUDE_ONLY) {
+        return "ATTITUDE_ONLY";
+    }
+    if (m == NAV_SUITE_MODE_NONE) {
+        return "NONE";
+    }
+    return "?";
+}
+
 static void print_snap(const nav_suite_t *s, long long t_us)
 {
-    int mode = (int)nav_suite_get_mode(s);
+    nav_suite_mode_t mode_v = nav_suite_get_mode(s);
+    int mode = (int)mode_v;
     int ready = 0, pos = 0, vel_ok = 0, ned_ok = 0;
     int best = 0, ins_att = 0, ars = 0, ahrs = 0;
     int h_ok = 0, ell_ok = 0, baro_ok = 0, ars_b = 0, ahrs_b = 0;
@@ -205,8 +224,8 @@ static void print_snap(const nav_suite_t *s, long long t_us)
         ars_b = ahrs_get_bias_gyr(&s->ars, ars_bias) ? 1 : 0;
         ahrs_b = ahrs_get_bias_gyr(&s->ahrs, ahrs_bias) ? 1 : 0;
     }
-    printf("SNAP t_us=%lld mode=%d mode_name=- ready=%d pos=%d vel=%d ned=%d",
-           t_us, mode, ready, pos, vel_ok, ned_ok);
+    printf("SNAP t_us=%lld mode=%d mode_name=%s ready=%d pos=%d vel=%d ned=%d",
+           t_us, mode, mode_text(mode_v), ready, pos, vel_ok, ned_ok);
     printf(" best=%d ins_att=%d ars=%d ahrs=%d h_ok=%d ell_ok=%d baro=%d",
            best, ins_att, ars, ahrs, h_ok, ell_ok, baro_ok);
     printf(" ars_b=%d ahrs_b=%d", ars_b, ahrs_b);
@@ -495,7 +514,6 @@ def fmt3(ok, vec):
     return "%.9g,%.9g,%.9g" % (vec[0], vec[1], vec[2])
 
 def emit(nav, t_us):
-    # TEST-FIX(F08): upstream python/INSLIB/suite.py:76 shows mode_name() returns FULL, COASTING, ATTITUDE_ONLY, and NONE as text; suite.py:73 mode() returns an integer this probe only printed
     mode_name = nav.mode_name()
     # One token whatever the reader returns; a name outside the four is
     # recorded by the parser, it must not break the line.
@@ -721,7 +739,6 @@ class NavScenario:
 @dataclass
 class NavSnapshot:
     t_us: int
-    # TEST-FIX(F08): upstream python/INSLIB/suite.py:76 shows the Python navigator's mode is mode_name text; the integer from suite.py:73 is absent on a Python snapshot
     mode: int | None
     mode_name: str | None
     ready: bool
@@ -899,7 +916,6 @@ def parse_nav_snapshot(line: str) -> NavSnapshot:
     ahrs_b_ok = _parse_flag(fields, "ahrs_b")
     mode_raw = fields.get("mode")
     if mode_raw is None or mode_raw == "-":
-        # TEST-FIX(F08): upstream python/INSLIB/suite.py:73 shows mode() is an integer the Python probe no longer reads; C snapshots still carry nav_suite_get_mode
         mode_value = None
     else:
         mode_value = _parse_int(fields, "mode")
@@ -1044,7 +1060,6 @@ def _require_compiled_product():
     """
     result = _compile_product_once()
     detail = _compile_detail(result)
-    # TEST-FIX(F08): upstream Makefile:441 shows pylib is the rule that writes the shared object; a missing or failed compile leaves no library for the navigation probes
     assert result is not None, (
         "make pylib replay did not run\n" + detail
     )
@@ -1052,11 +1067,9 @@ def _require_compiled_product():
         "make pylib replay failed\n" + detail
     )
     ident = product_identity()
-    # TEST-FIX(F08): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config, and python/INSLIB/__init__.py:31 re-exports Navigator from that same package
     assert ident is not None, (
         "python package directory was not found after make pylib replay\n" + detail
     )
-    # TEST-FIX(F08): upstream Makefile:438 shows make pylib writes the shared object inside the package directory, and the object stem equals that directory name
     assert ident.library is not None and ident.library.is_file(), (
         "shared library is missing after make pylib replay\n" + detail
     )
@@ -1073,7 +1086,6 @@ def _require_compiled_product():
 
 def _navigator_py_source(ident) -> str:
     """Python navigator probe that imports the package ``make pylib`` wrote."""
-    # TEST-FIX(F08): upstream python/INSLIB/__init__.py:29 shows Config is imported from the package directory make pylib wrote, and python/INSLIB/__init__.py:31 re-exports Navigator from that same package
     source = _PY_PROBE.replace("__PKG__", ident.package_name)
     if "__PKG__" in source:
         raise HarnessError(
@@ -1087,12 +1099,10 @@ def _run_nav(kind: str, scen: NavScenario) -> NavRun:
     timeout = scen.timeout if scen.timeout else NAV_TIMEOUT
     ident = _require_compiled_product()
     if kind == "c":
-        # TEST-FIX(F08): upstream Makefile:438 shows the C probe links the shared object make pylib wrote, whose stem equals the package directory
         result = invoke(
             _C_PROBE, stdin=payload, timeout=timeout, root=repo_root()
         )
     elif kind == "py":
-        # TEST-FIX(F08): upstream python/INSLIB/__init__.py:31 shows Navigator is imported from the package directory make pylib wrote
         result = run_python(
             _navigator_py_source(ident),
             stdin=payload,
@@ -1180,7 +1190,7 @@ def require_unpublished_ellipsoid(snap: NavSnapshot, what: str) -> None:
 def indoor_ellipsoid_matches_init_origin(snap: NavSnapshot, origin_h_m: float) -> bool:
     """True when a published ellipsoid height is the prescribed init origin height.
 
-    L339's indoor hollow reports that origin as WGS84 ellipsoid height.
+    PRD's indoor hollow reports that origin as WGS84 ellipsoid height.
     Accessor-fail / NaN / None is not a match. A non-finite published value
     is a probe failure, not absence.
     """
@@ -1200,7 +1210,7 @@ def indoor_ellipsoid_matches_init_origin(snap: NavSnapshot, origin_h_m: float) -
 def require_indoor_ellipsoid_not_init_origin(
     snap: NavSnapshot, origin_h_m: float, what: str
 ) -> None:
-    """L339: indoor run does not report the prescribed init origin as WGS84 ellipsoid height."""
+    """indoor run does not report the prescribed init origin as WGS84 ellipsoid height."""
     print(
         f"{what}: ell_ok={snap.ell_ok} ell={snap.ell} init_origin_h={origin_h_m}",
         flush=True,
@@ -1212,8 +1222,10 @@ def require_indoor_ellipsoid_not_init_origin(
 
 
 def py_mode(snap: NavSnapshot, what: str) -> str:
+    """Mode name: Python mode_name(), or the C mode read through the
+    published nav_suite_mode_t constants."""
     if snap.mode_name is None:
-        raise HarnessError(f"{what}: Python snapshot has no mode name")
+        raise HarnessError(f"{what}: snapshot has no mode name")
     return snap.mode_name
 
 
@@ -1449,7 +1461,7 @@ def ecef_err_m(got: Sequence[float], fix: Sequence[float]) -> float:
 def later_fix_ecef(
     origin: Sequence[float],
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Runtime NED offset applied to a GNSS ECEF (L89–L91 / L326 later-fix).
+    """Runtime NED offset applied to a GNSS ECEF (PRD later-fix).
 
     Uses the sealed post-ready GNSS step so a 2 m 1-sigma fix remains
     fusion-usable, while staying well off the origin and above ECEF_MATCH_M.

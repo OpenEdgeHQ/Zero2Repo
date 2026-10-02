@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 import shutil
 import subprocess
 import tempfile
 import threading
-from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 
@@ -30,14 +30,12 @@ from _harness import (
 )
 from F01_helpers import (
     combined_report,
-    report_remainder_after_stripping_paths,
     unique_leaf,
 )
 from F02_helpers import BEGIN_MEMBUNDLE_COMMENT, END_MEMBUNDLE_COMMENT
 from F08_helpers import (
     PASSING_AGENTS_TEXT,
     SSOT_LINKS,
-    _walk_values,
 )
 
 MBG_RULE_IDS = ("MBG-001", "MBG-002", "MBG-003", "MBG-004", "MBG-005")
@@ -45,15 +43,28 @@ MBG_RULE_IDS = ("MBG-001", "MBG-002", "MBG-003", "MBG-004", "MBG-005")
 SsotKind = Literal["missing", "regular", "correct", "wrong_target"]
 
 _ATX = re.compile(r"^(#{1,6})(?:[ \t]+(.+?))?[ \t]*#*[ \t]*$")
-_BUDGET_FORBIDDEN = ("20", "400", "mbg-", "mermaid")
+# A small caller cap, generated per test process: large enough that a
+# three-word delimited block stays under it, small enough that a thirty-word
+# block exceeds it. The documents state no such value.
+SAMPLE_SMALL_CAP = 16 + uuid.uuid4().int % 15
+_BUDGET_FORBIDDEN = ("20", str(SAMPLE_SMALL_CAP), "400", "mbg-", "mermaid")
 
-_PROFILE_PHRASES: dict[str, tuple[str, ...]] = {
-    "software": ("clean architecture", "tdd"),
-    "research": ("citation integrity",),
+_PROFILE_WORDS: dict[str, tuple[str, ...]] = {
+    "software": ("clean", "architecture", "tdd"),
+    "research": ("citation", "integrity"),
     "legal": ("privacy", "compliance"),
-    "coaching": ("icf ethics",),
+    "coaching": ("icf", "ethics"),
     "books": ("canon", "spoilers"),
 }
+
+_TOKEN_STATS_PREFIX = "Token Stats: "
+_BUDGET_FIELD = re.compile(r"Budget: (?P<cap>-?[0-9]+)(?![0-9])")
+SSOT_LINK_PATHS = (
+    "CLAUDE.md",
+    ".cursorrules",
+    ".windsurfrules",
+    ".github/copilot-instructions.md",
+)
 
 # Recipe artifact name. The binary is built in a writable copy, not the judge cwd.
 _BIN_REL = Path("bin") / "membundle"
@@ -66,12 +77,10 @@ _NEVER_EXECUTED = (
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -186,7 +195,7 @@ def resolve_agents_binary() -> Path:
     a completed agents command.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so agents never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it agents never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -195,7 +204,7 @@ def _raise_if_agents_binary_missing(binary: Path, exc: FileNotFoundError) -> NoR
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F10): upstream _harness.py:620 shows FileNotFoundError before agents lint, init, link, or check when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F10): with no bin/membundle there is no product to run before agents lint, init, link, or check; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -222,12 +231,8 @@ def _root_path(ws: Workspace, root: str | Path | None) -> Path:
     return ws.path / path
 
 
-def _normalize_mention(text: str) -> str:
-    return text.lower().replace("_", " ").replace("/", " ")
-
-
 def budget_safe_token(prefix: str) -> str:
-    """Runtime-unique token that cannot be confused with 20 / 400 / rule ids."""
+    """Runtime-unique token that cannot be confused with the caps / rule ids."""
     for _ in range(64):
         token = unique_leaf(prefix)
         low = token.lower()
@@ -406,81 +411,6 @@ def parse_structured_lint(result: RunResult) -> Any:
     return payload
 
 
-def structured_strings(obj: Any) -> list[str]:
-    """Walk string values (and mapping keys) from a structured payload."""
-    found: list[str] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, str):
-            found.append(value)
-            return
-        if isinstance(value, Mapping):
-            for key, nested in value.items():
-                if isinstance(key, str):
-                    found.append(key)
-                elif key is None or isinstance(key, (int, float, bool)):
-                    pass
-                else:
-                    raise HarnessError(
-                        f"unclassified structured mapping key: {type(key).__name__}"
-                    )
-                walk(nested)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            for item in value:
-                walk(item)
-            return
-        if isinstance(value, (int, float, bool)) or value is None:
-            return
-        raise HarnessError(
-            f"unclassified structured value: {type(value).__name__}: {value!r}"
-        )
-
-    walk(obj)
-    return found
-
-
-def _rule_in_strings(strings: Sequence[str], rule_id: str) -> bool:
-    return any(rule_id in text for text in strings)
-
-
-def assert_rule_reported(payload: Any, rule_id: str) -> list[str]:
-    """Named MBG identifier appears among walked structured strings."""
-    strings = structured_strings(payload)
-    print(f"[F10] rule-reported {rule_id} strings={strings!r}", flush=True)
-    assert _rule_in_strings(strings, rule_id), (
-        f"structured lint did not report rule identifier {rule_id}; "
-        f"walked={strings!r}"
-    )
-    return strings
-
-
-def assert_rule_absent(payload: Any, rule_id: str) -> list[str]:
-    """Named MBG identifier is absent from walked structured strings."""
-    strings = structured_strings(payload)
-    print(f"[F10] rule-absent {rule_id} strings={strings!r}", flush=True)
-    assert not _rule_in_strings(strings, rule_id), (
-        f"structured lint reported {rule_id} on a file that must not; "
-        f"walked={strings!r}"
-    )
-    return strings
-
-
-def assert_rule_only(payload: Any, rule_id: str) -> list[str]:
-    """Named MBG-00N is present; the other four MBG-001–MBG-005 ids are absent."""
-    if rule_id not in MBG_RULE_IDS:
-        raise HarnessError(f"not an MBG-001–MBG-005 identifier: {rule_id!r}")
-    strings = assert_rule_reported(payload, rule_id)
-    for other in MBG_RULE_IDS:
-        if other == rule_id:
-            continue
-        assert not _rule_in_strings(strings, other), (
-            f"structured lint for {rule_id} also reported {other}; "
-            f"walked={strings!r}"
-        )
-    return strings
-
-
 def write_agents(ws: Workspace, rel: str | Path, body: str) -> Path:
     """Write an AGENTS.md-shaped file under the workspace."""
     dest = ws.write(rel, body)
@@ -601,7 +531,7 @@ def assert_ssot_mapping_state(
     *,
     kind: SsotKind,
 ) -> SsotKind:
-    """Classify one L69 mapping: missing / regular / correct / wrong_target."""
+    """Classify one SSoT mapping: missing / regular / correct / wrong_target."""
     base = Path(root)
     if kind not in ("missing", "regular", "correct", "wrong_target"):
         raise HarnessError(f"unclassified requested SSoT kind: {kind!r}")
@@ -617,7 +547,7 @@ def assert_ssot_mapping_state(
 
 
 def assert_named_ssot_symlinks(root: str | Path) -> None:
-    """All four L69 paths are symlinks whose resolved file is root/AGENTS.md."""
+    """All four SSoT link paths are symlinks whose resolved file is root/AGENTS.md."""
     base = Path(root)
     agents = base / "AGENTS.md"
     if not path_is_file(agents):
@@ -655,96 +585,6 @@ def assert_named_ssot_symlinks(root: str | Path) -> None:
     print(f"[F10] all four SSoT mappings resolve to {agents}", flush=True)
 
 
-def mentions_profile(region: str, profile: str) -> bool:
-    """Case-insensitive mention of that profile's PRD tokens (_ as space)."""
-    key = profile.lower()
-    if key not in _PROFILE_PHRASES:
-        raise HarnessError(f"unknown domain profile {profile!r}")
-    normalized = _normalize_mention(region)
-    phrases = _PROFILE_PHRASES[key]
-    for phrase in phrases:
-        needle = _normalize_mention(phrase)
-        if needle in normalized:
-            continue
-        words = [word for word in needle.split() if word]
-        if words and all(word in normalized for word in words):
-            continue
-        print(
-            f"[F10] profile {key} missing {phrase!r} in region",
-            flush=True,
-        )
-        return False
-    print(f"[F10] profile {key} mentions {phrases!r}", flush=True)
-    return True
-
-
-def human_budget_remainder(
-    report: str,
-    *,
-    path_tokens: Sequence[str],
-    fixture_tokens: Sequence[str],
-) -> str:
-    """Strip workspace paths, MBG-001–MBG-005 identifiers, and fixture tokens."""
-    remainder = report_remainder_after_stripping_paths(report, path_tokens)
-    for rule_id in sorted(MBG_RULE_IDS, key=len, reverse=True):
-        remainder = remainder.replace(rule_id, "")
-    for token in sorted((str(t) for t in fixture_tokens if t), key=len, reverse=True):
-        remainder = remainder.replace(token, "")
-    print(f"[F10] human-budget remainder={remainder!r}", flush=True)
-    return remainder
-
-
-def remainder_has_quantity(text: str, quantity: int) -> bool:
-    """True when *quantity* appears as a whole number, not inside a larger integer."""
-    return re.search(rf"(?<![0-9]){quantity}(?![0-9])", text) is not None
-
-
-def assert_human_in_force_budget_remainders_differ(
-    cap20_remainder: str,
-    *four_hundred_remainders: str,
-) -> None:
-    """Omit / non-positive / explicit-400 human remainders differ from cap-20.
-
-    After the same path / MBG-001–MBG-005 identifier / fixture-token strip, a
-    canned report that always contains both 400 and 20 has one remainder on
-    every run. The in-force human budget is that contrast. The other sample
-    cap integer is not required to be absent.
-    """
-    if not four_hundred_remainders:
-        raise HarnessError(
-            "need at least one omit/non-positive/explicit-400 remainder "
-            "to contrast with cap 20"
-        )
-    print(
-        f"[F10] human-budget cap20 remainder={cap20_remainder!r} "
-        f"400-arm remainders={list(four_hundred_remainders)!r}",
-        flush=True,
-    )
-    for rem in four_hundred_remainders:
-        assert rem != cap20_remainder, (
-            "omit/non-positive/explicit-400 human remainder did not differ "
-            "from the cap-20 remainder after path/identifier/token strip; "
-            "a canned report that always prints both 400 and 20 satisfies "
-            "presence checks without tracking the in-force budget: "
-            f"{rem!r}"
-        )
-
-
-def payload_remainder_after_strip(
-    payload: Any,
-    *,
-    path_tokens: Sequence[str],
-    fixture_tokens: Sequence[str],
-) -> str:
-    """Walked structured strings after stripping paths and unique file tokens."""
-    blob = "\n".join(structured_strings(payload))
-    remainder = report_remainder_after_stripping_paths(blob, path_tokens)
-    for token in sorted((str(t) for t in fixture_tokens if t), key=len, reverse=True):
-        remainder = remainder.replace(token, "")
-    print(f"[F10] payload remainder={remainder!r}", flush=True)
-    return remainder
-
-
 def unique_passing_agents() -> tuple[str, str]:
     """Sealed passing sample plus a runtime-unique ASCII line that does not break MBG."""
     token = budget_safe_token("note")
@@ -752,354 +592,160 @@ def unique_passing_agents() -> tuple[str, str]:
     return body, token
 
 
-def structured_sequence_lengths(obj: Any) -> list[int]:
-    """Lengths of JSON arrays in a structured payload. Raises on unclassified input."""
-    found: list[int] = []
+def mentions_profile(region: str, profile: str) -> bool:
+    """Domain Codex region contains each keyword of *profile*, ignoring letter case."""
+    key = profile.lower()
+    if key not in _PROFILE_WORDS:
+        raise HarnessError(f"unknown domain profile {profile!r}")
+    lowered = region.lower()
+    missing = [word for word in _PROFILE_WORDS[key] if word not in lowered]
+    print(f"[F10] profile {key} missing keywords={missing!r}", flush=True)
+    return not missing
 
-    def walk(value: Any) -> None:
-        if isinstance(value, (str, bytes, bytearray)):
-            return
-        if isinstance(value, Mapping):
-            for nested in value.values():
-                walk(nested)
-            return
-        if isinstance(value, Sequence):
-            found.append(len(value))
-            for item in value:
-                walk(item)
-            return
-        if isinstance(value, (int, float, bool)) or value is None:
-            return
-        raise HarnessError(
-            f"unclassified structured value while walking array lengths: "
-            f"{type(value).__name__}: {value!r}"
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def lint_report(payload: Any) -> dict[str, Any]:
+    """Structured lint object with its stated members, type-checked.
+
+    ``passed`` (boolean), ``error_count`` / ``warn_count`` (integers),
+    ``findings`` (array of objects with string ``rule_id`` and
+    ``severity`` and integer ``line``), and ``token_stats`` (object with
+    integer ``estimated_tokens`` and ``budget_limit`` and boolean
+    ``budget_exceeded``).
+    """
+    assert isinstance(payload, dict), (
+        f"agents lint --json stdout is not a JSON object: {payload!r}"
+    )
+    assert isinstance(payload.get("passed"), bool), (
+        f"lint report passed is not a boolean: {payload!r}"
+    )
+    for key in ("error_count", "warn_count"):
+        assert _is_int(payload.get(key)), (
+            f"lint report {key} is not an integer: {payload!r}"
         )
+    findings = payload.get("findings")
+    assert isinstance(findings, list), (
+        f"lint report findings is not an array: {payload!r}"
+    )
+    for item in findings:
+        assert (
+            isinstance(item, dict)
+            and isinstance(item.get("rule_id"), str)
+            and item.get("severity") in ("error", "warning")
+            and _is_int(item.get("line"))
+        ), f"lint finding does not have rule_id/severity/line: {item!r}"
+    stats = payload.get("token_stats")
+    assert isinstance(stats, dict), (
+        f"lint report token_stats is not an object: {payload!r}"
+    )
+    assert _is_int(stats.get("estimated_tokens")), (
+        f"token_stats estimated_tokens is not an integer: {stats!r}"
+    )
+    assert _is_int(stats.get("budget_limit")), (
+        f"token_stats budget_limit is not an integer: {stats!r}"
+    )
+    assert isinstance(stats.get("budget_exceeded"), bool), (
+        f"token_stats budget_exceeded is not a boolean: {stats!r}"
+    )
+    return payload
 
-    walk(obj)
-    print(f"[F10] structured array lengths={found!r}", flush=True)
-    return found
+
+def finding_rule_ids(payload: Any) -> list[str]:
+    """``rule_id`` of each finding, in report order."""
+    ids = [item["rule_id"] for item in lint_report(payload)["findings"]]
+    print(f"[F10] finding rule ids={ids!r}", flush=True)
+    return ids
 
 
-def fixture_line_integers(text: str, *needles: str) -> set[int]:
-    """1-based and 0-based line numbers of planted needles (input covariates)."""
-    drop: set[int] = set()
-    lines = text.splitlines()
-    for needle in needles:
-        hits = 0
-        for index, line in enumerate(lines, start=1):
-            if needle in line:
-                hits += 1
-                drop.add(index)
-                drop.add(index - 1)
-        if hits == 0:
-            raise HarnessError(
-                f"fixture needle {needle!r} missing from planted text"
-            )
-    print(f"[F10] fixture line covariates={sorted(drop)!r}", flush=True)
-    return drop
+def assert_rule_absent(payload: Any, rule_id: str) -> list[str]:
+    """No finding carries *rule_id*."""
+    ids = finding_rule_ids(payload)
+    assert rule_id not in ids, (
+        f"structured lint reported {rule_id} on a file that must not; "
+        f"rule_ids={ids!r}"
+    )
+    return ids
 
 
-def assert_structured_counts_greater(
-    fewer: Any,
-    more: Any,
-    *,
-    rule_id: str,
-    drop_integers: Sequence[int],
-) -> None:
-    """More-findings arm reports a greater count than the fewer-findings arm.
+def assert_rule_only(payload: Any, rule_id: str) -> list[str]:
+    """Some finding carries *rule_id*; no finding carries another MBG rule id."""
+    if rule_id not in MBG_RULE_IDS:
+        raise HarnessError(f"not an MBG-001–MBG-005 identifier: {rule_id!r}")
+    ids = finding_rule_ids(payload)
+    assert rule_id in ids, (
+        f"structured lint did not report rule {rule_id}; rule_ids={ids!r}"
+    )
+    others = sorted(set(ids) - {rule_id})
+    assert not others, (
+        f"structured lint for {rule_id} also reported {others!r}; rule_ids={ids!r}"
+    )
+    return ids
 
-    Any one public-surface carrier is enough: JSON numbers after dropping
-    planted line positions, JSON array lengths, or how often the named rule
-    identifier appears among walked strings. Key names are not pinned.
-    """
-    drop = {int(n) for n in drop_integers}
-    few_nums = [
-        float(v) for v in _walk_values(fewer, want=int) if int(v) not in drop
-    ]
-    more_nums = [
-        float(v) for v in _walk_values(more, want=int) if int(v) not in drop
-    ]
-    few_lens = structured_sequence_lengths(fewer)
-    more_lens = structured_sequence_lengths(more)
-    few_ids = sum(text.count(rule_id) for text in structured_strings(fewer))
-    more_ids = sum(text.count(rule_id) for text in structured_strings(more))
 
-    def _pad_desc(values: Sequence[float]) -> list[float]:
-        ordered = sorted((float(v) for v in values), reverse=True)
-        return ordered
-
-    few_pad = _pad_desc(few_nums)
-    more_pad = _pad_desc(more_nums)
-    width = max(len(few_pad), len(more_pad))
-    few_pad = few_pad + [0.0] * (width - len(few_pad))
-    more_pad = more_pad + [0.0] * (width - len(more_pad))
-    numbers_greater = bool(width) and more_pad > few_pad
-
-    few_lpad = _pad_desc(few_lens)
-    more_lpad = _pad_desc(more_lens)
-    lwidth = max(len(few_lpad), len(more_lpad))
-    few_lpad = few_lpad + [0.0] * (lwidth - len(few_lpad))
-    more_lpad = more_lpad + [0.0] * (lwidth - len(more_lpad))
-    lengths_greater = bool(lwidth) and more_lpad > few_lpad
-    ids_greater = more_ids > few_ids
+def assert_structured_counts_greater(fewer: Any, more: Any, *, rule_id: str) -> None:
+    """The more-findings arm has a greater ``error_count`` and more *rule_id* findings."""
+    few = lint_report(fewer)
+    many = lint_report(more)
+    few_n = finding_rule_ids(few).count(rule_id)
+    many_n = finding_rule_ids(many).count(rule_id)
     print(
-        f"[F10] counts numbers fewer={few_pad!r} more={more_pad!r} "
-        f"lengths fewer={few_lpad!r} more={more_lpad!r} "
-        f"{rule_id} fewer={few_ids} more={more_ids}",
+        f"[F10] counts error_count fewer={few['error_count']} more={many['error_count']} "
+        f"{rule_id} findings fewer={few_n} more={many_n}",
         flush=True,
     )
-    assert numbers_greater or lengths_greater or ids_greater, (
-        "structured lint did not report a greater count on the more-findings "
-        f"arm; numbers fewer={few_pad!r} more={more_pad!r}; "
-        f"array lengths fewer={few_lpad!r} more={more_lpad!r}; "
-        f"{rule_id} occurrences fewer={few_ids} more={more_ids}"
+    assert many["error_count"] > few["error_count"], (
+        "structured lint error_count is not greater on the more-findings arm; "
+        f"fewer={few['error_count']} more={many['error_count']}"
+    )
+    assert many_n > few_n, (
+        f"structured lint does not report more {rule_id} findings on the "
+        f"more-findings arm; fewer={few_n} more={many_n}"
     )
 
 
-_DROP = object()
-
-
-def _carries_mbg_identifier(obj: Any) -> bool:
-    if isinstance(obj, str):
-        return any(rule_id in obj for rule_id in MBG_RULE_IDS)
-    if isinstance(obj, Mapping):
-        strings = structured_strings(obj)
-        return any(_rule_in_strings(strings, rule_id) for rule_id in MBG_RULE_IDS)
-    return False
-
-
-def drop_mbg_finding_records(obj: Any, *, is_root: bool = True) -> Any:
-    """Remove finding records (nodes that carry MBG-001–MBG-005 identifiers).
-
-    The root object is kept even when it contains those identifiers nested
-    under findings. Unclassified values raise; they are never mapped to
-    absence.
-    """
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return obj
-    if isinstance(obj, Mapping):
-        if not is_root and _carries_mbg_identifier(obj):
-            return _DROP
-        out: dict[Any, Any] = {}
-        for key, value in obj.items():
-            if not isinstance(key, (str, int, float, bool)) and key is not None:
-                raise HarnessError(
-                    f"unclassified structured mapping key while dropping "
-                    f"findings: {type(key).__name__}"
-                )
-            kept = drop_mbg_finding_records(value, is_root=False)
-            if kept is _DROP:
-                continue
-            out[key] = kept
-        return out
-    if isinstance(obj, Sequence) and not isinstance(obj, (bytes, bytearray)):
-        kept_items: list[Any] = []
-        for item in obj:
-            if isinstance(item, str) and _carries_mbg_identifier(item):
-                continue
-            kept = drop_mbg_finding_records(item, is_root=False)
-            if kept is _DROP:
-                continue
-            kept_items.append(kept)
-        return kept_items
-    raise HarnessError(
-        f"unclassified structured value while dropping findings: "
-        f"{type(obj).__name__}: {obj!r}"
-    )
-
-
-def token_statistics_grouping(payload: Any) -> Any:
-    """Structured leftover after finding records are removed (L301 grouping).
-
-    Pass/fail and counts stay in the tree so two same-file runs that differ
-    only in caller cap share them; the leftover grouping still has to report
-    the in-force cap, the exceeded mark, and an estimate.
-    """
-    grouping = drop_mbg_finding_records(payload)
-    print(
-        f"[F10] token-statistics grouping after findings dropped="
-        f"{grouping!r}",
-        flush=True,
-    )
-    return grouping
-
-
-def grouping_integers(obj: Any) -> list[int]:
-    """Sortable integers in a structured leftover grouping."""
-    found = [int(v) for v in _walk_values(obj, want=int)]
-    print(f"[F10] grouping integers={found!r}", flush=True)
-    return found
-
-
-def grouping_booleans(obj: Any) -> list[bool]:
-    """Two-state boolean values in a structured leftover grouping."""
-    found = [bool(v) for v in _walk_values(obj, want=bool)]
-    print(f"[F10] grouping booleans={found!r}", flush=True)
-    return found
-
-
-def payload_has_mbg_findings(payload: Any) -> bool:
-    strings = structured_strings(payload)
-    return any(_rule_in_strings(strings, rule_id) for rule_id in MBG_RULE_IDS)
-
-
-def payload_reports_mbg005(payload: Any) -> bool:
-    return _rule_in_strings(structured_strings(payload), "MBG-005")
-
-
-def count_finding_records(obj: Any, *, is_root: bool = True) -> int:
-    """How many finding records (nodes carrying MBG-001–MBG-005) sit under *obj*."""
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return 0
-    if isinstance(obj, Mapping):
-        if not is_root and _carries_mbg_identifier(obj):
-            return 1
-        return sum(count_finding_records(v, is_root=False) for v in obj.values())
-    if isinstance(obj, Sequence) and not isinstance(obj, (bytes, bytearray)):
-        total = 0
-        for item in obj:
-            if isinstance(item, str) and _carries_mbg_identifier(item):
-                total += 1
-            else:
-                total += count_finding_records(item, is_root=False)
-        return total
-    raise HarnessError(
-        f"unclassified structured value while counting findings: "
-        f"{type(obj).__name__}: {obj!r}"
-    )
-
-
-_PATHISH = re.compile(r"[/\\]|\.md$", re.IGNORECASE)
-_PASS_STRINGS = frozenset({"pass", "passed", "ok", "success", "true"})
-_FAIL_STRINGS = frozenset({"fail", "failed", "failure", "error", "false"})
-
-
-def _as_int_leaf(value: int | float) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return int(value)
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    return None
-
-
-def _collect_leaves(obj: Any) -> Counter[tuple[str, Any]]:
-    """Typed leftover leaves. Path-like strings and MBG identifiers are covariates."""
-    found: Counter[tuple[str, Any]] = Counter()
-
-    def walk(value: Any) -> None:
-        if isinstance(value, bool):
-            found[("bool", value)] += 1
-            return
-        as_int = _as_int_leaf(value) if isinstance(value, (int, float)) else None
-        if as_int is not None:
-            found[("int", as_int)] += 1
-            return
-        if isinstance(value, float):
-            found[("float", float(value))] += 1
-            return
-        if isinstance(value, str):
-            text = value
-            for rule_id in sorted(MBG_RULE_IDS, key=len, reverse=True):
-                text = text.replace(rule_id, "")
-            text = text.strip()
-            if not text or _PATHISH.search(text):
-                return
-            found[("str", text)] += 1
-            return
-        if value is None:
-            return
-        if isinstance(value, Mapping):
-            for nested in value.values():
-                walk(nested)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-            for item in value:
-                walk(item)
-            return
-        raise HarnessError(
-            f"unclassified structured value while collecting leftover leaves: "
-            f"{type(value).__name__}: {value!r}"
+def assert_warning_count_unchanged_when_errors_increase(fewer: Any, more: Any) -> None:
+    """``error_count`` matches the error findings and grows; ``warn_count`` stays put."""
+    few = lint_report(fewer)
+    many = lint_report(more)
+    for label, rep in (("fewer", few), ("more", many)):
+        errors = sum(1 for f in rep["findings"] if f["severity"] == "error")
+        warns = sum(1 for f in rep["findings"] if f["severity"] == "warning")
+        assert rep["error_count"] == errors, (
+            f"{label} arm error_count {rep['error_count']} does not equal its "
+            f"{errors} error findings"
         )
-
-    walk(obj)
-    return found
-
-
-def _drop_one(leaves: Counter[tuple[str, Any]], leaf: tuple[str, Any]) -> None:
-    if leaves[leaf] <= 0:
-        return
-    leaves[leaf] -= 1
-    if leaves[leaf] <= 0:
-        del leaves[leaf]
-
-
-def leftover_grouping_two_state(
-    payload: Any,
-    *,
-    caps: Sequence[int] = (),
-    drop_pass_fail: bool = True,
-) -> Counter[tuple[str, Any]]:
-    """Leftover grouping leaves after findings, optional pass/fail, counts, and caps.
-
-    Field names and exceeded-mark encoding are not pinned. Path-like strings
-    and MBG identifiers are stripped as covariates. A leftover boolean that is
-    not the mark stays in the bag on every arm and cannot by itself create a
-    difference that tracks MBG-005.
-    """
-    grouping = token_statistics_grouping(payload)
-    leaves = _collect_leaves(grouping)
-    passed = not payload_has_mbg_findings(payload)
-    finding_count = count_finding_records(payload)
-    if drop_pass_fail:
-        if leaves[("bool", passed)] > 0:
-            _drop_one(leaves, ("bool", passed))
-        elif leaves[("int", 1 if passed else 0)] > 0:
-            _drop_one(leaves, ("int", 1 if passed else 0))
-        else:
-            wanted = _PASS_STRINGS if passed else _FAIL_STRINGS
-            for key in list(leaves):
-                kind, text = key
-                if kind == "str" and str(text).strip().lower() in wanted:
-                    _drop_one(leaves, key)
-                    break
-    _drop_one(leaves, ("int", finding_count))
-    for cap in caps:
-        while leaves[("int", int(cap))] > 0:
-            _drop_one(leaves, ("int", int(cap)))
+        assert rep["warn_count"] == warns, (
+            f"{label} arm warn_count {rep['warn_count']} does not equal its "
+            f"{warns} warning findings"
+        )
     print(
-        f"[F10] leftover two-state passed={passed} finding_count={finding_count} "
-        f"caps={list(caps)!r} leaves={dict(leaves)!r}",
+        f"[F10] error_count fewer={few['error_count']} more={many['error_count']} "
+        f"warn_count fewer={few['warn_count']} more={many['warn_count']}",
         flush=True,
     )
-    return leaves
+    assert many["error_count"] > few["error_count"], (
+        "more-findings arm does not have a greater error_count; "
+        f"fewer={few['error_count']} more={many['error_count']}"
+    )
+    assert few["warn_count"] == many["warn_count"], (
+        "warn_count changed when the MBG error count increased; "
+        f"fewer={few['warn_count']} more={many['warn_count']}"
+    )
 
 
-def _drop_unique_non_mark_ints(
-    left: Counter[tuple[str, Any]],
-    right: Counter[tuple[str, Any]],
-) -> tuple[Counter[tuple[str, Any]], Counter[tuple[str, Any]]]:
-    """Drop sortable integers unique to one arm, keeping 0/1 as possible two-states."""
-    left = left.copy()
-    right = right.copy()
-    left_ints = {value for kind, value in left if kind == "int"}
-    right_ints = {value for kind, value in right if kind == "int"}
-    for number in left_ints - right_ints:
-        if number in (0, 1):
-            continue
-        del left[("int", number)]
-    for number in right_ints - left_ints:
-        if number in (0, 1):
-            continue
-        del right[("int", number)]
-    left_floats = {value for kind, value in left if kind == "float"}
-    right_floats = {value for kind, value in right if kind == "float"}
-    for number in left_floats - right_floats:
-        del left[("float", number)]
-    for number in right_floats - left_floats:
-        del right[("float", number)]
-    return left, right
+def budget_limit(payload: Any) -> int:
+    return lint_report(payload)["token_stats"]["budget_limit"]
+
+
+def estimated_tokens(payload: Any) -> int:
+    return lint_report(payload)["token_stats"]["estimated_tokens"]
+
+
+def budget_exceeded(payload: Any) -> bool:
+    return lint_report(payload)["token_stats"]["budget_exceeded"]
 
 
 def assert_in_force_cap_differs(
@@ -1108,355 +754,115 @@ def assert_in_force_cap_differs(
     *,
     also_400: Sequence[Any] = (),
 ) -> None:
-    """Same-file leftover grouping reports in-force cap 400 vs 20 (L301/L316).
-
-    After findings are removed, omit (and each non-positive / explicit-400
-    twin) still contains sortable integer 400, the cap-20 run contains 20,
-    and the two integer bags differ. Shared counts and the estimate cancel
-    across the same file; dummy bags that always contain both 400 and 20
-    do not differ.
-    """
-    omit_g = token_statistics_grouping(omit_payload)
-    cap20_g = token_statistics_grouping(cap20_payload)
-    omit_ints = set(grouping_integers(omit_g))
-    cap20_ints = set(grouping_integers(cap20_g))
-    print(
-        f"[F10] in-force cap omit_ints={sorted(omit_ints)!r} "
-        f"cap20_ints={sorted(cap20_ints)!r}",
-        flush=True,
+    """``token_stats.budget_limit`` is 400 when omitted / non-positive / 400, and the small cap for the small cap."""
+    omit_cap = budget_limit(omit_payload)
+    cap20 = budget_limit(cap20_payload)
+    print(f"[F10] budget_limit omit={omit_cap} cap20={cap20}", flush=True)
+    assert omit_cap == 400, (
+        f"structured lint budget_limit is {omit_cap}, not 400, when the caller "
+        "omits the cap"
     )
-    assert 400 in omit_ints, (
-        "structured leftover grouping after removing findings does not "
-        f"report in-force cap 400 when the caller omits the cap: "
-        f"{sorted(omit_ints)!r}"
-    )
-    assert 20 in cap20_ints, (
-        "structured leftover grouping after removing findings does not "
-        f"report in-force cap 20 when the caller supplies 20: "
-        f"{sorted(cap20_ints)!r}"
-    )
-    assert omit_ints != cap20_ints, (
-        "two structured runs of the same file that differ only in the "
-        "caller cap did not differ in the reported in-force cap; "
-        f"both={sorted(omit_ints)!r}"
+    assert cap20 == SAMPLE_SMALL_CAP, (
+        f"structured lint budget_limit is {cap20}, not {SAMPLE_SMALL_CAP}, "
+        f"when the caller supplies {SAMPLE_SMALL_CAP}"
     )
     for extra in also_400:
-        extra_ints = set(grouping_integers(token_statistics_grouping(extra)))
-        assert 400 in extra_ints, (
-            "structured leftover grouping does not report in-force cap 400 "
-            f"for a non-positive or explicit-400 caller cap: "
-            f"{sorted(extra_ints)!r}"
+        extra_cap = budget_limit(extra)
+        assert extra_cap == 400, (
+            f"structured lint budget_limit is {extra_cap}, not 400, for a "
+            "non-positive or explicit-400 caller cap"
         )
-    shared = (omit_ints & cap20_ints) - {0, 1}
-    print(f"[F10] estimate-presence shared non-count ints={sorted(shared)!r}", flush=True)
-    assert shared, (
-        "structured leftover grouping after removing findings does not "
-        "report a working-memory estimate as a sortable integer (presence); "
-        f"omit={sorted(omit_ints)!r} cap20={sorted(cap20_ints)!r}"
-    )
+    estimated_tokens(omit_payload)
+    estimated_tokens(cap20_payload)
 
 
 def assert_exceeded_mark_matches_mbg005(
     under_clean: Any,
     under_other_fail: Any,
     over_mbg005: Any,
-    *,
-    caps: Sequence[int] = (20, 400),
 ) -> None:
-    """Leftover grouping two-state matches MBG-005 presence (encoding open).
-
-    After pass/fail, counts, findings, in-force cap integers, and unique
-    estimate integers are stripped, the two MBG-005-absent arms match each
-    other and differ from the MBG-005-present arm. A leftover boolean that
-    is not the mark is the same on every arm and cannot satisfy this.
-    Boolean, string, and 0/1 integer encodings of the mark all remain.
-    """
-    assert not payload_reports_mbg005(under_clean), (
-        "under-budget clean arm unexpectedly reports MBG-005"
+    """``token_stats.budget_exceeded`` is true exactly on the arm reporting MBG-005."""
+    arms = (
+        ("under-budget clean", under_clean, False),
+        ("under-budget MBG-001 fail", under_other_fail, False),
+        ("over-budget MBG-005", over_mbg005, True),
     )
-    assert not payload_reports_mbg005(under_other_fail), (
-        "under-budget non-MBG-005 fail arm unexpectedly reports MBG-005"
-    )
-    assert payload_reports_mbg005(over_mbg005), (
-        "over-budget arm does not report MBG-005 among findings"
-    )
-    clean = leftover_grouping_two_state(under_clean, caps=caps, drop_pass_fail=True)
-    other = leftover_grouping_two_state(
-        under_other_fail, caps=caps, drop_pass_fail=True
-    )
-    over = leftover_grouping_two_state(over_mbg005, caps=caps, drop_pass_fail=True)
-    clean_vs_other, other_vs_clean = _drop_unique_non_mark_ints(clean, other)
-    print(
-        f"[F10] exceeded two-state clean={dict(clean_vs_other)!r} "
-        f"other={dict(other_vs_clean)!r}",
-        flush=True,
-    )
-    assert clean_vs_other == other_vs_clean, (
-        "under-budget leftover grouping two-state differs between a clean "
-        "run and an MBG-001 (non-MBG-005) failure after findings, pass/fail, "
-        f"counts, and caps are removed; clean={dict(clean_vs_other)!r} "
-        f"other={dict(other_vs_clean)!r}"
-    )
-    clean_vs_over, over_vs_clean = _drop_unique_non_mark_ints(clean, over)
-    other_vs_over, over_vs_other = _drop_unique_non_mark_ints(other, over)
-    print(
-        f"[F10] exceeded two-state vs over clean={dict(clean_vs_over)!r} "
-        f"other={dict(other_vs_over)!r} over={dict(over_vs_clean)!r}",
-        flush=True,
-    )
-    assert clean_vs_over != over_vs_clean, (
-        "two structured runs that differ in whether the estimate exceeds "
-        "the cap did not differ in the leftover grouping two-state matching "
-        f"MBG-005 presence; both={dict(clean_vs_over)!r}"
-    )
-    assert other_vs_over != over_vs_other, (
-        "leftover grouping two-state does not match MBG-005 presence: an "
-        "MBG-001 failure and an MBG-005 failure left the same mark after "
-        f"findings, pass/fail, counts, and caps are removed; "
-        f"both={dict(other_vs_over)!r}"
-    )
+    for label, payload, want in arms:
+        has_005 = "MBG-005" in finding_rule_ids(payload)
+        mark = budget_exceeded(payload)
+        print(f"[F10] {label}: MBG-005={has_005} budget_exceeded={mark}", flush=True)
+        assert has_005 is want, (
+            f"{label} arm MBG-005 presence is {has_005}, expected {want}"
+        )
+        assert mark is want, (
+            f"{label} arm budget_exceeded is {mark}, expected {want} "
+            "(must match MBG-005 presence)"
+        )
 
 
 def assert_structured_pass_fail_distinct(pass_payload: Any, fail_payload: Any) -> None:
-    """Structured pass/fail is a JSON field, not findings ids or process exit.
-
-    After finding records and the matching error-count integer are removed
-    from the parsed payloads (returncode is never consulted), a two-state
-    leftover still differs between a passing structured run and a failing
-    one. Unique estimate integers and in-force caps are stripped so the
-    remaining difference cannot be token statistics.
-    """
-    assert not payload_has_mbg_findings(pass_payload), (
-        "pass arm still reports an MBG identifier; cannot isolate pass/fail"
-    )
-    assert payload_has_mbg_findings(fail_payload), (
-        "fail arm reports no MBG identifier; cannot isolate pass/fail"
-    )
-    passed = leftover_grouping_two_state(
-        pass_payload, caps=(20, 400), drop_pass_fail=False
-    )
-    failed = leftover_grouping_two_state(
-        fail_payload, caps=(20, 400), drop_pass_fail=False
-    )
-    passed_cmp, failed_cmp = _drop_unique_non_mark_ints(passed, failed)
+    """``passed`` is true on the passing run and false on the failing one."""
+    passed = lint_report(pass_payload)
+    failed = lint_report(fail_payload)
     print(
-        f"[F10] structured pass/fail pass={dict(passed_cmp)!r} "
-        f"fail={dict(failed_cmp)!r}",
+        f"[F10] passed pass-arm={passed['passed']} fail-arm={failed['passed']}",
         flush=True,
     )
-    assert passed_cmp != failed_cmp, (
-        "structured leftover after findings and counts are removed does not "
-        "still differ in pass/fail (distinct from findings identifiers and "
-        f"from process exit); pass={dict(passed_cmp)!r} fail={dict(failed_cmp)!r}"
+    assert passed["passed"] is True and passed["error_count"] == 0, (
+        f"passing structured lint is not passed with error_count 0: {passed!r}"
+    )
+    assert failed["passed"] is False and failed["error_count"] > 0, (
+        f"failing structured lint is not passed false with errors: {failed!r}"
     )
 
 
-def _root_integer_counts(obj: Any) -> Counter[int]:
-    """Sortable integers at the leftover root, not inside nested groupings."""
-    if not isinstance(obj, Mapping):
-        raise HarnessError(
-            "structured leftover after findings is not a mapping: "
-            f"{type(obj).__name__}: {obj!r}"
+def assert_working_memory_estimate_sorts_below(inner_payload: Any, whole_payload: Any) -> None:
+    """Begin-then-end run's ``estimated_tokens`` sorts strictly below the whole-file run's."""
+    inner = estimated_tokens(inner_payload)
+    whole = estimated_tokens(whole_payload)
+    print(f"[F10] estimated_tokens inner={inner} whole={whole}", flush=True)
+    assert inner < whole, (
+        "working-memory estimate for the well-formed begin-then-end run does "
+        "not sort strictly below the omitted-delimiter whole-file run; "
+        f"inner={inner} whole={whole}"
+    )
+
+
+def human_lint_budget(result: RunResult) -> int:
+    """In-force cap from human lint stdout's second line: it begins
+    ``Token Stats: `` and contains ``Budget: <cap>`` (Contract Output forms)."""
+    lines = result.stdout_text.splitlines()
+    print(f"[F10] human lint head={lines[:2]!r}", flush=True)
+    assert len(lines) >= 2 and lines[0].startswith("MBG Linter: "), (
+        f"human lint stdout does not start with 'MBG Linter: '; stdout={result.stdout_text!r}"
+    )
+    caps = (
+        list(_BUDGET_FIELD.finditer(lines[1]))
+        if lines[1].startswith(_TOKEN_STATS_PREFIX)
+        else []
+    )
+    assert len(caps) == 1, (
+        "human lint stdout second line does not begin 'Token Stats: ' with "
+        f"exactly one 'Budget: <cap>' field; line={lines[1]!r}"
+    )
+    match = caps[0]
+    return int(match.group("cap"))
+
+
+def link_check_marks(result: RunResult) -> dict[str, str]:
+    """``agents link --check`` stdout: link path -> ``✓`` or ``✗`` for each mapping line."""
+    lines = result.stdout_text.splitlines()
+    assert lines, f"link --check stdout is empty; stdout={result.stdout_text!r}"
+    # Contract Output forms, ``agents link``: a free first line, then one
+    # mapping line per link path beginning with its mark.
+    mapping_lines = [ln for ln in lines[1:] if ln.startswith(("✓ ", "✗ "))]
+    marks: dict[str, str] = {}
+    for rel in SSOT_LINK_PATHS:
+        hits = [ln for ln in mapping_lines if rel in ln]
+        assert len(hits) == 1, (
+            f"link --check stdout has {len(hits)} mapping lines for {rel}, not one; "
+            f"stdout={result.stdout_text!r}"
         )
-    found: Counter[int] = Counter()
-    for value in obj.values():
-        if isinstance(value, bool):
-            continue
-        as_int = _as_int_leaf(value) if isinstance(value, (int, float)) else None
-        if as_int is not None:
-            found[as_int] += 1
-    print(f"[F10] root leftover integers={dict(found)!r}", flush=True)
-    return found
-
-
-def _nested_integer_counts(obj: Any) -> Counter[int]:
-    """Sortable integers sitting inside nested leftover mappings (token statistics)."""
-    if not isinstance(obj, Mapping):
-        raise HarnessError(
-            "structured leftover after findings is not a mapping: "
-            f"{type(obj).__name__}: {obj!r}"
-        )
-    found: Counter[int] = Counter()
-    for value in obj.values():
-        if isinstance(value, Mapping):
-            for number in grouping_integers(value):
-                found[int(number)] += 1
-            continue
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            for item in value:
-                if isinstance(item, Mapping):
-                    for number in grouping_integers(item):
-                        found[int(number)] += 1
-    print(f"[F10] nested leftover integers={dict(found)!r}", flush=True)
-    return found
-
-
-def _root_has_bool(obj: Any) -> bool:
-    if not isinstance(obj, Mapping):
-        return False
-    return any(isinstance(value, bool) for value in obj.values())
-
-
-def _drop_one_int(bag: Counter[int], number: int) -> None:
-    if bag[number] <= 0:
-        return
-    bag[number] -= 1
-    if bag[number] <= 0:
-        del bag[number]
-
-
-def _warning_count_bag(
-    grouping: Any,
-    *,
-    finding_count: int,
-    payload: Any,
-    caps: Sequence[int],
-    max_finding: int,
-) -> Counter[int]:
-    """Leftover root integers after error/finding count, pass/fail, and token stats."""
-    bag = _root_integer_counts(grouping)
-    nested = _nested_integer_counts(grouping)
-    _drop_one_int(bag, int(finding_count))
-    if not _root_has_bool(grouping):
-        passed = not payload_has_mbg_findings(payload)
-        _drop_one_int(bag, 1 if passed else 0)
-    for number, count in list(nested.items()):
-        remaining = int(count)
-        while bag[int(number)] > 0 and remaining > 0:
-            _drop_one_int(bag, int(number))
-            remaining -= 1
-    for cap in caps:
-        while bag[int(cap)] > 0:
-            _drop_one_int(bag, int(cap))
-    for number in list(bag):
-        if int(number) > int(max_finding):
-            del bag[number]
-    print(f"[F10] warning-count bag={dict(bag)!r}", flush=True)
-    return bag
-
-
-def assert_warning_count_unchanged_when_errors_increase(
-    fewer: Any,
-    more: Any,
-    *,
-    caps: Sequence[int] = (400, 20),
-) -> None:
-    """Warning count stays put while the error/finding count increases (L301).
-
-    After findings are removed, a warning count remains as a distinct
-    observable from the error/finding count. When MBG findings fire they
-    increment the error side and not the warning side. Zero warning is
-    allowed. Field names are not pinned. Nested token-statistics integers,
-    leftover booleans, an exclusive remainder, and a 400-versus-20 echo
-    are not that count.
-    """
-    few_n = count_finding_records(fewer)
-    more_n = count_finding_records(more)
-    print(
-        f"[F10] warning-vs-error finding_count fewer={few_n} more={more_n}",
-        flush=True,
-    )
-    assert more_n > few_n, (
-        "more-findings arm does not have more MBG finding records than the "
-        f"fewer-findings arm; fewer={few_n} more={more_n}"
-    )
-    few_g = token_statistics_grouping(fewer)
-    more_g = token_statistics_grouping(more)
-    few_root = _root_integer_counts(few_g)
-    more_root = _root_integer_counts(more_g)
-    assert few_root[int(few_n)] > 0, (
-        "structured leftover after findings are removed has no error/finding "
-        f"count matching {few_n} on the fewer-findings arm; root={dict(few_root)!r}"
-    )
-    assert more_root[int(more_n)] > 0, (
-        "structured leftover after findings are removed has no error/finding "
-        f"count matching {more_n} on the more-findings arm; root={dict(more_root)!r}"
-    )
-    few_warn = _warning_count_bag(
-        few_g,
-        finding_count=few_n,
-        payload=fewer,
-        caps=caps,
-        max_finding=more_n,
-    )
-    more_warn = _warning_count_bag(
-        more_g,
-        finding_count=more_n,
-        payload=more,
-        caps=caps,
-        max_finding=more_n,
-    )
-    print(
-        f"[F10] warning bags fewer={dict(few_warn)!r} more={dict(more_warn)!r}",
-        flush=True,
-    )
-    assert few_warn == more_warn, (
-        "warning count changed when MBG error/finding count increased; "
-        f"fewer={dict(few_warn)!r} more={dict(more_warn)!r}"
-    )
-    assert sum(few_warn.values()) > 0, (
-        "structured leftover after findings, error/finding count, pass/fail, "
-        "and token-statistics integers are removed has no warning count "
-        "distinct from the error/finding count; "
-        f"fewer root={dict(few_root)!r} more root={dict(more_root)!r}"
-    )
-
-
-def _leftover_estimate_integers(
-    payload: Any, *, shared_caps: Sequence[int]
-) -> set[int]:
-    leaves = leftover_grouping_two_state(
-        payload, caps=shared_caps, drop_pass_fail=True
-    )
-    found = {
-        int(value)
-        for (kind, value), count in leaves.items()
-        if kind == "int" and int(value) not in (0, 1) and count > 0
-    }
-    print(f"[F10] leftover estimate integers={sorted(found)!r}", flush=True)
-    return found
-
-
-def assert_working_memory_estimate_sorts_below(
-    inner_payload: Any,
-    whole_payload: Any,
-    *,
-    shared_caps: Sequence[int] = (20,),
-) -> None:
-    """Well-formed-delimiter leftover estimate sorts strictly below whole-file.
-
-    After pass/fail, counts, findings, the shared cap, and 0/1 are removed,
-    the leftover grouping's working-memory estimate (a sortable integer;
-    exact value not scored) for the begin-then-end run of the same
-    huge-prefix file must sort strictly below the omitted-delimiter
-    whole-file run. Extra comment-line bytes cannot produce that order on
-    a whole-file-only estimator.
-    """
-    inner_rest = _leftover_estimate_integers(
-        inner_payload, shared_caps=shared_caps
-    )
-    whole_rest = _leftover_estimate_integers(
-        whole_payload, shared_caps=shared_caps
-    )
-    shared = inner_rest & whole_rest
-    inner_only = inner_rest - shared
-    whole_only = whole_rest - shared
-    print(
-        f"[F10] estimate order inner_only={sorted(inner_only)!r} "
-        f"whole_only={sorted(whole_only)!r} shared={sorted(shared)!r}",
-        flush=True,
-    )
-    assert inner_only and whole_only, (
-        "leftover grouping working-memory estimate (sortable integer, exact "
-        "value not scored) does not differ between the well-formed-delimiter "
-        "run and the otherwise-whole-file run after removing pass/fail, "
-        "counts, findings, the shared cap, and 0/1; "
-        f"inner={sorted(inner_rest)!r} whole={sorted(whole_rest)!r}"
-    )
-    assert max(inner_only) < min(whole_only), (
-        "leftover grouping working-memory estimate for the well-formed "
-        "begin-then-end run does not sort strictly below the omitted-delimiter "
-        "whole-file run; extra comment-line bytes cannot produce that order "
-        "on a whole-file-only estimator; "
-        f"inner_only={sorted(inner_only)!r} whole_only={sorted(whole_only)!r}"
-    )
+        marks[rel] = hits[0][0]
+    print(f"[F10] link --check marks={marks!r}", flush=True)
+    return marks

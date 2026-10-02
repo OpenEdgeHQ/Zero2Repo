@@ -5,7 +5,7 @@ Public entry: the ``membundle bootstrap`` command (FP-02). Observations go throu
 the sealed harness ``workspace`` / ``invoke`` path and the on-disk files
 bootstrap wrote. These tests do not import Go packages, do not call
 internal Bootstrap helpers, and do not use ``membundle validate`` / ``membundle show``
-/ ``membundle init`` as an oracle.
+/ ``membundle init`` to judge results.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ from F02_helpers import (
 
 
 def test_named_missing_directory_gets_all_four_components():
-    """A missing named directory is not a no-op (L103, L105, L118, L122).
+    """A missing named directory is not a no-op.
 
     One arm uses a README-like nested ``my-project`` leaf whose parent
     already exists; a second arm uses a different runtime-unique leaf.
@@ -95,7 +95,7 @@ def test_named_missing_directory_gets_all_four_components():
 
 
 def test_named_existing_empty_directory_gets_all_four_components():
-    """Create-if-needed still writes into a pre-existing empty directory (L105)."""
+    """Create-if-needed still writes into a pre-existing empty directory."""
     with workspace() as ws:
         rel = unique_leaf("harbor")
         ws.resolve(rel).mkdir()
@@ -106,7 +106,7 @@ def test_named_existing_empty_directory_gets_all_four_components():
 
 
 def test_omit_path_bootstraps_cwd_as_project_root():
-    """No target argument: four components land in cwd (L103, L105, L107)."""
+    """No target argument: four components land in cwd."""
     with workspace() as ws:
         result, dates = run_bootstrap_with_dates(ws)
         project_name = ws.path.name
@@ -122,7 +122,7 @@ def test_omit_path_bootstraps_cwd_as_project_root():
 
 
 def test_knowledge_index_frontmatter_declares_membundle_version_0_2():
-    """Mapping key ``membundle_version`` has stripped scalar ``0.2`` (L29, L45, L107)."""
+    """Mapping key ``membundle_version`` has stripped scalar ``0.2``."""
     with workspace() as ws:
         rel = unique_leaf("idxver")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -136,7 +136,7 @@ def test_knowledge_index_frontmatter_declares_membundle_version_0_2():
 
 
 def test_knowledge_index_heading_contains_project_name():
-    """Two ``--name`` arms: each index heading (and AGENTS.md) contains that name (L107, L118)."""
+    """Two ``--name`` arms: each index heading (and AGENTS.md) contains that name."""
     with workspace() as ws:
         name_a = unique_leaf("alpha")
         name_b = unique_leaf("bravo")
@@ -182,7 +182,7 @@ def test_knowledge_index_heading_contains_project_name():
 
 
 def test_knowledge_log_first_heading_is_utc_iso_date():
-    """A log heading is today's UTC calendar date, wherever it sits (L46, L107, L118)."""
+    """A log heading is today's UTC calendar date, wherever it sits."""
     with workspace() as ws:
         rel = unique_leaf("logdate")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -197,7 +197,7 @@ def test_knowledge_log_first_heading_is_utc_iso_date():
 
 
 def test_knowledge_log_dated_section_has_a_list_item():
-    """A list item sits under the UTC date heading, wherever that heading sits (L107, L118)."""
+    """A list item sits under the UTC date heading, wherever that heading sits."""
     with workspace() as ws:
         rel = unique_leaf("logbullet")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -212,7 +212,7 @@ def test_knowledge_log_dated_section_has_a_list_item():
 
 
 def test_knowledge_log_date_uses_utc_not_process_local_timezone():
-    """A TZ whose local date differs from UTC still writes the UTC date (L107)."""
+    """A TZ whose local date differs from UTC still writes the UTC date."""
     tz_value, local_date = tz_offset_where_local_date_differs()
     print(f"TZ contrast tz={tz_value!r} local_date={local_date}", flush=True)
     with workspace() as ws:
@@ -258,7 +258,7 @@ def test_knowledge_log_date_uses_utc_not_process_local_timezone():
 
 
 def test_second_bootstrap_succeeds_preserves_index_log_makefile_and_still_reports_four():
-    """Second bootstrap keeps custom index/log/Makefile and still names all four (L107, L112, L120)."""
+    """Second bootstrap keeps custom index/log/Makefile and still names all four."""
     with workspace() as ws:
         rel = unique_leaf("reboot")
         first, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -290,7 +290,7 @@ def test_second_bootstrap_succeeds_preserves_index_log_makefile_and_still_report
 
 
 def test_missing_knowledge_log_is_written_without_replacing_existing_index():
-    """Only the missing knowledge/log.md is created (L107, L118, L120)."""
+    """Only the missing knowledge/log.md is created."""
     with workspace() as ws:
         rel = unique_leaf("onlyidx")
         target = ws.resolve(rel)
@@ -308,7 +308,7 @@ def test_missing_knowledge_log_is_written_without_replacing_existing_index():
 
 
 def test_missing_knowledge_index_is_written_without_replacing_existing_log():
-    """Only the missing knowledge/index.md is created (L107, L118, L120)."""
+    """Only the missing knowledge/index.md is created."""
     with workspace() as ws:
         rel = unique_leaf("onlylog")
         name = unique_leaf("idxname")
@@ -338,7 +338,7 @@ def test_missing_knowledge_index_is_written_without_replacing_existing_log():
 
 
 def test_existing_skill_files_are_replaced_when_skill_not_skipped():
-    """Each of the six pre-seeded skill stubs is gone after a skill write (L108, L120)."""
+    """Each of the six pre-seeded skill stubs is gone after a skill write."""
     with workspace() as ws:
         rel = unique_leaf("reskill")
         target = ws.resolve(rel)
@@ -360,12 +360,12 @@ def test_existing_skill_files_are_replaced_when_skill_not_skipped():
 
 
 # ---------------------------------------------------------------------------
-# E. Default project directory is cwd, not the L49 knowledge/ load rule
+# E. Default project directory is cwd, not the knowledge/ load rule
 # ---------------------------------------------------------------------------
 
 
 def test_omit_path_with_existing_knowledge_still_uses_cwd_as_project():
-    """Existing knowledge/ does not redirect project-level writes into it (L103, L105)."""
+    """Existing knowledge/ does not redirect project-level writes into it."""
     with workspace() as ws:
         knowledge = ws.path / "knowledge"
         knowledge.mkdir()
@@ -390,7 +390,7 @@ def test_omit_path_with_existing_knowledge_still_uses_cwd_as_project():
 
 
 def test_named_path_is_project_root_even_when_cwd_has_knowledge():
-    """A named path is the project even when cwd also has knowledge/ (L103, L105)."""
+    """A named path is the project even when cwd also has knowledge/."""
     with workspace() as ws:
         (ws.path / "knowledge").mkdir()
         rel = unique_leaf("explicit")
@@ -405,7 +405,7 @@ def test_named_path_is_project_root_even_when_cwd_has_knowledge():
 
 
 def test_omitted_name_uses_target_directory_basename():
-    """Omit ``--name``: index heading and AGENTS.md contain the directory basename (L103)."""
+    """Omit ``--name``: index heading and AGENTS.md contain the directory basename."""
     with workspace() as ws:
         rel = unique_leaf("basin")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -422,7 +422,7 @@ def test_omitted_name_uses_target_directory_basename():
 
 
 def test_explicit_name_overrides_directory_basename():
-    """Explicit ``--name`` is the title, not the directory basename (L103, L107)."""
+    """Explicit ``--name`` is the title, not the directory basename."""
     with workspace() as ws:
         rel = unique_leaf("dirbase")
         name = unique_leaf("showname")
@@ -450,7 +450,7 @@ def test_explicit_name_overrides_directory_basename():
 
 
 def test_missing_agents_md_is_written_with_delimiters_name_and_nonempty_block():
-    """Missing AGENTS.md: both comments, name present, extracted block non-empty (L109, L118)."""
+    """Missing AGENTS.md: both comments, name present, extracted block non-empty."""
     with workspace() as ws:
         rel = unique_leaf("agentsnew")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -467,7 +467,7 @@ def test_missing_agents_md_is_written_with_delimiters_name_and_nonempty_block():
 
 
 def test_existing_human_rules_agents_md_is_appended_not_replaced():
-    """HUMAN-RULES file gains the delimited block after the original prefix (L109, L121)."""
+    """HUMAN-RULES file gains the delimited block after the original prefix."""
     with workspace() as ws:
         rel = unique_leaf("append")
         target = ws.resolve(rel)
@@ -497,7 +497,7 @@ def test_existing_human_rules_agents_md_is_appended_not_replaced():
 
 
 def test_agents_md_with_begin_phrase_is_left_unchanged_when_overwrite_off():
-    """Detection string (1): phrase BEGIN MEMBUNDLE AGENT MEMORY, overwrite off (L109)."""
+    """Detection string (1): phrase BEGIN MEMBUNDLE AGENT MEMORY, overwrite off."""
     with workspace() as ws:
         token = unique_leaf("keepbeg")
         detection = "BEGIN MEMBUNDLE AGENT MEMORY"
@@ -528,7 +528,7 @@ def test_agents_md_with_begin_phrase_is_left_unchanged_when_overwrite_off():
 
 
 def test_agents_md_with_membundle_agent_memory_substring_is_left_unchanged_when_overwrite_off():
-    """Detection string (2): substring membundle-agent-memory, overwrite off (L109)."""
+    """Detection string (2): substring membundle-agent-memory, overwrite off."""
     with workspace() as ws:
         token = unique_leaf("keepsub")
         detection = "membundle-agent-memory"
@@ -559,7 +559,7 @@ def test_agents_md_with_membundle_agent_memory_substring_is_left_unchanged_when_
 
 
 def test_agents_md_with_open_knowledge_format_membundle_phrase_is_left_unchanged_when_overwrite_off():
-    """Detection string (3): phrase Open Bundle Format (MEMBUNDLE), overwrite off (L109)."""
+    """Detection string (3): phrase Open Bundle Format (MEMBUNDLE), overwrite off."""
     with workspace() as ws:
         token = unique_leaf("keepfmt")
         detection = "Open Bundle Format (MEMBUNDLE)"
@@ -590,7 +590,7 @@ def test_agents_md_with_open_knowledge_format_membundle_phrase_is_left_unchanged
 
 
 def test_overwrite_replaces_human_rules_agents_md_with_template():
-    """Overwrite on vs off differ only in the overwrite option (L109, L121)."""
+    """Overwrite on vs off differ only in the overwrite option."""
     with workspace() as ws:
         token = unique_leaf("owhuman")
         original = (
@@ -631,7 +631,7 @@ def test_overwrite_replaces_human_rules_agents_md_with_template():
 
 
 def test_overwrite_replaces_begin_marker_agents_md_with_template():
-    """Overwrite on a begin-marker file replaces unique original rules (L109, L121)."""
+    """Overwrite on a begin-marker file replaces unique original rules."""
     with workspace() as ws:
         token = unique_leaf("owbegin")
         original = (
@@ -670,7 +670,7 @@ def test_overwrite_replaces_begin_marker_agents_md_with_template():
 
 
 def test_begin_marker_is_not_duplicated_when_overwrite_off():
-    """A file that already contains the BEGIN comment is not duplicated (L121)."""
+    """A file that already contains the BEGIN comment is not duplicated."""
     with workspace() as ws:
         token = unique_leaf("keepdup")
         prefix = f"# KEEP-{token}\n"
@@ -722,7 +722,7 @@ def test_begin_marker_is_not_duplicated_when_overwrite_off():
 
 
 def test_skip_skill_omits_skill_tree_only():
-    """Skip skill: no .agents/skills/membundle-memory/; other three A-quality (L113, L119).
+    """Skip skill: no .agents/skills/membundle-memory/; other three A-quality.
 
     Arms differ only in the skill skip. The full run is the live baseline
     on which the skill tree with the six documents exists.
@@ -762,7 +762,7 @@ def test_skip_skill_omits_skill_tree_only():
 
 
 def test_skip_skill_does_not_delete_preexisting_skill_files():
-    """Skip-skill leaves seeded skill files; omitting the skip replaces them (L108, L114).
+    """Skip-skill leaves seeded skill files; omitting the skip replaces them.
 
     The two arms differ only by the skill skip and start from the same
     stub bytes. Byte equality is the skip arm. The other arm must replace
@@ -815,7 +815,7 @@ def test_skip_skill_does_not_delete_preexisting_skill_files():
 
 
 def test_skip_agents_md_leaves_file_uncreated():
-    """Skip AGENTS.md: that file is uncreated; other three A-quality (L113, L119).
+    """Skip AGENTS.md: that file is uncreated; other three A-quality.
 
     Arms differ only in the AGENTS.md skip. The full run is the live
     baseline on which AGENTS.md is created with both named delimiters
@@ -854,7 +854,7 @@ def test_skip_agents_md_leaves_file_uncreated():
 
 
 def test_skip_makefile_omits_makefile_only():
-    """Skip Makefile: file uncreated; report not installed vs full run (L113, L119).
+    """Skip Makefile: file uncreated; report not installed vs full run.
 
     Arms differ only in the skip-Makefile option. The full run is the live
     baseline that presents Makefile as installed.
@@ -901,11 +901,13 @@ def test_skip_makefile_omits_makefile_only():
                 str(target),
                 str(ws.resolve(rel_full)),
             ),
+            full_path=rel_full,
+            skip_path=rel_skip,
         )
 
 
 def test_skip_bundle_omits_knowledge_scaffold_only():
-    """Skip bundle: no new knowledge/ scaffold; other three A-quality (L113, L119).
+    """Skip bundle: no new knowledge/ scaffold; other three A-quality.
 
     Arms differ only in the bundle skip. The full run is the live baseline
     on which knowledge/index.md and knowledge/log.md exist.
@@ -955,7 +957,7 @@ def test_skip_bundle_omits_knowledge_scaffold_only():
 
 
 def test_makefile_is_written_with_recipes():
-    """After a fresh full bootstrap the Makefile provides the two convenience tasks (L110)."""
+    """After a fresh full bootstrap the Makefile provides the two convenience tasks."""
     with workspace() as ws:
         rel = unique_leaf("makerec")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))
@@ -969,7 +971,7 @@ def test_makefile_is_written_with_recipes():
 
 
 def test_bootstrap_does_not_delete_unrelated_project_files():
-    """Pre-written notes.txt and an extra file remain in the project (L114)."""
+    """Pre-written notes.txt and an extra file remain in the project."""
     with workspace() as ws:
         control = ws.resolve("control-lister")
         control.mkdir()
@@ -996,7 +998,7 @@ def test_bootstrap_does_not_delete_unrelated_project_files():
 
 
 def test_bootstrap_fails_when_parent_path_is_a_file():
-    """A named path whose parent is a regular file does not succeed (L114)."""
+    """A named path whose parent is a regular file does not succeed."""
     with workspace() as ws:
         blocker = unique_leaf("blocker")
         ws.write(blocker, "this is a file, not a directory\n")
@@ -1013,7 +1015,7 @@ def test_bootstrap_fails_when_parent_path_is_a_file():
 
 
 def test_bootstrap_fails_when_target_exists_as_a_file():
-    """A named path that exists as a regular file does not succeed (L114)."""
+    """A named path that exists as a regular file does not succeed."""
     with workspace() as ws:
         fail_rel = unique_leaf("filetgt")
         ws.write(fail_rel, "not a directory\n")
@@ -1034,7 +1036,7 @@ def test_bootstrap_fails_when_target_exists_as_a_file():
 
 
 def test_full_success_report_names_all_four_components():
-    """A successful full run names knowledge, the skill tree, AGENTS.md, Makefile (L112)."""
+    """A successful full run names knowledge, the skill tree, AGENTS.md, Makefile."""
     with workspace() as ws:
         rel = unique_leaf("rptfour")
         result, dates = run_bootstrap_with_dates(ws, extra_args=(rel,))

@@ -6,7 +6,7 @@ Context Protocol tool. Observations go through the sealed harness
 ``workspace`` / ``invoke`` / ``mcp_batch`` path and the on-disk files
 the create wrote or refused to write. These tests do not import Go
 packages, do not call internal SaveConcept helpers, and do not use
-``membundle show`` / ``membundle validate`` / ``membundle init`` as an oracle.
+``membundle show`` / ``membundle validate`` / ``membundle init`` to judge results.
 """
 
 from __future__ import annotations
@@ -37,9 +37,10 @@ from F03_helpers import (
     unique_tokens,
 )
 from F05_helpers import (
-    PUBLIC_SAMPLE_IDENTITY,
-    PUBLIC_SAMPLE_TITLE,
-    PUBLIC_SAMPLE_TYPE,
+    SAMPLE_IDENTITY,
+    SAMPLE_PARENT,
+    SAMPLE_TITLE,
+    SAMPLE_TYPE,
     SEED_LOG_DATE,
     assert_concept_written,
     assert_creation_absent,
@@ -60,20 +61,26 @@ from F05_helpers import (
     mcp_create_with_instants,
     observe_cli_refusal,
     observe_mcp_refusal,
-    report_names_named_bundle,
+    mcp_bundle_dir,
+    require_create_report_line,
+    require_mcp_create_report,
     parent_index_path,
     parse_iso8601_combined_instant,
     require_create_structured_success,
     require_create_success,
     require_create_usage_failure,
     require_mcp_create_success,
-    _class_remainder,
     run_create,
     run_create_with_instants,
     seed_bundle,
     tags_mapping_region,
 )
 
+
+
+# Generated per test process: the leaf a ``..`` identity aims at, outside
+# the bundle (the documents carry no such value).
+_OUTSIDE_LEAF = f"o{__import__('uuid').uuid4().hex[:8]}"
 
 def _bundle() -> str:
     return unique_tokens("kb")[0]
@@ -118,46 +125,48 @@ def _dates(before: str, after: str) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_public_sample_writes_decision_file_with_type_and_agent_cli():
-    """Named-bundle CLI create of decisions/auth-flow writes type Decision and agent/cli (L175, L181)."""
+def test_cli_generated_sample_writes_file_with_type_and_agent_cli():
+    """Named-bundle CLI create of the generated nested sample writes its type and agent/cli."""
     with workspace() as ws:
         desc, body = _public_desc_body()
         rel = _bundle()
         root = seed_bundle(ws, rel)
         result = run_create(
             ws,
-            PUBLIC_SAMPLE_IDENTITY,
+            SAMPLE_IDENTITY,
             rel,
-            concept_type=PUBLIC_SAMPLE_TYPE,
-            title=PUBLIC_SAMPLE_TITLE,
+            concept_type=SAMPLE_TYPE,
+            title=SAMPLE_TITLE,
             description=desc,
             body=body,
         )
         require_create_success(result)
         _assert_written(
             root,
-            PUBLIC_SAMPLE_IDENTITY,
-            concept_type=PUBLIC_SAMPLE_TYPE,
+            SAMPLE_IDENTITY,
+            concept_type=SAMPLE_TYPE,
             generated_by="agent/cli",
-            title=PUBLIC_SAMPLE_TITLE,
+            title=SAMPLE_TITLE,
             description=desc,
             body_token=body,
         )
-        assert path_is_dir(root / "decisions"), "parent directory decisions/ was not created"
+        assert path_is_dir(root / SAMPLE_PARENT), (
+            f"parent directory {SAMPLE_PARENT}/ was not created"
+        )
         print("cli public sample wrote Decision with agent/cli", flush=True)
 
 
-def test_mcp_public_sample_writes_decision_file_with_type_title_description_and_agent_mcp():
-    """MCP create of decisions/auth-flow stores type, title, description, at, and agent/mcp (L175, L181)."""
+def test_mcp_generated_sample_writes_file_with_type_title_description_and_agent_mcp():
+    """MCP create of the generated nested sample stores type, title, description, at, and agent/mcp."""
     with workspace() as ws:
         desc, body = _public_desc_body()
         rel = _bundle()
         root = seed_bundle(ws, rel)
         outcome, before, after = mcp_create_with_instants(
             ws,
-            PUBLIC_SAMPLE_IDENTITY,
-            concept_type=PUBLIC_SAMPLE_TYPE,
-            title=PUBLIC_SAMPLE_TITLE,
+            SAMPLE_IDENTITY,
+            concept_type=SAMPLE_TYPE,
+            title=SAMPLE_TITLE,
             description=desc,
             body=body,
             bundle=rel,
@@ -165,10 +174,10 @@ def test_mcp_public_sample_writes_decision_file_with_type_title_description_and_
         require_mcp_create_success(outcome)
         mapping, _body = _assert_written(
             root,
-            PUBLIC_SAMPLE_IDENTITY,
-            concept_type=PUBLIC_SAMPLE_TYPE,
+            SAMPLE_IDENTITY,
+            concept_type=SAMPLE_TYPE,
             generated_by="agent/mcp",
-            title=PUBLIC_SAMPLE_TITLE,
+            title=SAMPLE_TITLE,
             description=desc,
             body_token=body,
         )
@@ -178,8 +187,8 @@ def test_mcp_public_sample_writes_decision_file_with_type_title_description_and_
         print("mcp public sample wrote Decision with agent/mcp", flush=True)
 
 
-def test_cli_public_sample_shape_has_runtime_twin():
-    """A runtime-unique CLI create is not the only identity that writes type and body (L181)."""
+def test_cli_generated_sample_shape_has_runtime_twin():
+    """A runtime-unique CLI create is not the only identity that writes type and body."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "cid", "ctyp", "cttl", "cdsc", "cbod"
@@ -209,8 +218,8 @@ def test_cli_public_sample_shape_has_runtime_twin():
         print(f"cli runtime twin ident={ident!r}", flush=True)
 
 
-def test_mcp_public_sample_shape_has_runtime_twin():
-    """A runtime-unique MCP create is not the only identity that writes type and body (L181)."""
+def test_mcp_generated_sample_shape_has_runtime_twin():
+    """A runtime-unique MCP create is not the only identity that writes type and body."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mid", "mtyp", "mttl", "mdsc", "mbod"
@@ -246,7 +255,7 @@ def test_mcp_public_sample_shape_has_runtime_twin():
 
 
 def test_cli_frontmatter_type_title_description_match_supplied_values():
-    """Explicit CLI type/title/description scalars match the supplied values (L175)."""
+    """Explicit CLI type/title/description scalars match the supplied values."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "fid", "ftyp", "fttl", "fdsc", "fbod"
@@ -277,7 +286,7 @@ def test_cli_frontmatter_type_title_description_match_supplied_values():
 
 
 def test_cli_omitted_type_writes_fact():
-    """CLI omit of type writes frontmatter type Fact (L173)."""
+    """CLI omit of type writes frontmatter type Fact."""
     with workspace() as ws:
         ident, title, desc, body = unique_tokens("otid", "ottl", "odsc", "obod")
         rel = _bundle()
@@ -297,7 +306,7 @@ def test_cli_omitted_type_writes_fact():
 
 
 def test_cli_omitted_empty_and_whitespace_title_each_use_final_path_segment():
-    """CLI omit, empty, and whitespace title each write the identity's final segment (L173)."""
+    """CLI omit, empty, and whitespace title each write the identity's final segment."""
     with workspace() as ws:
         leaf_omit, leaf_empty, leaf_ws, typ, desc, body = unique_tokens(
             "ltom", "ltem", "ltws", "ttyp", "tdsc", "tbod"
@@ -338,7 +347,7 @@ def test_cli_omitted_empty_and_whitespace_title_each_use_final_path_segment():
 
 
 def test_cli_omitted_description_succeeds_without_description_value():
-    """CLI omit of description succeeds and does not store an unused description token (L177)."""
+    """CLI omit of description succeeds and does not store an unused description token."""
     with workspace() as ws:
         ident, typ, title, unused, body = unique_tokens(
             "odid", "odty", "odtl", "odus", "odbod"
@@ -367,7 +376,7 @@ def test_cli_omitted_description_succeeds_without_description_value():
 
 
 def test_cli_omitted_body_succeeds_without_unused_body_token():
-    """CLI omit of body succeeds and a unique unused body token is absent after the fence (L173)."""
+    """CLI omit of body succeeds and a unique unused body token is absent after the fence."""
     with workspace() as ws:
         ident, typ, title, desc, unused = unique_tokens(
             "obid", "obty", "obtl", "obds", "obus"
@@ -391,7 +400,7 @@ def test_cli_omitted_body_succeeds_without_unused_body_token():
 
 
 def test_cli_body_is_the_post_frontmatter_markdown():
-    """A supplied unique body token is present after the closing YAML fence (L175)."""
+    """A supplied unique body token is present after the closing YAML fence."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "bbid", "bbty", "bbtl", "bbds", "bbod"
@@ -420,7 +429,7 @@ def test_cli_body_is_the_post_frontmatter_markdown():
 
 
 def test_cli_comma_separated_tags_are_each_a_mapping_scalar():
-    """CLI comma-separated tags succeed and the written file includes tags (L173, L175)."""
+    """CLI comma-separated tags succeed and the written file includes tags."""
     with workspace() as ws:
         ident, typ, title, desc, body, tag_a, tag_b = unique_tokens(
             "tgid", "tgty", "tgtl", "tgds", "tgbod", "tga", "tgb"
@@ -455,7 +464,7 @@ def test_cli_comma_separated_tags_are_each_a_mapping_scalar():
 
 
 def test_cli_generated_at_is_current_utc_iso8601_combined_datetime():
-    """CLI generated.at is combined date-and-time inside the invoke window (L175)."""
+    """CLI generated.at is combined date-and-time inside the invoke window."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "atid", "atty", "attl", "atds", "atbod"
@@ -482,7 +491,7 @@ def test_cli_generated_at_is_current_utc_iso8601_combined_datetime():
 
 
 def test_mcp_generated_at_is_current_utc_iso8601_combined_datetime():
-    """MCP generated.at is combined date-and-time inside the invoke window (L175)."""
+    """MCP generated.at is combined date-and-time inside the invoke window."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "maid", "maty", "matl", "mads", "mabod"
@@ -509,7 +518,7 @@ def test_mcp_generated_at_is_current_utc_iso8601_combined_datetime():
 
 
 def test_fresh_create_does_not_invent_verified():
-    """Fresh CLI create mapping has no verified key (L31, L175)."""
+    """Fresh CLI create mapping has no verified key."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "vid", "vty", "vtl", "vds", "vbod"
@@ -539,7 +548,7 @@ def test_fresh_create_does_not_invent_verified():
 
 
 def test_parent_index_lists_filename_with_title_and_description():
-    """Nested parent index lists the filename with title and description (L175, L182)."""
+    """Nested parent index lists the filename with title and description."""
     with workspace() as ws:
         desc, body = _public_desc_body()
         rel = _bundle()
@@ -547,25 +556,25 @@ def test_parent_index_lists_filename_with_title_and_description():
         require_create_success(
             run_create(
                 ws,
-                PUBLIC_SAMPLE_IDENTITY,
+                SAMPLE_IDENTITY,
                 rel,
-                concept_type=PUBLIC_SAMPLE_TYPE,
-                title=PUBLIC_SAMPLE_TITLE,
+                concept_type=SAMPLE_TYPE,
+                title=SAMPLE_TITLE,
                 description=desc,
                 body=body,
             )
         )
         item = assert_parent_listing(
-            parent_index_path(root, PUBLIC_SAMPLE_IDENTITY),
-            filename=concept_filename(PUBLIC_SAMPLE_IDENTITY),
-            title=PUBLIC_SAMPLE_TITLE,
+            parent_index_path(root, SAMPLE_IDENTITY),
+            filename=concept_filename(SAMPLE_IDENTITY),
+            title=SAMPLE_TITLE,
             description=desc,
         )
         print(f"parent listing={item!r}", flush=True)
 
 
 def test_empty_description_is_omitted_from_parent_listing():
-    """Description present vs omitted: only the present arm keeps the token after strip (L175)."""
+    """Description present vs omitted: only the present arm keeps the token after strip."""
     with workspace() as ws:
         leaf, typ, title, desc, unused, body = unique_tokens(
             "elid", "elty", "eltl", "elds", "elun", "elb"
@@ -604,7 +613,7 @@ def test_empty_description_is_omitted_from_parent_listing():
 
 
 def test_root_level_listing_includes_title_and_description():
-    """A root-level create lists filename, title, and supplied description (L175, L182)."""
+    """A root-level create lists filename, title, and supplied description."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "rtid", "rtty", "rttl", "rtds", "rtbod"
@@ -632,7 +641,7 @@ def test_root_level_listing_includes_title_and_description():
 
 
 def test_missing_nested_parent_index_is_created_without_membundle_version():
-    """A missing nested parent index is created without membundle_version (L45, L175)."""
+    """A missing nested parent index is created without membundle_version."""
     with workspace() as ws:
         leaf, typ, title, desc, body = unique_tokens(
             "mnid", "mnty", "mntl", "mnds", "mnb"
@@ -664,7 +673,7 @@ def test_missing_nested_parent_index_is_created_without_membundle_version():
 
 
 def test_missing_root_parent_index_is_created_with_membundle_version_0_2():
-    """A missing root parent index is created declaring membundle_version 0.2 (L45, L175)."""
+    """A missing root parent index is created declaring membundle_version 0.2."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mrid", "mrty", "mrtl", "mrds", "mrb"
@@ -698,7 +707,7 @@ def test_missing_root_parent_index_is_created_with_membundle_version_0_2():
 
 
 def test_root_level_create_lists_in_existing_root_index():
-    """An existing root index lists the new root-level filename with title and description (L175)."""
+    """An existing root index lists the new root-level filename with title and description."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "exid", "exty", "extl", "exds", "exb"
@@ -727,7 +736,7 @@ def test_root_level_create_lists_in_existing_root_index():
 
 
 def test_nested_create_does_not_write_a_missing_root_index():
-    """Nested create into a dir with log.md but no root index leaves root index absent (L175)."""
+    """Nested create into a dir with log.md but no root index leaves root index absent."""
     with workspace() as ws:
         leaf, typ, title, desc, body = unique_tokens(
             "nrid", "nrty", "nrtl", "nrds", "nrb"
@@ -760,7 +769,7 @@ def test_nested_create_does_not_write_a_missing_root_index():
 
 
 def test_log_inserts_today_utc_heading_at_top_with_creation_bullet_naming_the_file():
-    """Today's UTC heading is first; older heading remains; Creation names the file (L46, L175, L182)."""
+    """Today's UTC heading is first; older heading remains; Creation names the file."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "lgid", "lgty", "lgtl", "lgds", "lgb"
@@ -805,7 +814,7 @@ def test_log_inserts_today_utc_heading_at_top_with_creation_bullet_naming_the_fi
 
 
 def test_log_reuses_existing_today_heading_without_duplicating_it():
-    """An existing today heading is reused exactly once; Creation sits in that section (L175, L182)."""
+    """An existing today heading is reused exactly once; Creation sits in that section."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "reid", "rety", "retl", "reds", "reb"
@@ -846,7 +855,7 @@ def test_log_reuses_existing_today_heading_without_duplicating_it():
 
 
 def test_cli_log_heading_uses_utc_date_not_process_local_timezone():
-    """CLI log heading date digits are UTC today, not the process-local date (L46, L182)."""
+    """CLI log heading date digits are UTC today, not the process-local date."""
     tz_value, local_date = tz_offset_where_local_date_differs()
     print(f"cli TZ contrast tz={tz_value!r} local={local_date}", flush=True)
     with workspace() as ws:
@@ -889,7 +898,7 @@ def test_cli_log_heading_uses_utc_date_not_process_local_timezone():
 
 
 def test_mcp_log_heading_uses_utc_date_not_process_local_timezone():
-    """MCP log heading date digits are UTC today, not the process-local date (L46, L175, L182)."""
+    """MCP log heading date digits are UTC today, not the process-local date."""
     tz_value, local_date = tz_offset_where_local_date_differs()
     print(f"mcp TZ contrast tz={tz_value!r} local={local_date}", flush=True)
     with workspace() as ws:
@@ -934,7 +943,7 @@ def test_mcp_log_heading_uses_utc_date_not_process_local_timezone():
 
 
 def test_cli_skip_log_does_not_gain_creation_bullet_and_still_lists_in_index():
-    """CLI skip-log: no Creation item; parent listing and concept file are written (L183)."""
+    """CLI skip-log: no Creation item; parent listing and concept file are written."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "slid", "slty", "sltl", "slds", "slb"
@@ -997,7 +1006,7 @@ def test_cli_skip_log_does_not_gain_creation_bullet_and_still_lists_in_index():
 
 
 def test_cli_skip_index_does_not_create_a_missing_parent_index_and_still_writes_creation_bullet():
-    """CLI skip-index with missing parent: parent stays absent; Creation is written (L183)."""
+    """CLI skip-index with missing parent: parent stays absent; Creation is written."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "siid", "sity", "sitl", "sids", "sib"
@@ -1053,7 +1062,7 @@ def test_cli_skip_index_does_not_create_a_missing_parent_index_and_still_writes_
 
 
 def test_cli_skip_index_does_not_list_in_an_existing_parent_index_and_still_writes_creation_bullet():
-    """CLI skip-index with existing parent: filename is not listed; Creation is written (L183)."""
+    """CLI skip-index with existing parent: filename is not listed; Creation is written."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "seid", "sety", "setl", "seds", "seb"
@@ -1113,7 +1122,7 @@ def test_cli_skip_index_does_not_list_in_an_existing_parent_index_and_still_writ
 
 
 def test_mcp_create_always_writes_parent_listing_and_creation_bullet():
-    """MCP create always writes the parent listing and Creation bullet (L173, L183)."""
+    """MCP create always writes the parent listing and Creation bullet."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mcid", "mcty", "mctl", "mcds", "mcb"
@@ -1160,7 +1169,7 @@ def test_mcp_create_always_writes_parent_listing_and_creation_bullet():
 
 
 def test_cli_omitted_actor_writes_agent_cli():
-    """CLI omit of actor writes generated.by agent/cli (L32, L173)."""
+    """CLI omit of actor writes generated.by agent/cli."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "acid", "acty", "actl", "acds", "acb"
@@ -1185,7 +1194,7 @@ def test_cli_omitted_actor_writes_agent_cli():
 
 
 def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
-    """CLI empty and whitespace actor each write generated.by agent/membundle-tool (L32, L173)."""
+    """CLI empty and whitespace actor each write generated.by agent/membundle-tool."""
     with workspace() as ws:
         empty_id, ws_id, typ, title, desc, body = unique_tokens(
             "aeid", "awid", "aety", "aetl", "aeds", "aeb"
@@ -1212,7 +1221,7 @@ def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
 
 
 def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
-    """A producer-slash-version actor is written through as generated.by (L32, L173)."""
+    """A producer-slash-version actor is written through as generated.by."""
     with workspace() as ws:
         ident, typ, title, desc, body, left, right = unique_tokens(
             "psid", "psty", "pstl", "psds", "psb", "psl", "psr"
@@ -1237,7 +1246,7 @@ def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
 
 
 def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
-    """A prefix-colon-id actor is written through as generated.by (L32, L173)."""
+    """A prefix-colon-id actor is written through as generated.by."""
     with workspace() as ws:
         ident, typ, title, desc, body, prefix, rest = unique_tokens(
             "pcid", "pcty", "pctl", "pcds", "pcb", "pcp", "pcr"
@@ -1262,7 +1271,7 @@ def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
 
 
 def test_mcp_generated_by_is_agent_mcp():
-    """MCP create writes generated.by agent/mcp with no actor argument (L32, L173)."""
+    """MCP create writes generated.by agent/mcp with no actor argument."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mgid", "mgty", "mgtl", "mgds", "mgb"
@@ -1292,7 +1301,7 @@ def test_mcp_generated_by_is_agent_mcp():
 
 
 def test_structured_cli_names_this_run_identity_and_path():
-    """Structured CLI success names this run's identity and a distinct path string (L175)."""
+    """Structured CLI success names this run's identity and a distinct path string."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "stid", "stty", "sttl", "stds", "stb"
@@ -1324,7 +1333,7 @@ def test_structured_cli_names_this_run_identity_and_path():
 
 
 def test_human_mode_still_writes_concept_files():
-    """Default (no structured flag) still writes the concept file (L175)."""
+    """Default (no structured flag) still writes the concept file."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "hmid", "hmty", "hmtl", "hmds", "hmb"
@@ -1354,7 +1363,7 @@ def test_human_mode_still_writes_concept_files():
 
 
 def test_overwrite_replaces_concept_file_and_bookkeeps_as_creation():
-    """CLI overwrite replaces file fields and bookkeeps as a Creation (L177, L175)."""
+    """CLI overwrite replaces file fields and bookkeeps as a Creation."""
     with workspace() as ws:
         (
             leaf,
@@ -1433,7 +1442,7 @@ def test_overwrite_replaces_concept_file_and_bookkeeps_as_creation():
 
 
 def test_mcp_overwrite_replaces_concept_file_and_bookkeeps_as_creation():
-    """MCP overwrite replaces file fields, actor agent/mcp, Creation bullet (L177, L175)."""
+    """MCP overwrite replaces file fields, actor agent/mcp, Creation bullet."""
     with workspace() as ws:
         (
             leaf,
@@ -1516,7 +1525,7 @@ def test_mcp_overwrite_replaces_concept_file_and_bookkeeps_as_creation():
 
 
 def test_omit_path_without_knowledge_dir_writes_cwd():
-    """Omit bundle path with no knowledge/ directory lands the file at cwd (L49, L173)."""
+    """Omit bundle path with no knowledge/ directory lands the file at cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "opid", "opty", "optl", "opds", "opb"
@@ -1533,7 +1542,7 @@ def test_omit_path_without_knowledge_dir_writes_cwd():
 
 
 def test_omit_path_with_knowledge_dir_writes_knowledge_not_cwd():
-    """Omit bundle path with knowledge/ as a directory lands under knowledge/, not cwd (L49)."""
+    """Omit bundle path with knowledge/ as a directory lands under knowledge/, not cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "okid", "okty", "oktl", "okds", "okb"
@@ -1552,7 +1561,7 @@ def test_omit_path_with_knowledge_dir_writes_knowledge_not_cwd():
 
 
 def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
-    """A file named knowledge is not a directory, so omit-path uses cwd (L49)."""
+    """A file named knowledge is not a directory, so omit-path uses cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "ofid", "ofty", "oftl", "ofds", "ofb"
@@ -1573,7 +1582,7 @@ def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
 
 
 def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
-    """A named bundle path is the write target even when cwd has knowledge/ (L49, L173)."""
+    """A named bundle path is the write target even when cwd has knowledge/."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "ebid", "ebty", "ebtl", "ebds", "ebb"
@@ -1598,7 +1607,7 @@ def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
 
 
 def test_mcp_omit_bundle_without_knowledge_dir_writes_cwd():
-    """MCP omit bundle, no knowledge/ directory: file lands at cwd (L49, L173)."""
+    """MCP omit bundle, no knowledge/ directory: file lands at cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mpid", "mpty", "mptl", "mpds", "mpb"
@@ -1620,7 +1629,7 @@ def test_mcp_omit_bundle_without_knowledge_dir_writes_cwd():
 
 
 def test_mcp_omit_bundle_with_knowledge_dir_writes_knowledge_not_cwd():
-    """MCP omit bundle with knowledge/ as a directory lands under knowledge/, not cwd (L49)."""
+    """MCP omit bundle with knowledge/ as a directory lands under knowledge/, not cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mkid", "mkty", "mktl", "mkds", "mkb"
@@ -1644,7 +1653,7 @@ def test_mcp_omit_bundle_with_knowledge_dir_writes_knowledge_not_cwd():
 
 
 def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
-    """MCP named bundle writes there even when cwd has a knowledge/ decoy of the same identity (L49)."""
+    """MCP named bundle writes there even when cwd has a knowledge/ decoy of the same identity."""
     with workspace() as ws:
         ident, typ, title, desc, body, decoy = unique_tokens(
             "mnbid", "mnbty", "mnbtl", "mnbds", "mnbb", "mnbdk"
@@ -1672,7 +1681,7 @@ def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
 
 
 def test_named_path_without_root_index_writes_named_path_not_nested_knowledge():
-    """Named path with no root index.md and a nested knowledge/ writes at the named path (L173, L185)."""
+    """Named path with no root index.md and a nested knowledge/ writes at the named path."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "nkid", "nkty", "nktl", "nkds", "nkb"
@@ -1711,12 +1720,12 @@ def test_named_path_without_root_index_writes_named_path_not_nested_knowledge():
             allowed_dates=_dates(before, after),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(report, rel)
+        require_create_report_line(result, ident, title, rel)
         print("cli named path wrote at named root, not nested knowledge/", flush=True)
 
 
 def test_mcp_named_path_without_root_index_writes_named_path_not_nested_knowledge():
-    """MCP named path with no root index.md and a nested knowledge/ writes at the named path (L173, L185)."""
+    """MCP named path with no root index.md and a nested knowledge/ writes at the named path."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "mnkid", "mnkty", "mnktl", "mnkds", "mnkb"
@@ -1755,7 +1764,7 @@ def test_mcp_named_path_without_root_index_writes_named_path_not_nested_knowledg
             allowed_dates=_dates(before, after),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_create_report(outcome, ident, mcp_bundle_dir(ws, rel))
         print("mcp named path wrote at named root, not nested knowledge/", flush=True)
 
 
@@ -1801,7 +1810,7 @@ def _live_mcp_write(ws, rel: str) -> None:
 
 
 def test_empty_identity_fails_without_writing():
-    """Empty identity fails without writing on CLI and MCP (L177)."""
+    """Empty identity fails without writing on CLI and MCP."""
     with workspace() as ws:
         typ, title, desc = unique_tokens("eeid", "eety", "eeds")
         rel = _bundle()
@@ -1825,7 +1834,7 @@ def test_empty_identity_fails_without_writing():
 
 
 def test_absolute_identity_fails_without_writing():
-    """An absolute-path identity fails without writing on CLI and MCP (L177)."""
+    """An absolute-path identity fails without writing on CLI and MCP."""
     with workspace() as ws:
         leaf, typ, title, desc = unique_tokens("abid", "abty", "abtl", "abds")
         ident = f"/{leaf}"
@@ -1850,15 +1859,15 @@ def test_absolute_identity_fails_without_writing():
 
 
 def test_dotdot_identity_fails_and_does_not_write_outside_the_bundle():
-    """../outside and foo/../outside fail; nothing is written outside the bundle (L177, L184)."""
+    """../outside and foo/../outside fail; nothing is written outside the bundle."""
     with workspace() as ws:
         typ, title, desc = unique_tokens("ddty", "ddtl", "ddds")
         rel = _bundle()
         seed_bundle(ws, rel)
         assert_snapshot_helper_sees_write(ws, unique_tokens("snap")[0])
-        outside = ws.path / "outside.md"
-        nested_outside = ws.path / "outside"
-        for ident in ("../outside", "foo/../outside"):
+        outside = ws.path / f"{_OUTSIDE_LEAF}.md"
+        nested_outside = ws.path / _OUTSIDE_LEAF
+        for ident in (f"../{_OUTSIDE_LEAF}", f"foo/../{_OUTSIDE_LEAF}"):
             observe_cli_refusal(
                 ws, ident, rel, concept_type=typ, title=title, description=desc
             )
@@ -1881,7 +1890,7 @@ def test_dotdot_identity_fails_and_does_not_write_outside_the_bundle():
 
 
 def test_leading_hyphen_identity_fails_without_writing():
-    """A leading-hyphen identity fails without writing on CLI and MCP (L177)."""
+    """A leading-hyphen identity fails without writing on CLI and MCP."""
     with workspace() as ws:
         leaf, typ, title, desc = unique_tokens("hyid", "hyty", "hytl", "hyds")
         ident = f"-{leaf}"
@@ -1906,7 +1915,7 @@ def test_leading_hyphen_identity_fails_without_writing():
 
 
 def test_cli_newline_cr_and_tab_identities_each_fail_without_writing():
-    """CLI newline, CR, and tab identities each fail without writing (L177)."""
+    """CLI newline, CR, and tab identities each fail without writing."""
     with workspace() as ws:
         left, right, typ, title, desc = unique_tokens(
             "clid", "crid", "clty", "cltl", "clds"
@@ -1922,7 +1931,7 @@ def test_cli_newline_cr_and_tab_identities_each_fail_without_writing():
 
 
 def test_mcp_null_byte_identity_is_tool_error_and_writes_nothing():
-    """MCP create of a null-byte identity is a tool error and writes no concept (L177, L184).
+    """MCP create of a null-byte identity is a tool error and writes no concept.
 
     Arms differ only in whether the identity string contains a null byte.
     The same type and title on an otherwise well-formed identity succeed
@@ -1969,7 +1978,7 @@ def test_mcp_null_byte_identity_is_tool_error_and_writes_nothing():
 
 
 def test_mcp_newline_cr_tab_and_nul_identities_each_are_tool_errors_and_write_nothing():
-    """MCP newline, CR, tab, and NUL identities are tool errors and write nothing (L177)."""
+    """MCP newline, CR, tab, and NUL identities are tool errors and write nothing."""
     with workspace() as ws:
         left, right, typ, title, desc = unique_tokens(
             "mlid", "mrid", "mlty", "mltl", "mlds"
@@ -2002,7 +2011,7 @@ def test_mcp_newline_cr_tab_and_nul_identities_each_are_tool_errors_and_write_no
 
 
 def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_writing():
-    """Reserved index, nested index, root log, and root AGENTS fail; reserved files unchanged (L28, L177)."""
+    """Reserved index, nested index, root log, and root AGENTS fail; reserved files unchanged."""
     with workspace() as ws:
         nest, typ, title, desc = unique_tokens("rsdir", "rsty", "rstl", "rsds")
         rel = _bundle()
@@ -2030,7 +2039,7 @@ def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_writi
 
 
 def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_tool_errors_and_write_nothing():
-    """MCP reserved index / nested index / root log / root AGENTS are tool errors (L28, L177)."""
+    """MCP reserved index / nested index / root log / root AGENTS are tool errors."""
     with workspace() as ws:
         nest, typ, title, desc = unique_tokens("mrdir", "mrty", "mrtl", "mrds")
         rel = _bundle()
@@ -2062,7 +2071,7 @@ def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_tool_error
 
 
 def test_nested_log_and_agents_are_creatable():
-    """Nested dir/log and dir/AGENTS succeed on CLI while root log/AGENTS still fail (L28)."""
+    """Nested dir/log and dir/AGENTS succeed on CLI while root log/AGENTS still fail."""
     with workspace() as ws:
         nest, typ, title, desc, body = unique_tokens(
             "nldir", "nlty", "nltl", "nlds", "nlb"
@@ -2096,7 +2105,7 @@ def test_nested_log_and_agents_are_creatable():
 
 
 def test_mcp_nested_log_and_agents_are_creatable():
-    """Nested dir/log and dir/AGENTS succeed on MCP while root log/AGENTS still fail (L28)."""
+    """Nested dir/log and dir/AGENTS succeed on MCP while root log/AGENTS still fail."""
     with workspace() as ws:
         nest, typ, title, desc, body = unique_tokens(
             "mldir", "mlty", "mltl", "mlds", "mlb"
@@ -2144,13 +2153,13 @@ def test_mcp_nested_log_and_agents_are_creatable():
 
 
 def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_tool_errors_and_write_nothing():
-    """MCP ../outside, absolute, empty, and leading-hyphen identities are tool errors (L177)."""
+    """MCP ../outside, absolute, empty, and leading-hyphen identities are tool errors."""
     with workspace() as ws:
         leaf, typ, title, desc = unique_tokens("mxid", "mxty", "mxtl", "mxds")
         rel = _bundle()
         seed_bundle(ws, rel)
         for request_id, ident in enumerate(
-            ("../outside", f"/{leaf}", "", f"-{leaf}"), start=60
+            (f"../{_OUTSIDE_LEAF}", f"/{leaf}", "", f"-{leaf}"), start=60
         ):
             observe_mcp_refusal(
                 ws,
@@ -2169,7 +2178,7 @@ def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_tool_errors_and_write_
 
 
 def test_escaping_symlink_write_is_refused():
-    """Write through a .md symlink whose target leaves the bundle is refused (L51)."""
+    """Write through a .md symlink whose target leaves the bundle is refused."""
     with workspace() as ws:
         ident, typ, title, desc, body, secret_leaf = unique_tokens(
             "syid", "syty", "sytl", "syds", "syb", "sysc"
@@ -2198,7 +2207,7 @@ def test_escaping_symlink_write_is_refused():
 
 
 def test_missing_identity_argument_is_non_success_usage_and_writes_nothing():
-    """membundle create with no identity argument is usage-class, unlike empty/reserved/success (L177)."""
+    """membundle create with no identity argument is usage-class, unlike empty/reserved/success."""
     with workspace() as ws:
         ident, typ, title, desc, body = unique_tokens(
             "usid", "usty", "ustl", "usds", "usb"
@@ -2207,17 +2216,16 @@ def test_missing_identity_argument_is_non_success_usage_and_writes_nothing():
         seed_bundle(ws, ".")
         seed_bundle(ws, rel)
         paths = path_tokens_for(rel, ws.path)
-        success = require_create_success(
-            run_create(
-                ws,
-                ident,
-                rel,
-                concept_type=typ,
-                title=title,
-                description=desc,
-                body=body,
-            )
+        success = run_create(
+            ws,
+            ident,
+            rel,
+            concept_type=typ,
+            title=title,
+            description=desc,
+            body=body,
         )
+        require_create_success(success)
         empty = observe_cli_refusal(
             ws, "", rel, concept_type=typ, title=title, description=desc
         )
@@ -2225,19 +2233,15 @@ def test_missing_identity_argument_is_non_success_usage_and_writes_nothing():
             ws, "index", rel, concept_type=typ, title=title, description=desc
         )
         missing = observe_cli_refusal(ws, None, None)
-        empty_report = combined_report(empty)
-        reserved_report = combined_report(reserved)
         usage_report = require_create_usage_failure(
             missing,
-            empty_report,
-            reserved_report,
+            empty,
+            reserved,
             success,
-            paths,
+            ident,
+            title,
+            rel,
         )
-        usage_rem = _class_remainder(usage_report, paths)
-        empty_rem = _class_remainder(empty_report, paths)
-        reserved_rem = _class_remainder(reserved_report, paths)
-        success_rem = _class_remainder(success, paths)
         print("missing identity is usage-class and wrote nothing", flush=True)
         assert missing.returncode != 0, (
             f"create with a missing identity argument succeeded; "
@@ -2247,19 +2251,6 @@ def test_missing_identity_argument_is_non_success_usage_and_writes_nothing():
             "create with a missing identity argument produced empty combined "
             "streams"
         )
-        assert usage_rem != empty_rem, (
-            "missing-identity report is not distinguishable from empty-identity "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != reserved_rem, (
-            "missing-identity report is not distinguishable from reserved-index "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != success_rem, (
-            "missing-identity report is not distinguishable from a live success "
-            f"report after stripping paths and generated covariates; "
-            f"remainder={usage_rem!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2268,7 +2259,7 @@ def test_missing_identity_argument_is_non_success_usage_and_writes_nothing():
 
 
 def test_cli_empty_and_whitespace_type_each_fail_without_writing():
-    """CLI empty and whitespace type each fail without writing (L177)."""
+    """CLI empty and whitespace type each fail without writing."""
     with workspace() as ws:
         ident, title, desc = unique_tokens("etid", "ettl", "etds")
         rel = _bundle()
@@ -2282,7 +2273,7 @@ def test_cli_empty_and_whitespace_type_each_fail_without_writing():
 
 
 def test_cli_whitespace_only_description_fails_without_writing():
-    """CLI description present but only whitespace fails without writing (L177)."""
+    """CLI description present but only whitespace fails without writing."""
     with workspace() as ws:
         ident, typ, title = unique_tokens("wdid", "wdty", "wdtl")
         rel = _bundle()
@@ -2295,7 +2286,7 @@ def test_cli_whitespace_only_description_fails_without_writing():
 
 
 def test_cli_newline_in_each_of_type_title_description_and_actor_fails_without_writing():
-    """CLI type, title, description, and actor containing a newline each fail without writing (L177)."""
+    """CLI type, title, description, and actor containing a newline each fail without writing."""
     with workspace() as ws:
         ident, typ, title, desc, body, poison = unique_tokens(
             "nlid", "nlty", "nltl", "nlds", "nlb", "nlpo"
@@ -2327,7 +2318,7 @@ def test_cli_newline_in_each_of_type_title_description_and_actor_fails_without_w
 
 
 def test_cli_frontmatter_delimiter_in_each_of_type_title_description_and_actor_fails_without_writing():
-    """CLI type, title, description, and actor containing --- each fail without writing (L177)."""
+    """CLI type, title, description, and actor containing --- each fail without writing."""
     with workspace() as ws:
         ident, typ, title, desc, body, poison = unique_tokens(
             "fmid", "fmty", "fmtl", "fmds", "fmb", "fmpo"
@@ -2359,7 +2350,7 @@ def test_cli_frontmatter_delimiter_in_each_of_type_title_description_and_actor_f
 
 
 def test_mcp_newline_in_each_of_type_title_and_description_is_tool_error_and_writes_nothing():
-    """MCP type, title, and description containing a newline are tool errors (L177)."""
+    """MCP type, title, and description containing a newline are tool errors."""
     with workspace() as ws:
         ident, typ, title, desc, poison = unique_tokens(
             "mnfid", "mnfty", "mnftl", "mnfds", "mnfpo"
@@ -2408,7 +2399,7 @@ def test_mcp_newline_in_each_of_type_title_and_description_is_tool_error_and_wri
 
 
 def test_mcp_frontmatter_delimiter_in_each_of_type_title_and_description_is_tool_error_and_writes_nothing():
-    """MCP type, title, and description containing --- are tool errors (L177)."""
+    """MCP type, title, and description containing --- are tool errors."""
     with workspace() as ws:
         ident, typ, title, desc, poison = unique_tokens(
             "mfdid", "mfdty", "mfdtl", "mfdds", "mfdpo"
@@ -2457,7 +2448,7 @@ def test_mcp_frontmatter_delimiter_in_each_of_type_title_and_description_is_tool
 
 
 def test_mcp_omitted_empty_and_whitespace_title_each_is_tool_error_and_writes_nothing():
-    """MCP omit, empty, and whitespace title are each a tool error and write no file (L177, L183)."""
+    """MCP omit, empty, and whitespace title are each a tool error and write no file."""
     with workspace() as ws:
         ident, typ, desc = unique_tokens("mtid", "mtty", "mtds")
         rel = _bundle()
@@ -2497,7 +2488,7 @@ def test_mcp_omitted_empty_and_whitespace_title_each_is_tool_error_and_writes_no
 
 
 def test_mcp_omitted_empty_and_whitespace_type_each_is_tool_error_and_writes_nothing():
-    """MCP omit, empty, and whitespace type are each a tool error and write no file (L177)."""
+    """MCP omit, empty, and whitespace type are each a tool error and write no file."""
     with workspace() as ws:
         ident, title, desc = unique_tokens("myid", "mytl", "myds")
         rel = _bundle()
@@ -2537,7 +2528,7 @@ def test_mcp_omitted_empty_and_whitespace_type_each_is_tool_error_and_writes_not
 
 
 def test_mcp_omitted_description_succeeds():
-    """MCP omit of description succeeds; unused description token is absent (L177)."""
+    """MCP omit of description succeeds; unused description token is absent."""
     with workspace() as ws:
         ident, typ, title, unused, body = unique_tokens(
             "mdoid", "mdoty", "mdotl", "mdoun", "mdob"
@@ -2562,7 +2553,7 @@ def test_mcp_omitted_description_succeeds():
 
 
 def test_mcp_omitted_body_succeeds_without_unused_body_token():
-    """MCP omit of body succeeds; unique unused body token is absent after the fence (L173)."""
+    """MCP omit of body succeeds; unique unused body token is absent after the fence."""
     with workspace() as ws:
         ident, typ, title, desc, unused = unique_tokens(
             "mboid", "mboty", "mbotl", "mbods", "mboun"
@@ -2590,7 +2581,7 @@ def test_mcp_omitted_body_succeeds_without_unused_body_token():
 
 
 def test_mcp_whitespace_only_description_is_tool_error_and_writes_nothing():
-    """MCP whitespace-only description is a tool error and writes no file (L177)."""
+    """MCP whitespace-only description is a tool error and writes no file."""
     with workspace() as ws:
         ident, typ, title = unique_tokens("mwdid", "mwdty", "mwdtl")
         rel = _bundle()
@@ -2610,8 +2601,8 @@ def test_mcp_whitespace_only_description_is_tool_error_and_writes_nothing():
         print("mcp whitespace description refused", flush=True)
 
 
-def test_mcp_omit_title_on_public_sample_identity_writes_no_file():
-    """MCP create of decisions/auth-flow that omits title writes no file (L183)."""
+def test_mcp_omit_title_on_generated_sample_identity_writes_no_file():
+    """MCP create of the generated nested sample that omits title writes no file."""
     with workspace() as ws:
         desc = unique_tokens("psods")[0]
         rel = _bundle()
@@ -2619,14 +2610,14 @@ def test_mcp_omit_title_on_public_sample_identity_writes_no_file():
         observe_mcp_refusal(
             ws,
             {
-                "concept_id": PUBLIC_SAMPLE_IDENTITY,
-                "type": PUBLIC_SAMPLE_TYPE,
+                "concept_id": SAMPLE_IDENTITY,
+                "type": SAMPLE_TYPE,
                 "description": desc,
                 "bundle": rel,
             },
             bundle_rel=rel,
         )
-        assert not path_is_file(concept_file(root, PUBLIC_SAMPLE_IDENTITY))
+        assert not path_is_file(concept_file(root, SAMPLE_IDENTITY))
         print("mcp omit title on public-sample identity wrote no file", flush=True)
 
 
@@ -2636,7 +2627,7 @@ def test_mcp_omit_title_on_public_sample_identity_writes_no_file():
 
 
 def test_mcp_missing_identity_is_tool_error_and_writes_nothing():
-    """MCP tools-call missing concept_id is a tool error, not a protocol error (L177, L265)."""
+    """MCP tools-call missing concept_id is a tool error, not a protocol error."""
     with workspace() as ws:
         typ, title, desc = unique_tokens("mmity", "mmitl", "mmids")
         rel = _bundle()
@@ -2651,7 +2642,7 @@ def test_mcp_missing_identity_is_tool_error_and_writes_nothing():
 
 
 def test_mcp_missing_type_is_tool_error_and_writes_nothing():
-    """MCP tools-call missing type is a tool error, not a protocol error (L177, L265)."""
+    """MCP tools-call missing type is a tool error, not a protocol error."""
     with workspace() as ws:
         ident, title, desc = unique_tokens("mmnid", "mmntl", "mmnds")
         rel = _bundle()
@@ -2671,7 +2662,7 @@ def test_mcp_missing_type_is_tool_error_and_writes_nothing():
 
 
 def test_mcp_missing_title_is_tool_error_and_writes_nothing():
-    """MCP tools-call missing title is a tool error, not a protocol error (L177, L265)."""
+    """MCP tools-call missing title is a tool error, not a protocol error."""
     with workspace() as ws:
         ident, typ, desc = unique_tokens("mmqid", "mmqty", "mmqds")
         rel = _bundle()
@@ -2696,7 +2687,7 @@ def test_mcp_missing_title_is_tool_error_and_writes_nothing():
 
 
 def test_create_makes_missing_parent_directories():
-    """A three-segment nested identity creates intermediate dirs; listing is the immediate parent (L175)."""
+    """A three-segment nested identity creates intermediate dirs; listing is the immediate parent."""
     with workspace() as ws:
         a, b, c, typ, title, desc, body = unique_tokens(
             "pda", "pdb", "pdc", "pdty", "pdtl", "pdds", "pdbod"

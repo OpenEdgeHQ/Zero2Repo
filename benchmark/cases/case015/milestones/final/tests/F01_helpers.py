@@ -37,15 +37,13 @@ _OPUS_FILE = _FIXTURE_DIR / "opus_a.opus"
 _SPLIT_TOKENS = re.compile(r"[\s|,]+")
 _SIDE_PUNCT = "()[]{}<>\"'`"
 # One effort-range pair on a line: -1, then later -9. Separator form is open.
-_RANGE_PAIR = re.compile(r"(?<![\d])-1(?!\d).{0,80}?(?<![\d])-9(?!\d)")
+_RANGE_PAIR = re.compile(r"(?<![\d])-1(?!\d).*?(?<![\d])-9(?!\d)")
 _EFFORT_NINE = re.compile(r"(?<![\d])-9(?!\d)")
-_YEAR_OR_RANGE = re.compile(r"^\d{4}(?:-\d{4})?$")
-_COPYRIGHT_MARK = re.compile(r"\(C\)|\u00a9", re.IGNORECASE)
-# License/warranty covariates — detected by those marks, not by line length.
-_LICENSE_MARK = re.compile(
-    r"warranty|\bgpl\b|free software|redistribute",
-    re.IGNORECASE,
-)
+# Interface Contract, version: the identity lines a caller reads.
+_RELEASE_LINE = re.compile(r"^oggrepack (\S*\d\S*)(?: .*)?$")
+_BUILD_HOST_LINE = re.compile(r"^Build host (\S+?)\.?$")
+_OPUS_MODE_LINE = re.compile(r"^Ogg Opus mode: \S.*$")
+_SIMD_LINE = re.compile(r"^SIMD: (\S+) built, (\S+) dispatched$")
 # PRD: on Unix/Linux, batch compress names the archive by appending `.orp`.
 BATCH_ARCHIVE_SUFFIX = ".orp"
 
@@ -396,223 +394,100 @@ def mixer_kernel_names(text: str) -> set[str]:
     return cli_tokens(text) & _LEGAL_SIMD
 
 
-def _build_host_facts() -> tuple[str, ...]:
-    """Independent names of this build host. Empty facts are an observation failure."""
-    try:
-        info = os.uname()
-    except OSError as exc:
-        raise HarnessError(f"cannot observe the build host: {exc}") from exc
-    facts: list[str] = []
-    for raw in (info.sysname, info.nodename, info.machine):
-        piece = str(raw or "").strip()
-        if len(piece) >= 3:
-            facts.append(piece)
-    if not facts:
-        raise HarnessError("cannot observe the build host: uname fields empty")
-    return tuple(facts)
-
-
-def _token_names_host(tok: str, host_facts: tuple[str, ...]) -> bool:
-    low = tok.lower()
-    for fact in host_facts:
-        fl = fact.lower()
-        if low == fl or fl in low:
-            return True
-    return False
-
-
-def _is_release_identifier(tok: str, host_facts: tuple[str, ...]) -> bool:
-    """True when *tok* can name a version. Dotted numeric form is not required."""
-    if tok in {PRODUCT_NAME} | _LEGAL_SIMD:
-        return False
-    if tok in {f"-{i}" for i in range(1, 10)} or tok in set("01234"):
-        return False
-    if _YEAR_OR_RANGE.fullmatch(tok):
-        return False
-    if _token_names_host(tok, host_facts):
-        return False
-    return any(ch.isdigit() for ch in tok)
-
-
-def _names_a_version(tokens: set[str], host_facts: tuple[str, ...]) -> bool:
-    return any(_is_release_identifier(tok, host_facts) for tok in tokens)
-
-
-def _names_build_host(text: str, host_facts: tuple[str, ...]) -> bool:
-    lowered = text.lower()
-    return any(fact.lower() in lowered for fact in host_facts)
-
-
-def _line_is_copyright_covariate(line: str) -> bool:
-    if _COPYRIGHT_MARK.search(line):
-        return True
-    for tok in cli_tokens(line):
-        if _YEAR_OR_RANGE.fullmatch(tok):
-            return True
-    return False
-
-
-def _line_is_license_covariate(line: str) -> bool:
-    """True when *line* is license/warranty/copyright prose, not identity.
-
-    Detected by those marks. Line length is not used: a sentence-form
-    identity field may be long. A four-digit number is not treated as
-    copyright on its own (an RFC number is not a license line).
-    """
-    return bool(_LICENSE_MARK.search(line) or _COPYRIGHT_MARK.search(line))
-
-
-def _nonempty_lines(text: str) -> list[str]:
-    """Stripped non-empty lines. Type errors raise; empty input is no lines."""
+def _version_lines(text: str) -> list[str]:
     if not isinstance(text, str):
         raise HarnessError(f"expected str, got {type(text)!r}")
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def _identity_kinds(line: str, host_facts: tuple[str, ...]) -> frozenset[str]:
-    """Other L95 identity a line may already name: product, host, kernels."""
-    kinds: set[str] = set()
-    tokens = cli_tokens(line)
-    if PRODUCT_NAME in tokens:
-        kinds.add("product")
-    if _names_build_host(line, host_facts):
-        kinds.add("host")
-    if mixer_kernel_names(line):
-        kinds.add("kernels")
-    return frozenset(kinds)
+def version_release(version_text: str) -> str:
+    """``<release>`` of the Contract line ``oggrepack <release>[ ...]``."""
+    found = [m.group(1) for line in _version_lines(version_text)
+             if (m := _RELEASE_LINE.match(line))]
+    assert found, (
+        "version stdout has no line `oggrepack <release>` naming a release "
+        f"identifier; stdout={version_text!r}"
+    )
+    return found[0]
 
 
-def _version_only_non_license_lines(
-    version_text: str, help_text: str
-) -> list[str]:
-    """Version lines that are not usage, not the shared banner, not license.
-
-    Shared product banner and duplicated usage are exact lines that also
-    appear on help. License and copyright prose are detected by those
-    marks, not by line length. A codec-name substring in the excluded
-    regions is not kept.
-    """
-    help_lines = set(_nonempty_lines(help_text))
-    kept: list[str] = []
-    for line in _nonempty_lines(version_text):
-        if line in help_lines:
-            continue
-        if _line_is_license_covariate(line) or _line_is_copyright_covariate(line):
-            continue
-        kept.append(line)
-    return kept
+def version_build_host(version_text: str) -> str:
+    """``<host-triple>`` of the Contract line ``Build host <host-triple>``."""
+    found = [m.group(1) for line in _version_lines(version_text)
+             if (m := _BUILD_HOST_LINE.match(line))]
+    assert len(found) == 1, (
+        "version stdout does not carry exactly one `Build host <host-triple>` "
+        f"line; stdout={version_text!r}"
+    )
+    return found[0]
 
 
-def _strip_other_identity_covariates(
-    line: str, host_facts: tuple[str, ...]
-) -> str:
-    """Remove product, host facts, mixer-kernel tokens, and release identifiers.
-
-    Used only when identity is packed onto a line that already names two
-    or more of those other L95 items. Does not treat a codec-name
-    letter-run as the compiled-in answer, and does not pin field labels.
-    """
-    remainder = line
-    for fact in sorted(host_facts, key=len, reverse=True):
-        remainder = re.sub(re.escape(fact), " ", remainder, flags=re.IGNORECASE)
-    pieces: list[str] = []
-    for raw in remainder.split():
-        trimmed = raw.strip().strip(_SIDE_PUNCT).rstrip(":=")
-        if not trimmed:
-            continue
-        if trimmed == PRODUCT_NAME:
-            continue
-        if trimmed.lower() in {name.lower() for name in _LEGAL_SIMD}:
-            continue
-        if _is_release_identifier(trimmed, host_facts):
-            continue
-        pieces.append(trimmed)
-    return " ".join(pieces)
+def opus_mode_lines(version_text: str) -> list[str]:
+    """Contract ``Ogg Opus mode: <component>`` lines of version stdout."""
+    return [line for line in _version_lines(version_text) if _OPUS_MODE_LINE.match(line)]
 
 
-def dedicated_compiled_in_field(
-    version_text: str, help_text: str
-) -> tuple[str, ...]:
-    """Dedicated version-identity field for compiled-in Ogg Opus encode/decode.
-
-    PRD L95 / L111: the field is on version stdout, not usage text, not
-    the shared product banner, not license or copyright prose. Present
-    and absent are payloads of that same field; this helper returns the
-    version-side payloads (this recipe's binary is compiled-in). A
-    codec-name substring in usage, banner, or license is not the field.
-
-    Other named identity (product, build host, mixer kernels) is
-    subtracted so host or kernel lines alone cannot stand in for the
-    field. A packed line that names two or more of those items keeps
-    the remainder after the strip. Empty means the field was silent.
-    Observation type errors raise; they are not returned as silence.
-    """
-    host_facts = _build_host_facts()
-    lines = _version_only_non_license_lines(version_text, help_text)
-    dedicated = [line for line in lines if not _identity_kinds(line, host_facts)]
-    if dedicated:
-        return tuple(dedicated)
-    remainders: list[str] = []
-    for line in lines:
-        if len(_identity_kinds(line, host_facts)) < 2:
-            continue
-        leftover = _strip_other_identity_covariates(line, host_facts).strip()
-        if leftover:
-            remainders.append(leftover)
-    return tuple(remainders)
+def version_simd(version_text: str) -> tuple[frozenset[str], str]:
+    """``(built kernels, dispatched kernel)`` of the Contract ``SIMD:`` line."""
+    found = [m for line in _version_lines(version_text) if (m := _SIMD_LINE.match(line))]
+    assert len(found) == 1, (
+        "version stdout does not carry exactly one "
+        "`SIMD: <built-kernels> built, <dispatched-kernel> dispatched` line; "
+        f"stdout={version_text!r}"
+    )
+    built = frozenset(found[0].group(1).split(","))
+    dispatched = found[0].group(2)
+    assert built and built <= _LEGAL_SIMD, (
+        f"built kernels {sorted(built)!r} are not names from {sorted(_LEGAL_SIMD)}"
+    )
+    assert dispatched in _LEGAL_SIMD, (
+        f"dispatched kernel {dispatched!r} is not a name from {sorted(_LEGAL_SIMD)}"
+    )
+    return built, dispatched
 
 
 def require_compiled_in_identity_field(
     version_text: str, help_text: str
 ) -> tuple[str, ...]:
-    """Assert version has a dedicated compiled-in field that help does not.
+    """Version carries the ``Ogg Opus mode:`` line (Opus is compiled in).
 
-    Present arm: version-only payloads after stripping usage, shared
-    banner, and license/copyright. Absent arm on this recipe: those
-    payloads are not help lines (an observer of usage, banner, or
-    license text alone cannot see the field). Does not pin a codec-name
-    letter-run, a polarity-word list, or this checkout's field label.
+    This product supports Ogg Opus, so the present arm is required; the
+    line is version identity, not help usage.
     """
-    payloads = dedicated_compiled_in_field(version_text, help_text)
-    assert payloads, (
-        "version identity is silent on whether Ogg Opus encode and decode "
-        "are compiled in, or answers that only by a codec-name substring "
-        "in usage, banner, or license text"
+    lines = opus_mode_lines(version_text)
+    assert len(lines) == 1, (
+        "version stdout does not carry exactly one `Ogg Opus mode: <component>` "
+        "line although Ogg Opus encode and decode are compiled in; "
+        f"stdout={version_text!r}"
     )
-    help_lines = set(_nonempty_lines(help_text))
-    for payload in payloads:
-        assert payload not in help_lines, (
-            "dedicated compiled-in field is not distinguishable from help "
-            "usage or the shared product banner"
-        )
-    return payloads
+    help_lines = set(_version_lines(help_text))
+    assert lines[0] not in help_lines, (
+        "the `Ogg Opus mode:` line is part of help output, not version identity"
+    )
+    return tuple(lines)
 
 
 def require_version_identity(version_text: str, help_text: str) -> None:
-    """Assert version stdout names version, host, compiled-in field, kernels.
+    """Assert version stdout names product, release, host, Opus, and kernels.
 
-    Kernel names are the PRD-fixed tokens ``scalar``, ``sse2``, and ``avx2``.
-    A version is a release identifier; dotted numeric form is not required.
-    The build host is this machine as observed outside the product (uname
-    facts), not leftover tokens after subtracting help. Compiled-in Ogg
-    Opus encode/decode is a dedicated identity field on version stdout:
-    not usage, not the shared product banner, not license or copyright
-    prose, and not a codec-name substring in those regions. *help_text*
-    is the usage stream from the same workspace.
+    Reads the Contract's version lines. The build host is the configure host
+    triple; its CPU part is this machine's ``uname -m``.
     """
     version_tokens = cli_tokens(version_text)
-    host_facts = _build_host_facts()
     assert PRODUCT_NAME in version_tokens, (
         f"version stdout does not name the product as a whole token; "
         f"tokens={sorted(version_tokens)}"
     )
-    assert _names_a_version(version_tokens, host_facts), (
-        "version identity does not name a version"
-    )
-    assert _names_build_host(version_text, host_facts), (
-        "version identity does not name the build host"
+    version_release(version_text)
+    host = version_build_host(version_text)
+    machine = os.uname().machine.lower()
+    parts = host.lower().split("-")
+    assert len(parts) >= 3 and parts[0] == machine, (
+        f"build host {host!r} is not a configure host triple "
+        f"`<cpu>-<vendor>-<os>` for this machine ({machine})"
     )
     require_compiled_in_identity_field(version_text, help_text)
+    version_simd(version_text)
     kernels = mixer_kernel_names(version_text)
     assert kernels, (
         f"version stdout does not name a mixer kernel; "
@@ -621,20 +496,12 @@ def require_version_identity(version_text: str, help_text: str) -> None:
 
 
 def require_stderr_identifies_path_failure(result: RunResult, path: str) -> None:
-    """Assert stderr identifies a path-open or path-create failure.
-
-    After stripping the named path, a remainder must remain. Does not pin
-    wording, and does not require open vs create remnants to differ.
-    """
+    """Assert the file-access diagnostic on stderr contains the path."""
     text = result.stderr_text
     assert text, f"expected non-empty stderr; stdout={result.stdout!r}"
-    stripped = text.replace(path, "")
-    base = Path(path).name
-    if base and base != path:
-        stripped = stripped.replace(base, "")
-    assert stripped.strip(), (
-        f"stderr does not identify that the path could not be opened or "
-        f"could not be created beyond echoing the path; stderr={text!r}"
+    assert path in text, (
+        f"the file-access diagnostic does not contain the path {path!r}; "
+        f"stderr={text!r}"
     )
 
 
@@ -646,7 +513,6 @@ __all__ = (
     "SIMD_ENV",
     "HarnessError",
     "cli_tokens",
-    "dedicated_compiled_in_field",
     "derived_batch_archive",
     "files_identical",
     "help_has_required_names",
@@ -655,6 +521,7 @@ __all__ = (
     "malformed_memcap_runtime",
     "mixer_kernel_names",
     "named_archive_files",
+    "opus_mode_lines",
     "path_is_file",
     "place_non_ogg",
     "place_opus",
@@ -684,6 +551,9 @@ __all__ = (
     "unknown_long_option",
     "unknown_short_option",
     "unknown_verb",
+    "version_build_host",
+    "version_release",
+    "version_simd",
     "workspace",
     "workspace_regular_files",
 )

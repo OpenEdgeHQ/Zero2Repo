@@ -31,7 +31,6 @@ from _harness import (
     node_executable,
 )
 from F02_helpers import runtime_token, standalone_int_present
-from F03_helpers import cleanup_switch
 
 # Level words the PRD names as the stored operating level (L26, L198, L216).
 ON_LEVELS: tuple[str, ...] = ("off", "lite", "full", "strict")
@@ -95,6 +94,19 @@ _ARCHIVE_MB_CAP = re.compile(
 
 _FRAME_SEED = secrets.token_hex(6)
 
+# Interface Contract, `scripts/detect.py`: the cleanup switch is spelled
+# exactly `--clean`. It is read as that literal, never discovered from usage.
+CLEANUP_SWITCH = "--clean"
+
+# Interface Contract, hook stdout envelopes: prompt-submit (ordinary prompt)
+# and subagent-start answer with one JSON object
+# {"hookSpecificOutput": {"hookEventName": <event>, "additionalContext": <text>}}.
+REMINDER_EVENT = "UserPromptSubmit"
+SUBAGENT_EVENT = "SubagentStart"
+
+# Interface Contract, finding members: key `<N>_<slug>`.
+_FINDING_KEY = re.compile(r"^[1-9][0-9]*_")
+
 
 def _fold(text: str) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()
@@ -124,20 +136,12 @@ def named_int_present(text: str, value: int) -> bool:
     return re.search(_standalone_pattern(grouped), str(text)) is not None
 
 
-# An absolute path the live contract may embed (L212). Digits inside it are
-# the machine location, not a post-write score. Stop at the first character
-# that is not a path character so a following "(score <= 40)" stays.
-_ABS_PATH = re.compile(
-    r"(?<![A-Za-z0-9])/(?:[A-Za-z0-9._+-]+/)+[A-Za-z0-9._+-]*"
-)
-
-
 def without_machine_paths(text: str, *paths: str) -> str:
-    """Contract text with this machine's paths removed (L212).
+    """Contract text with the exact known machine paths removed (L212).
 
-    A live session may name the detector path. That path is not a scoring
-    target. A standalone 40 or 20 that exists only inside it is not the
-    named post-write score.
+    The Interface Contract declares the detector path free in a live
+    contract, so that exact string (and the harness's own planted paths)
+    is not read. No pattern-based path stripping: only these exact strings.
     """
     known: list[str] = [p for p in paths if p]
     try:
@@ -156,7 +160,6 @@ def without_machine_paths(text: str, *paths: str) -> str:
     # Longer paths first so a directory prefix is removed before a fragment.
     ordered = sorted({p for p in known if p}, key=len, reverse=True)
     out = strip_hook_covariates(text, *ordered)
-    out = _ABS_PATH.sub(" ", out)
     return _fold(out)
 
 
@@ -212,16 +215,6 @@ def _walk_keys(value: Any) -> list[str]:
     return found
 
 
-def leftover_tokens(first: str, second: str) -> str:
-    """Tokens in *first* that are not accounted for in *second* (order of first)."""
-    remaining = Counter(_tokenize(second))
-    kept: list[str] = []
-    for token in _tokenize(first):
-        if remaining[token] > 0:
-            remaining[token] -= 1
-            continue
-        kept.append(token)
-    return " ".join(kept)
 
 
 def workspace_paths(ws) -> tuple[str, ...]:
@@ -290,24 +283,62 @@ def delivered_text(result: RunResult) -> str:
     return joined_stdout(result)
 
 
-def subagent_contract(result: RunResult) -> str:
-    """Joined string values of a JSON *object*. Raw text is not delivery (L207)."""
+def hook_context(result: RunResult, event: str) -> str:
+    """``hookSpecificOutput.additionalContext`` of the stated envelope.
+
+    Interface Contract: stdout is one JSON object
+    ``{"hookSpecificOutput": {"hookEventName": <event>, "additionalContext": <text>}}``.
+    Read directly at that path; other members are not read.
+    """
     require_hook_success(result)
     text = result.stdout_text
-    if text == "":
-        raise HarnessError("subagent-start stdout is empty; expected a JSON object")
+    assert text != "", f"{event} hook stdout is empty; expected the JSON envelope"
     try:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise HarnessError(
-            f"subagent-start stdout is not JSON: {exc}; text={text[:500]!r}"
+        raise AssertionError(
+            f"{event} hook stdout is not one JSON object: {exc}; text={text[:500]!r}"
         ) from exc
-    if not isinstance(obj, dict):
-        raise HarnessError(
-            f"subagent-start JSON is {type(obj).__name__}, not an object; "
-            f"text={text[:500]!r}"
-        )
-    return "\n".join(_walk_strings(obj))
+    assert isinstance(obj, dict), (
+        f"{event} hook JSON is {type(obj).__name__}, not an object"
+    )
+    inner = obj.get("hookSpecificOutput")
+    assert isinstance(inner, dict), (
+        f"{event} envelope has no hookSpecificOutput object; obj={obj!r:.500}"
+    )
+    assert inner.get("hookEventName") == event, (
+        f"envelope hookEventName is {inner.get('hookEventName')!r}, not {event!r}"
+    )
+    context = inner.get("additionalContext")
+    assert isinstance(context, str), (
+        f"{event} envelope additionalContext is not a string: {context!r:.200}"
+    )
+    return context
+
+
+def subagent_contract(result: RunResult) -> str:
+    """The contract carried in the subagent-start envelope (L207).
+
+    Raw text on stdout is not delivery; the context is read at
+    ``hookSpecificOutput.additionalContext`` with event ``SubagentStart``.
+    """
+    return hook_context(result, SUBAGENT_EVENT)
+
+
+def reminder_text(result: RunResult) -> str:
+    """The ordinary-prompt reminder: ``additionalContext`` of the
+    ``UserPromptSubmit`` envelope."""
+    return hook_context(result, REMINDER_EVENT)
+
+
+def session_text(result: RunResult) -> str:
+    """Session-start delivery: stdout as plain text after a successful exit.
+
+    Interface Contract: session-start prints plain text (the one-time
+    welcome, when shown, then the writing contract), not a JSON envelope.
+    """
+    require_hook_success(result)
+    return result.stdout_text
 
 
 def session_start(
@@ -364,23 +395,6 @@ def payload_string_values(payload: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(_walk_strings(payload))
 
 
-def parsed_json_object(result: RunResult) -> dict[str, Any] | None:
-    """Return a JSON object from stdout, or None when stdout is not an object.
-
-    Does not treat a parse failure as empty. Used only to feed key-echo
-    stripping after success has already been classified.
-    """
-    require_hook_success(result)
-    text = result.stdout_text
-    if text == "":
-        return None
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(obj, dict):
-        return obj
-    return None
 
 
 def strip_hook_covariates(
@@ -427,88 +441,14 @@ def strip_hook_covariates(
     return _fold(out)
 
 
-def instruction_remainder(
-    text: str,
-    *,
-    paths: Sequence[str] = (),
-    levels: Sequence[str] = (),
-    extra: Sequence[Any] = (),
-    stdin_strings: Sequence[str] = (),
-    json_obj: Mapping[str, Any] | None = None,
-) -> str:
-    stripped = strip_hook_covariates(
-        text,
-        *paths,
-        levels=levels,
-        extra=extra,
-        stdin_strings=stdin_strings,
-        json_obj=json_obj,
-    )
-    for word in BANNED_VOCABULARY:
-        stripped = _strip_standalone(stripped, word)
-    return _fold(stripped)
 
 
-def scoring_extra(
-    full_text: str,
-    lite_text: str,
-    *,
-    paths: Sequence[str] = (),
-) -> str:
-    """Leftover of stored-full vs stored-lite after the C strip."""
-    full_rem = instruction_remainder(
-        full_text, paths=paths, levels=ON_LEVELS, extra=C_SCORING
-    )
-    lite_rem = instruction_remainder(
-        lite_text, paths=paths, levels=ON_LEVELS, extra=C_SCORING
-    )
-    if not full_rem and not lite_rem:
-        raise HarnessError(
-            "both full and lite remainders are empty after the scoring strip"
-        )
-    return leftover_tokens(full_rem, lite_rem)
 
 
-def body_without_scoring_extra(
-    text: str,
-    full_text: str,
-    lite_text: str,
-    *,
-    paths: Sequence[str] = (),
-) -> str:
-    remainder = instruction_remainder(
-        text, paths=paths, levels=ON_LEVELS, extra=C_SCORING
-    )
-    extra = scoring_extra(full_text, lite_text, paths=paths)
-    return leftover_tokens(remainder, extra)
 
 
-def reminder_leftover(
-    text: str,
-    *,
-    stdin_strings: Sequence[str] = (),
-    json_obj: Mapping[str, Any] | None = None,
-    levels: Sequence[str] = (),
-    paths: Sequence[str] = (),
-) -> str:
-    used_levels = tuple(levels) if levels else ON_LEVELS
-    return instruction_remainder(
-        text,
-        paths=paths,
-        levels=used_levels,
-        extra=C_SCORING,
-        stdin_strings=stdin_strings,
-        json_obj=json_obj,
-    )
 
 
-def welcome_extra(first: str, second: str) -> str:
-    """Content in the first delivery that is absent from the second (L203)."""
-    if not _fold(first) and not _fold(second):
-        raise HarnessError(
-            "both session-start deliveries are empty; cannot form a welcome extra"
-        )
-    return leftover_tokens(first, second)
 
 
 def contains_every_banned_word(text: str) -> bool:
@@ -517,21 +457,6 @@ def contains_every_banned_word(text: str) -> bool:
     return all(standalone_word_present(text, word) for word in BANNED_VOCABULARY)
 
 
-def has_scoring_extra(
-    text: str,
-    full_text: str,
-    lite_text: str,
-    *,
-    paths: Sequence[str] = (),
-) -> bool:
-    extra = scoring_extra(full_text, lite_text, paths=paths)
-    if not extra:
-        return False
-    remainder = instruction_remainder(
-        text, paths=paths, levels=ON_LEVELS, extra=C_SCORING
-    )
-    missing = leftover_tokens(extra, remainder)
-    return not missing
 
 
 def _finding_objects(findings: Any) -> list[Mapping[str, Any]]:
@@ -555,6 +480,38 @@ def _finding_objects(findings: Any) -> list[Mapping[str, Any]]:
     return objects
 
 
+def report_findings_direct(result: RunResult) -> dict[str, Mapping[str, Any]]:
+    """Finding members of a detector success report, read at the stated form.
+
+    Interface Contract: exit 0, stdout one JSON object; `_metrics` is an
+    object; every other member is a finding keyed `<N>_<slug>` whose value
+    carries a positive integer `count`.
+    """
+    assert result.returncode == 0, (
+        f"detector failed: exit={result.returncode} stderr={result.stderr_text!r}"
+    )
+    try:
+        report = json.loads(result.stdout_text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"detector stdout is not JSON: {exc}") from exc
+    assert isinstance(report, dict), "detector report is not a JSON object"
+    assert isinstance(report.get("_metrics"), dict), "report has no _metrics object"
+    findings: dict[str, Mapping[str, Any]] = {}
+    for key, value in report.items():
+        if key == "_metrics":
+            continue
+        assert _FINDING_KEY.match(str(key)), (
+            f"report member {key!r} is neither _metrics nor a <N>_<slug> finding"
+        )
+        assert isinstance(value, dict), f"finding {key!r} is not an object"
+        count = value.get("count")
+        assert isinstance(count, int) and not isinstance(count, bool) and count > 0, (
+            f"finding {key!r} count is not a positive integer: {count!r}"
+        )
+        findings[str(key)] = value
+    return findings
+
+
 def require_probe_finding(findings: Any) -> None:
     """The two-sentence probe produced at least one finding (L201 / L216).
 
@@ -565,41 +522,6 @@ def require_probe_finding(findings: Any) -> None:
     assert objects, "two-sentence probe produced no finding"
 
 
-def finding_report_text(report: Any) -> str:
-    """Labels and samples from a structured findings collection.
-
-    A label that identifies a numbered kind without copying a catalogue
-    title is kept. Empty findings are an empty report (no fire), not a
-    crashed probe. A finding object with no text is unclassified and raises.
-    """
-    if report is None:
-        raise HarnessError("findings are missing; cannot read the report")
-    if isinstance(report, Mapping):
-        items = list(report.values())
-    elif isinstance(report, list):
-        items = list(report)
-    else:
-        raise HarnessError(
-            f"findings are {type(report).__name__}, not an object or list"
-        )
-    parts: list[str] = []
-    for item in items:
-        if not isinstance(item, Mapping):
-            raise HarnessError(
-                f"finding is {type(item).__name__}, not an object"
-            )
-        strings = [v for v in item.values() if isinstance(v, str) and v.strip()]
-        lists = [
-            v
-            for v in item.values()
-            if isinstance(v, list) and all(isinstance(x, str) for x in v)
-        ]
-        if not strings and not lists:
-            raise HarnessError(f"finding has no label or samples: {item!r}")
-        parts.extend(strings)
-        for samples in lists:
-            parts.extend(str(sample) for sample in samples)
-    return "\n".join(parts)
 
 
 def two_sentence_probe(word: str) -> str:
@@ -619,7 +541,7 @@ def stored_session_text(level: str, *, paths_into: list[str] | None = None) -> s
     with _workspace() as ws:
         ws.write_mode_flag(level)
         result = session_start(ws)
-        text = delivered_text(result)
+        text = session_text(result)
         if paths_into is not None:
             paths_into.extend(workspace_paths(ws))
         print(
@@ -788,15 +710,10 @@ def require_exported_contract_omits_machine_identity(text: str) -> None:
 def has_cleanup_switch_finish(text: str) -> bool:
     """Whether the delivery asks for a finish through the FP-03 switch.
 
-    The switch is discovered from usage (not a hardcoded spelling). Checked
-    on the raw text: stripping the band word ``clean`` would eat the switch.
+    The switch is the stated literal ``--clean``. Checked on the raw text:
+    stripping the band word ``clean`` would eat the switch.
     """
-    flag = cleanup_switch()
-    if not flag:
-        raise HarnessError("usage did not name a cleanup switch")
-    if flag in str(text):
-        return True
-    return standalone_word_present(text, flag)
+    return CLEANUP_SWITCH in str(text)
 
 
 _SCOPE_APPLY = re.compile(
@@ -935,7 +852,7 @@ def require_strict_cleanup(strict_text: str, full_text: str, *paths: str) -> Non
     """Strict: score-20, the clean band, and a finish through the cleanup
     switch that full does not carry.
 
-    The usage-named switch spelling contains the band word. That spelling
+    The stated switch spelling ``--clean`` contains the band word. That spelling
     is not the band: ``clean`` counts only when it is still present after
     the spelling is removed. The two target integers are read off the
     deliveries; they are not compared to each other as literals.
@@ -943,9 +860,7 @@ def require_strict_cleanup(strict_text: str, full_text: str, *paths: str) -> Non
     assert named_score_present(strict_text, 20, *paths), (
         "strict contract does not name the score-20 target"
     )
-    flag = cleanup_switch()
-    if not isinstance(flag, str) or not flag.strip():
-        raise HarnessError("usage did not name a cleanup switch")
+    flag = CLEANUP_SWITCH
     apart = re.sub(re.escape(flag), " ", str(strict_text), flags=re.IGNORECASE)
     assert standalone_word_present(apart, "clean"), (
         "strict contract does not name the clean band apart from the cleanup switch"
@@ -974,8 +889,7 @@ def require_short_reminder(
     """Prompt-submit names the live level (L205 / L216). The remainder of
     that reminder is inventory, not an independently graded leftover.
     """
-    require_hook_success(result)
-    text = delivered_text(result)
+    text = reminder_text(result)
     assert text.strip(), f"prompt-submit at {level} emitted nothing"
     assert standalone_word_present(text, level), (
         f"prompt reminder does not name {level!r}; text={text[:400]!r}"

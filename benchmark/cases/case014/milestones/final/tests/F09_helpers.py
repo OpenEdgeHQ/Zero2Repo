@@ -1513,7 +1513,6 @@ def _require_compiled_product():
     """
     result = _compile_product_once()
     detail = _compile_detail(result)
-    # TEST-FIX(F09): upstream Makefile:441 shows pylib is the rule that writes the shared object; a missing or failed compile leaves no library for the sanitization probes
     assert result is not None, (
         "make pylib replay did not run\n" + detail
     )
@@ -1521,11 +1520,9 @@ def _require_compiled_product():
         "make pylib replay failed\n" + detail
     )
     ident = product_identity()
-    # TEST-FIX(F09): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config and Ins, and python/INSLIB/__init__.py:31 re-exports Navigator from that same package
     assert ident is not None, (
         "python package directory was not found after make pylib replay\n" + detail
     )
-    # TEST-FIX(F09): upstream Makefile:438 shows make pylib writes the shared object inside the package directory, and the object stem equals that directory name
     assert ident.library is not None and ident.library.is_file(), (
         "shared library is missing after make pylib replay\n" + detail
     )
@@ -1542,7 +1539,6 @@ def _require_compiled_product():
 
 def _ins_py_source(ident) -> str:
     """Python INS probe that imports the package ``make pylib`` wrote."""
-    # TEST-FIX(F09): upstream python/INSLIB/__init__.py:29 shows Config and Ins are imported from the package directory make pylib wrote
     source = _PY_INS_PROBE.replace("__PKG__", ident.package_name)
     if "__PKG__" in source:
         raise HarnessError("INS probe did not receive the compiled package name")
@@ -1551,7 +1547,6 @@ def _ins_py_source(ident) -> str:
 
 def _suite_py_source(ident) -> str:
     """Python navigator probe that imports the package ``make pylib`` wrote."""
-    # TEST-FIX(F09): upstream python/INSLIB/__init__.py:29 shows Config is imported from the package directory make pylib wrote, and python/INSLIB/__init__.py:31 re-exports Navigator from that same package
     source = _PY_SUITE_PROBE.replace("__PKG__", ident.package_name)
     if "__PKG__" in source:
         raise HarnessError("suite probe did not receive the compiled package name")
@@ -1561,7 +1556,6 @@ def _suite_py_source(ident) -> str:
 def _invoke_c(stdin: str):
     """C probe linked to the shared object ``make pylib`` wrote."""
     ident = _require_compiled_product()
-    # TEST-FIX(F09): upstream Makefile:438 shows the C probe links the shared object make pylib wrote, whose stem equals the package directory
     assert ident.library is not None and ident.library_stem == ident.package_name
     return invoke(
         _C_PROBE, stdin=stdin, timeout=HYGIENE_TIMEOUT, root=repo_root()
@@ -2022,7 +2016,7 @@ def write_outlier_replay_dataset(
     """Write IMU+GNSS CSVs and config.yaml for a pad then a north GNSS offset.
 
     The yaml carries the same global outlier-rejection override as the filter
-    options (L345). The key spelling is the replay schema, not an asserted
+    options. The key spelling is the replay schema, not an asserted
     stdout token.
     """
     dest = ws.resolve(relpath)
@@ -2189,7 +2183,6 @@ def outlier_replay_step_rows() -> int:
 
 def replay_last_ecef(dataset: Path, dump_path: Path) -> tuple[float, float, float]:
     """Replay a dataset directory and return the last dumped ECEF. Raises on silence."""
-    # TEST-FIX(F09): upstream python/replay.py:72 imports the package beside the script; python/INSLIB/_core.py:54 loads that package's shared object, so replay runs from the compiled root
     _require_compiled_product()
     result = run_replay(
         dataset,

@@ -21,12 +21,12 @@ from F02_helpers import (
     require_no_usable_expand_dest,
     roundtrip,
 )
-from F03_helpers import leftover_whitespace_tokens, strip_paths_and_sizes
+from F03_helpers import states_decimal, without_paths
 from F04_helpers import _prove_family0, opus_with_runtime_tags, vorbis_with_runtime_comment
 from F05_helpers import (
     corrupt_stored_page_checksum,
     floor_slot,
-    generation_candidates_across,
+    foreign_generation_values,
     later_page_index,
     live_compress,
     lookup_slot,
@@ -52,6 +52,7 @@ from F05_helpers import (
     with_sparse_empty_book,
     with_trailing_non_page,
     with_unmarked_packet_span,
+    written_generation,
 )
 from _harness import HarnessError, workspace
 
@@ -365,36 +366,27 @@ def test_expand_of_ogg_versus_compress_of_archive_are_distinguishable():
         cmp_x = refuse_compress(ws, arc_x, dest_x)
         cmp_y = refuse_compress(ws, arc_y, dest_y)
 
-        expand_paths = (path_a, path_b, dest_a, dest_b)
-        expand_sizes = (len(ogg_a), len(ogg_b))
-        left_a = leftover_whitespace_tokens(
-            strip_paths_and_sizes(exp_a.stderr_text, expand_paths, expand_sizes)
+        every_path = (
+            path_a, path_b, dest_a, dest_b, arc_x, arc_y, dest_x, dest_y,
+            vorbis_x, vorbis_y,
         )
-        left_b = leftover_whitespace_tokens(
-            strip_paths_and_sizes(exp_b.stderr_text, expand_paths, expand_sizes)
-        )
-        expand_shared = left_a & left_b
-
-        compress_paths = (arc_x, arc_y, dest_x, dest_y, vorbis_x, vorbis_y)
-        compress_sizes = (ws.file_size(arc_x), ws.file_size(arc_y))
-        left_x = leftover_whitespace_tokens(
-            strip_paths_and_sizes(cmp_x.stderr_text, compress_paths, compress_sizes)
-        )
-        left_y = leftover_whitespace_tokens(
-            strip_paths_and_sizes(cmp_y.stderr_text, compress_paths, compress_sizes)
-        )
-        compress_shared = left_x & left_y
-
+        expand_texts = [
+            without_paths(r.stderr_text, every_path).strip() for r in (exp_a, exp_b)
+        ]
+        compress_texts = [
+            without_paths(r.stderr_text, every_path).strip() for r in (cmp_x, cmp_y)
+        ]
         print(
-            f"[F05] wrong-type expand_shared={sorted(expand_shared)} "
-            f"compress_shared={sorted(compress_shared)}",
+            f"[F05] wrong-type expand={expand_texts!r} compress={compress_texts!r}",
             flush=True,
         )
-        assert expand_shared != compress_shared, (
-            "standard error does not make expand-of-Ogg distinguishable from "
-            "compress-of-archive after stripping paths and sizes "
-            f"(shared={sorted(expand_shared)})"
-        )
+        for e_text in expand_texts:
+            for c_text in compress_texts:
+                assert e_text != c_text, (
+                    "the diagnostics of expand-of-Ogg and compress-of-archive "
+                    "differ in no more than the paths they name: "
+                    f"{e_text!r} vs {c_text!r}"
+                )
 
 
 def test_non_ogg_compress_is_distinguishable_from_missing_path():
@@ -442,98 +434,30 @@ def _foreign_generation_case(ws, src_a: str, src_b: str, non_archive: str, origi
         "baseline expand did not restore the original bytes"
     )
 
-    candidates = generation_candidates_across(ws, src_a, bytes_a, bytes_b)
+    written = written_generation(ws, src_a, bytes_a, bytes_b)
     non_bytes = ws.read_bytes(non_archive)
     non_dest = unique_name("gen-nonarc")
-    non_run = refuse_expand(ws, non_archive, non_dest, non_bytes)
-    non_left = leftover_whitespace_tokens(
-        strip_paths_and_sizes(
-            non_run.stderr_text,
-            (non_archive, non_dest),
-            (len(non_bytes),),
-        )
-    )
+    refuse_expand(ws, non_archive, non_dest, non_bytes)
 
-    matched = None
-    older_run = None
-    newer_run = None
-    older_src = None
-    newer_src = None
-    matched_older_left = None
-    matched_newer_left = None
-    for field in candidates:
-        offset, width, written, endian = field
-        max_val = (1 << (8 * width)) - 1
-        older_val = secrets.choice(range(0, written))
-        newer_val = secrets.choice(range(written + 1, max_val + 1))
-        assert older_val < written < newer_val, (
-            f"relative order failed: {older_val} < {written} < {newer_val}"
-        )
-        older_bytes = with_generation_value(bytes_a, field, older_val)
-        newer_bytes = with_generation_value(bytes_a, field, newer_val)
-        older_path = unique_name("gen-older")
-        newer_path = unique_name("gen-newer")
-        ws.write(older_path, older_bytes)
-        ws.write(newer_path, newer_bytes)
-        older_dest = unique_name("gen-older-out")
-        newer_dest = unique_name("gen-newer-out")
-        older_try = run_product(ws, ["d", older_path, older_dest])
-        newer_try = run_product(ws, ["d", newer_path, newer_dest])
+    older_val, newer_val = foreign_generation_values(written)
+    for label, value in (("older", older_val), ("newer", newer_val)):
+        foreign = with_generation_value(bytes_a, value)
+        path = unique_name(f"gen-{label}")
+        dest = unique_name(f"gen-{label}-out")
+        ws.write(path, foreign)
+        run = run_product(ws, ["d", path, dest])
         print(
-            f"[F05] generation field off={offset} width={width} endian={endian} "
-            f"written={written} older={older_val} newer={newer_val} "
-            f"older_exit={older_try.returncode} newer_exit={newer_try.returncode}",
+            f"[F05] generation written={written} {label}={value} "
+            f"exit={run.returncode} stderr={run.stderr_text!r}",
             flush=True,
         )
-        if older_try.returncode != 1 or newer_try.returncode != 1:
-            continue
-        older_left = leftover_whitespace_tokens(
-            strip_paths_and_sizes(
-                older_try.stderr_text,
-                (older_path, older_dest, non_archive, non_dest),
-                (len(older_bytes), len(non_bytes)),
-            )
+        require_refusal(run)
+        require_no_usable_expand_dest(ws, dest, original_a)
+        assert states_decimal(without_paths(run.stderr_text, (path, dest)), value), (
+            f"the diagnostic of a foreign-generation ({label}) expand does not "
+            f"state the archive's generation value {value} as a decimal number; "
+            f"stderr={run.stderr_text!r}"
         )
-        newer_left = leftover_whitespace_tokens(
-            strip_paths_and_sizes(
-                newer_try.stderr_text,
-                (newer_path, newer_dest, non_archive, non_dest),
-                (len(newer_bytes), len(non_bytes)),
-            )
-        )
-        if older_left == non_left or newer_left == non_left:
-            print(
-                f"[F05] generation leftover matched non-archive "
-                f"older={sorted(older_left)} newer={sorted(newer_left)} "
-                f"non={sorted(non_left)}",
-                flush=True,
-            )
-            continue
-        matched = field
-        older_run, newer_run = older_try, newer_try
-        older_src, newer_src = older_path, newer_path
-        older_original_dest = older_dest
-        newer_original_dest = newer_dest
-        matched_older_left = older_left
-        matched_newer_left = newer_left
-        print(
-            f"[F05] generation identifier off={offset} width={width} "
-            f"endian={endian} written={written} older={older_val} "
-            f"newer={newer_val} older_left={sorted(older_left)} "
-            f"newer_left={sorted(newer_left)} non_left={sorted(non_left)}",
-            flush=True,
-        )
-        break
-
-    assert matched is not None, (
-        "no shared-prefix integer, when rewritten older and newer, both "
-        "refused expand and stayed distinguishable from expand of a non-archive"
-    )
-    require_refusal(older_run)
-    require_no_usable_expand_dest(ws, older_original_dest, original_a)
-    require_refusal(newer_run)
-    require_no_usable_expand_dest(ws, newer_original_dest, original_a)
-    return matched_older_left, matched_newer_left, non_left
 
 
 def test_foreign_generation_older_and_newer_is_refused():
@@ -542,11 +466,7 @@ def test_foreign_generation_older_and_newer_is_refused():
         src_b = _place_runtime_vorbis(ws, which="b")
         ogg = _runtime_vorbis_bytes()
         non_archive = place_bytes_without_codec_suffix(ws, ogg, "not-arc")
-        older_left, newer_left, non_left = _foreign_generation_case(
-            ws, src_a, src_b, non_archive, ws.read_bytes(src_a)
-        )
-        assert older_left != non_left
-        assert newer_left != non_left
+        _foreign_generation_case(ws, src_a, src_b, non_archive, ws.read_bytes(src_a))
 
 
 def test_opus_archive_foreign_generation_is_refused():
@@ -557,11 +477,7 @@ def test_opus_archive_foreign_generation_is_refused():
         _prove_family0(ws.read_bytes(src_b), what="Opus generation host b")
         ogg = _runtime_vorbis_bytes()
         non_archive = place_bytes_without_codec_suffix(ws, ogg, "opus-not-arc")
-        older_left, newer_left, non_left = _foreign_generation_case(
-            ws, src_a, src_b, non_archive, ws.read_bytes(src_a)
-        )
-        assert older_left != non_left
-        assert newer_left != non_left
+        _foreign_generation_case(ws, src_a, src_b, non_archive, ws.read_bytes(src_a))
 
 
 # ---------------------------------------------------------------------------

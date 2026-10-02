@@ -1,9 +1,8 @@
 # feature: F05
 """FP-05: otpauth provisioning URI parsing.
 
-Assertions follow Full_PRD.original.md FP-05 (L215–L245) plus shared
-defaults at L20, L23, L29–L31, L44–L45, L61–L63, L73, L85, and
-L196–L199. Failure message text, exception class names, Steam, and
+Assertions follow the Full PRD FP-05 plus the PRD's shared defaults
+(Terminology, Non-functional constraints). Failure message text, exception class names, Steam, and
 internal URI split/assembly are not pinned.
 """
 
@@ -153,7 +152,7 @@ def _hotp_kind(helper):
 
 
 # ---------------------------------------------------------------------------
-# A. FP-04 built URIs round-trip except image (L217, L221, L244)
+# A. FP-04 built URIs round-trip except image
 # ---------------------------------------------------------------------------
 
 
@@ -368,7 +367,7 @@ def test_fp04_built_uris_round_trip_except_image():
 
 
 # ---------------------------------------------------------------------------
-# B. JBSWY README URIs match direct construction (L222–L223, L244)
+# B. JBSWY README URIs match direct construction
 # ---------------------------------------------------------------------------
 
 
@@ -431,7 +430,7 @@ def test_jbswy_readme_uris_parse_to_helpers_matching_direct():
 
 
 # ---------------------------------------------------------------------------
-# C. GEZDGNBV totp SHA1 named codes and named rebuilds (L224–L225, L244)
+# C. GEZDGNBV totp SHA1 named codes and named rebuilds
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +451,7 @@ def test_gezdgnbv_totp_sha1_codes_and_named_rebuilds():
 
 
 # ---------------------------------------------------------------------------
-# D. period=60 shifts named codes; last-wins; unpublished P>60 (L224, L226)
+# D. period=60 shifts named codes; last-wins; unpublished P>60
 # ---------------------------------------------------------------------------
 
 
@@ -509,7 +508,7 @@ def test_period_60_shifts_named_codes_and_rebuild_includes_period():
 
 
 # ---------------------------------------------------------------------------
-# E. hotp GEZDGNBV named codes; counter 0/1; last-wins (L224, L227)
+# E. hotp GEZDGNBV named codes; counter 0/1; last-wins
 # ---------------------------------------------------------------------------
 
 
@@ -550,7 +549,7 @@ def test_hotp_gezdgnbv_codes_counter_zero_and_one():
 
 
 # ---------------------------------------------------------------------------
-# F. last algorithm SHA256 / SHA512; hotp symmetric (L224, L228)
+# F. last algorithm SHA256 / SHA512; hotp symmetric
 # ---------------------------------------------------------------------------
 
 
@@ -639,7 +638,7 @@ def test_last_algorithm_sha256_and_sha512_named_codes():
 
 
 # ---------------------------------------------------------------------------
-# G. last secret / digits; digits=7; issuer as-read (L224, L237, L238)
+# G. last secret / digits; digits=7; issuer as-read
 # ---------------------------------------------------------------------------
 
 
@@ -786,7 +785,7 @@ def test_last_query_occurrence_wins_for_secret_and_digits():
 
 
 # ---------------------------------------------------------------------------
-# H. literal colon separates; %3A is not a separator (L229, L244)
+# H. literal colon separates; %3A is not a separator
 # ---------------------------------------------------------------------------
 
 
@@ -880,7 +879,7 @@ def test_literal_colon_separates_label_encoded_colon_does_not():
 
 
 # ---------------------------------------------------------------------------
-# I. optional image accepted, ignored, dropped (L217, L221, L230)
+# I. optional image accepted, ignored, dropped
 # ---------------------------------------------------------------------------
 
 
@@ -917,7 +916,7 @@ def test_image_query_is_accepted_ignored_and_dropped_on_rebuild():
 
 
 # ---------------------------------------------------------------------------
-# J. six refusals return no helper; unlike a failed check (L234–L240)
+# J. six refusals return no helper; unlike a failed check
 # ---------------------------------------------------------------------------
 
 

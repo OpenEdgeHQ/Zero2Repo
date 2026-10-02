@@ -40,6 +40,7 @@ from F01_helpers import (
     occupy_copied_plugin_paths,
     published_rule_id,
     require_copy_refusal,
+    require_copied_layout,
     require_copy_success,
     require_unpublished_name_host_refusal,
     run_copy_without_network,
@@ -57,7 +58,7 @@ def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
         dest = ws.resolve(DEFAULT_COPY_DEST)
-        specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
         yield ws, dest, specifier
 
 
@@ -87,7 +88,7 @@ def test_copy_with_no_destination_creates_default_tree(isolated_ws):
 def test_default_copy_dest_is_loadable_as_generic_plugin(isolated_ws):
     ws = isolated_ws
     result = ws.copy()
-    specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+    specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
     chain = _write(ws, f"chain-{fresh_ident('f')}.js", snippet_no_array_filter_map())
     fired = lint_generic(ws, [chain], ["no-array-filter-map"], specifier)
     assert_only_rule(fired, "no-array-filter-map")
@@ -102,7 +103,7 @@ def test_default_copy_nested_effect_entry_loads_as_lint_policy_effect(isolated_w
     ws = isolated_ws
     result = ws.copy()
     dest = ws.resolve(DEFAULT_COPY_DEST)
-    specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+    specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
     effect_spec = copied_effect_specifier(ws, dest, specifier)
     generic_res = Path(specifier).resolve()
     effect_res = Path(effect_spec).resolve()
@@ -176,7 +177,7 @@ def test_copy_with_force_replaces_occupied_plugin_tree(isolated_ws):
     ws = isolated_ws
     first = ws.copy()
     dest = ws.resolve(DEFAULT_COPY_DEST)
-    first_spec = require_copy_success(first, DEFAULT_COPY_DEST, cwd=ws.path)
+    first_spec = require_copied_layout(first, DEFAULT_COPY_DEST, cwd=ws.path)
     placeholder = f"export default {fresh_ident('ph')};\n"
     occupied = occupy_copied_plugin_paths(dest, placeholder)
     first_spec_path = Path(first_spec).resolve()
@@ -187,7 +188,7 @@ def test_copy_with_force_replaces_occupied_plugin_tree(isolated_ws):
     marker = dest / f"marker-{fresh_ident('m')}.txt"
     marker.write_text(nonce, encoding="utf-8")
     replaced = ws.copy(["--force"])
-    specifier = require_copy_success(replaced, DEFAULT_COPY_DEST, cwd=ws.path)
+    specifier = require_copied_layout(replaced, DEFAULT_COPY_DEST, cwd=ws.path)
     spec_path = Path(specifier).resolve()
     assert spec_path.is_file(), spec_path
     assert spec_path != marker.resolve(), (
@@ -223,7 +224,7 @@ def test_copy_does_not_edit_lint_config_or_install_packages(isolated_ws):
     before = snapshot_files(ws.path)
     result = ws.copy([str(dest_rel)])
     dest = ws.resolve(dest_rel)
-    specifier = require_copy_success(result, dest_rel, cwd=ws.path)
+    specifier = require_copied_layout(result, dest_rel, cwd=ws.path)
     print(f"copy created specifier={specifier}", flush=True)
     after = snapshot_files(ws.path)
     assert_tree_unchanged_outside_dest(before, after, dest_rel)
@@ -238,7 +239,7 @@ def test_copy_succeeds_without_network(isolated_ws):
     dest_rel = Path("vendor") / fresh_ident("net")
     result = run_copy_without_network(ws, [str(dest_rel)])
     dest = ws.resolve(dest_rel)
-    specifier = require_copy_success(result, dest_rel, cwd=ws.path)
+    specifier = require_copied_layout(result, dest_rel, cwd=ws.path)
     assert Path(specifier).exists() or dest.is_dir()
     assert_license_and_provenance_material(dest)
 

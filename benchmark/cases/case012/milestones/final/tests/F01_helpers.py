@@ -73,46 +73,35 @@ _JS_RULES = frozenset(
     }
 )
 
-# Role classification for dest files. The PRD requires license and provenance
-# material under dest; it does not name MIT grant wording, an "as is"
-# disclaimer, "upstream", "copied files", or a commit hash as the contents
-# that make a file count. Basename families are one way a file can occupy a
-# role; body role-words are another. Neither pins this checkout's paths.
-# The word "upstream" is not a classifier: a provenance file still counts
-# without that token, via another basename family or a provenance/vendored
-# role word in the body.
-_LICENSE_BASENAME = re.compile(
-    r"^(?:license|licence|copying|copyright)(?:\.[^./]+)?$",
-    re.IGNORECASE,
-)
-_PROVENANCE_BASENAME = re.compile(
-    r"^(?:origin|provenance|notice|credits|authors|sources?)(?:\.[^./]+)?$",
-    re.IGNORECASE,
-)
-_LICENSE_BODY = re.compile(r"\b(?:licen[cs]e|copyright)\b", re.IGNORECASE)
-_PROVENANCE_BODY = re.compile(r"\b(?:provenance|vendored)\b", re.IGNORECASE)
-_PLUGIN_WRAP = re.compile(r"^([A-Za-z0-9_.:-]+)\((.+)\)$")
+# Stated copy-report forms (Interface Contract, "Copy entry outputs").
+COPY_EXIT_REFUSED = 1
+# A printed path is one whitespace-free word, optionally followed directly by
+# one of these punctuation marks (Interface Contract, "Copy entry outputs").
+_PATH_WORD_TRAILERS = ".,;:"
+# Copied layout (Interface Contract, "Naming conventions", Entries): both
+# entries sit at these paths relative to the destination directory.
+COPIED_GENERIC_REL = Path("index.ts")
+COPIED_EFFECT_REL = Path("effect") / "index.ts"
+# License and provenance files: exact basenames, at any depth under dest.
+LICENSE_BASENAME = "LICENSE"
+PROVENANCE_BASENAME = "UPSTREAM.md"
+_PLUGIN_WRAP = re.compile(r"(lint-policy|lint-policy-effect)\(([^()\s]+)\)")
 _PLUGIN_SUFFIXES = {".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"}
 _SAFETY_COMMENT = "// SAFETY: parsed before branding."
 
 
 def published_rule_id(rule: str) -> str:
-    """Normalize a host finding code to ``<plugin>/<rule>``.
+    """Read a host finding code ``<plugin>(<rule>)`` as ``<plugin>/<rule>``.
 
-    The PRD names the plugin and the rule. Hosts may render that as a slash
-    id or as ``plugin(rule)``; both are the same published pair. Do not
-    require one host's punctuation.
+    The Interface Contract states that a plugin finding's ``code`` in the
+    host's JSON report is exactly ``<plugin>(<rule>)``. Any other code (a
+    host parse failure has none) is returned unchanged, so it never reads
+    as a ``<plugin>/<rule>`` id.
     """
-    current = rule.strip()
-    matched = _PLUGIN_WRAP.match(current)
+    matched = _PLUGIN_WRAP.fullmatch(rule)
     if not matched:
-        return current
-    plugin, inner = matched.group(1), matched.group(2)
-    if plugin in {"eslint", "eslint-plugin-js"}:
-        return published_rule_id(inner)
-    if "/" in inner:
-        return inner
-    return f"{plugin}/{inner}"
+        return rule
+    return f"{matched.group(1)}/{matched.group(2)}"
 
 
 def fresh_ident(prefix: str = "id") -> str:
@@ -132,29 +121,8 @@ def next_generic_rule(rule_name: str) -> str:
     return GENERIC_RULE_NAMES[(index + 1) % len(GENERIC_RULE_NAMES)]
 
 
-def _norm_path_text(value: str) -> str:
-    return value.replace("\\", "/").rstrip("/")
-
-
-def _drop_dot_slash(form: str) -> str:
-    """Strip repeated ``./`` prefixes. Do not treat ``/`` or ``.`` as a charset."""
-    text = _norm_path_text(form)
-    while text.startswith("./"):
-        text = text[2:]
-    return "" if text == "." else text
-
-
-def _asked_dest(dest: str | Path) -> str:
-    """Dest the invocation used, as a normalized relative (or given) spelling."""
-    dest_path = Path(dest)
-    form = _norm_path_text(dest_path.as_posix())
-    if dest_path.is_absolute():
-        return form
-    return _drop_dot_slash(form)
-
-
 def _dest_on_disk(dest: str | Path, cwd: str | Path | None = None) -> Path:
-    """Locate dest from the path the suite passed, not from report spelling."""
+    """Locate dest from the path the suite passed."""
     dest_path = Path(dest)
     if dest_path.is_absolute():
         return dest_path.resolve()
@@ -163,100 +131,33 @@ def _dest_on_disk(dest: str | Path, cwd: str | Path | None = None) -> Path:
     return dest_path.resolve()
 
 
-def _strip_cwd_prefix(form: str, cwd: str | Path | None) -> str:
-    """If a cwd prefix is present, strip it; the remainder is dest identity.
-
-    A process.cwd()-resolved absolute dest and the cwd-relative dest the
-    invocation used are the same identity. ``str.lstrip('./')`` is not
-    that strip: it would drop the leading ``/`` of an absolute path and
-    then fail to match the cwd prefix.
-    """
-    text = _norm_path_text(form)
-    if cwd is None:
-        return _drop_dot_slash(text)
-    prefixes: list[str] = []
-    cwd_path = Path(cwd)
-    for raw in (
-        str(cwd_path.resolve()),
-        cwd_path.as_posix(),
-        str(cwd),
-    ):
-        prefix = _norm_path_text(raw)
-        if prefix and prefix not in prefixes:
-            prefixes.append(prefix)
-    for prefix in prefixes:
-        if text == prefix:
-            return ""
-        glued = prefix + "/"
-        if text.startswith(glued):
-            return text[len(glued):]
-    return _drop_dot_slash(text)
+def _reported_path(text: str, cwd: str | Path | None) -> Path:
+    """A path the copy report printed: absolute, or relative to the copy cwd."""
+    path = Path(text)
+    if not path.is_absolute():
+        base = Path(cwd) if cwd is not None else Path.cwd()
+        path = base / path
+    return path.resolve()
 
 
-def _dest_forms(dest: str | Path, cwd: str | Path | None = None) -> tuple[str, ...]:
-    """Spellings of dest that count as the same identity.
-
-    Cwd-relative and process.cwd()-resolved absolute paths are the same dest:
-    if a cwd prefix is present, strip it, then compare the remainder to the
-    dest the copy was asked to use. Parent-suffix remainders that are not
-    that dest (for example ``oxlint/lint-policy`` when dest is
-    ``tools/oxlint/lint-policy``) are not dest identity.
-    """
-    dest_path = Path(dest)
-    on_disk = _dest_on_disk(dest_path, cwd)
-    asked = _asked_dest(dest_path)
-    seen: list[str] = []
-
-    def add(value: str) -> None:
-        form = _norm_path_text(value)
-        if form and form not in seen:
-            seen.append(form)
-
-    add(str(on_disk))
-    add(on_disk.as_posix())
-    add(asked)
-    add(str(dest_path))
-    add(dest_path.as_posix())
-    if cwd is not None:
-        try:
-            add(on_disk.relative_to(Path(cwd).resolve()).as_posix())
-        except ValueError:
-            pass
-        remainder = _strip_cwd_prefix(on_disk.as_posix(), cwd)
-        if remainder == asked:
-            add(remainder)
-    return tuple(seen)
+def _path_word(word: str) -> str:
+    """A printed path word without one trailing stated punctuation mark."""
+    if len(word) > 1 and word[-1] in _PATH_WORD_TRAILERS:
+        return word[:-1]
+    return word
 
 
-def dest_identified_in(
-    text: str,
-    dest: str | Path,
-    cwd: str | Path | None = None,
-) -> bool:
-    """Whether *text* identifies *dest* by path identity, not path spelling.
-
-    Identity is the dest the copy was asked to use. A cwd-relative spelling
-    and a process.cwd()-resolved absolute spelling are the same dest: if a
-    cwd prefix is present, strip it, then compare the remainder to that dest.
-    """
-    asked = _asked_dest(dest)
-    haystack = text.replace("\\", "/")
-    on_disk = _dest_on_disk(dest, cwd)
-    disk_form = _norm_path_text(on_disk.as_posix())
-    if asked and asked in haystack:
-        return True
-    if disk_form and disk_form in haystack:
-        return True
-    for token in re.findall(r"[^\s\"'`]+", haystack):
-        remainder = _strip_cwd_prefix(token.rstrip(".,;:)"), cwd)
-        if not remainder:
+def _names_path(text: str, target: Path, cwd: str | Path | None) -> bool:
+    """True when some whitespace-free word of ``text`` is a path to ``target``."""
+    for word in text.split():
+        candidate = _path_word(word)
+        if not candidate:
             continue
-        if remainder == asked or remainder == disk_form:
-            return True
-        if asked and remainder.startswith(asked + "/"):
-            return True
-        if disk_form and remainder.startswith(disk_form + "/"):
-            return True
+        try:
+            if _reported_path(candidate, cwd) == target:
+                return True
+        except (OSError, ValueError):
+            continue
     return False
 
 
@@ -265,83 +166,58 @@ def reported_generic_specifier(
     dest: str | Path,
     cwd: str | Path | None = None,
 ) -> str:
-    """Extract the generic-entry configure target from a successful copy report.
+    """Read the success report on standard output.
+
+    The Interface Contract states that standard output names the
+    destination directory and the generic entry ``<dest>/index.ts``, each as
+    a whitespace-free path word (absolute or relative to the copy's working
+    directory, optionally followed by one of ``.,;:``). Returns the entry.
 
     Raises:
-        HarnessError: if stdout/stderr cannot be decoded.
-        AssertionError: if dest is unnamed or no entry-to-configure is named
-            that is more specific than the dest directory.
+        HarnessError: if stdout cannot be decoded.
+        AssertionError: if the destination or the generic entry is not named.
     """
     dest_path = _dest_on_disk(dest, cwd)
-    text = result.combined_text
-    if not dest_identified_in(text, dest, cwd):
+    stdout = result.stdout_text
+    if not _names_path(stdout, dest_path, cwd):
         raise AssertionError(
-            "copy report does not identify the destination "
-            f"{dest}; report={text!r}"
+            f"copy success stdout must name the destination {dest_path}; "
+            f"stdout={stdout!r}"
         )
-
-    haystack = text.replace("\\", "/")
-    candidates: list[Path] = []
-    for form in sorted(_dest_forms(dest, cwd), key=len, reverse=True):
-        pattern = re.compile(re.escape(form) + r"(?:/|\\)+([^\s\"'`]+)")
-        for match in pattern.finditer(haystack):
-            extra = match.group(1).rstrip(".,;:)\"'")
-            if not extra:
-                continue
-            # Tree location comes from dest the suite passed, not from the
-            # report's absolute-versus-relative spelling of that dest.
-            candidates.append(dest_path / extra)
-
-    more_specific: list[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError as exc:
-            raise HarnessError(
-                f"cannot resolve reported configure target {candidate}: {exc}"
-            ) from exc
-        try:
-            rel = resolved.relative_to(dest_path)
-        except ValueError:
-            continue
-        if resolved == dest_path or rel.as_posix() in ("", "."):
-            continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        more_specific.append(resolved)
-
-    if not more_specific:
+    entry = (dest_path / COPIED_GENERIC_REL).resolve()
+    if not _names_path(stdout, entry, cwd):
         raise AssertionError(
-            "copy report names the destination but does not name a generic-entry "
-            "configure target more specific than the dest directory; "
-            f"report={text!r}"
+            f"copy success stdout must name the generic entry {entry}; "
+            f"stdout={stdout!r}"
         )
-
-    def _depth(path: Path) -> tuple[int, str]:
-        rel = path.relative_to(dest_path)
-        return (len(rel.parts), rel.as_posix())
-
-    # Prefer the shallowest dest-relative file so a nested Effect entry
-    # named in the same report is not taken as the generic configure target.
-    files = [path for path in more_specific if path.is_file()]
-    pool = files or more_specific
-    pool.sort(key=_depth)
-    chosen = pool[0]
-    print(f"reported generic specifier={chosen}", flush=True)
-    return str(chosen)
+    print(f"reported generic specifier={entry}", flush=True)
+    return str(entry)
 
 
-def require_copy_success(
+def copied_generic_entry(dest: str | Path, cwd: str | Path | None = None) -> Path:
+    """The generic entry at its stated place: ``<dest>/index.ts``."""
+    return _dest_on_disk(dest, cwd) / COPIED_GENERIC_REL
+
+
+def copied_effect_entry(dest: str | Path, cwd: str | Path | None = None) -> Path:
+    """The Effect entry at its stated place: ``<dest>/effect/index.ts``."""
+    return _dest_on_disk(dest, cwd) / COPIED_EFFECT_REL
+
+
+def require_copied_layout(
     result: RunResult,
     dest: str | Path,
     cwd: str | Path | None = None,
 ) -> str:
-    """Assert a successful copy and return the reported generic specifier."""
+    """Assert a successful copy and return the generic entry from the layout.
+
+    Setup for tests whose subject is not the copy report: exit 0, the dest
+    directory, and the generic entry at ``<dest>/index.ts``. The report's
+    wording is not read here; the copy feature's own tests check it.
+    """
     dest_path = _dest_on_disk(dest, cwd)
     print(
-        f"copy success probe exit={result.returncode} dest={dest_path}",
+        f"copy layout probe exit={result.returncode} dest={dest_path}",
         flush=True,
     )
     if result.returncode != 0:
@@ -351,9 +227,29 @@ def require_copy_success(
         )
     if not dest_path.is_dir():
         raise AssertionError(f"copy did not create dest directory {dest_path}")
+    entry = copied_generic_entry(dest, cwd)
+    if not entry.is_file():
+        raise AssertionError(f"no generic entry at {entry} (<dest>/index.ts)")
+    return str(entry.resolve())
+
+
+def require_copy_success(
+    result: RunResult,
+    dest: str | Path,
+    cwd: str | Path | None = None,
+) -> str:
+    """Assert a successful copy, its stated report, and return the entry.
+
+    The success report must name the generic entry at its
+    stated place, ``<dest>/index.ts``.
+    """
+    entry = require_copied_layout(result, dest, cwd)
     specifier = reported_generic_specifier(result, dest, cwd)
-    assert_generic_configure_target(specifier, dest_path)
-    return specifier
+    if Path(specifier).resolve() != Path(entry):
+        raise AssertionError(
+            f"copy report names generic entry {specifier}, not {entry}"
+        )
+    return entry
 
 
 def assert_generic_configure_target(
@@ -391,22 +287,29 @@ def require_copy_refusal(
     before: Mapping[str, bytes],
     cwd: str | Path | None = None,
 ) -> None:
-    """Assert occupied-dest refusal: unsuccessful exit, dest named, bytes kept."""
+    """Assert occupied-dest refusal: exit 1, stderr names dest, bytes kept.
+
+    The Interface Contract states the refusal: exit status 1, and standard
+    error names the destination directory as a whitespace-free path word
+    (absolute or relative to the copy's working directory, optionally
+    followed by one of ``.,;:``); the rest of the wording is free.
+    """
     dest_path = _dest_on_disk(dest, cwd)
     print(
         f"copy refusal probe exit={result.returncode} dest={dest_path}",
         flush=True,
     )
-    if result.returncode == 0:
+    if result.returncode != COPY_EXIT_REFUSED:
         raise AssertionError(
-            "copy must refuse to overwrite an occupied dest without --force; "
+            "copy must refuse to overwrite an occupied dest without --force "
+            f"with exit status {COPY_EXIT_REFUSED}; "
             f"exit={result.returncode}; stdout={result.stdout_text!r}"
         )
-    text = result.combined_text
-    if not dest_identified_in(text, dest, cwd):
+    stderr = result.stderr_text
+    if not _names_path(stderr, dest_path, cwd):
         raise AssertionError(
-            "refusal must identify the destination "
-            f"{dest}; report={text!r}"
+            f"refusal stderr must name the destination {dest_path}; "
+            f"stderr={stderr!r}"
         )
     after = snapshot_files(dest_path)
     if dict(after) != dict(before):
@@ -419,7 +322,7 @@ def require_unpublished_name_host_refusal(
     result: RunResult,
     unpublished_names: Sequence[str],
 ) -> None:
-    """Assert unclassified host output is the L103 unpublished-name refusal.
+    """Assert unclassified host output is the unpublished-name host refusal.
 
     An unpublished lint-policy rule name listed with a known enabled rule is a
     host-configuration concern. The allowed unclassified carrier is a host
@@ -524,43 +427,31 @@ def assert_occupied_plugin_paths_overwritten(
         )
 
 
-def _is_license_material(rel: str, body: str) -> bool:
-    name = Path(rel).name
-    return bool(_LICENSE_BASENAME.match(name) or _LICENSE_BODY.search(body))
-
-
-def _is_provenance_material(rel: str, body: str) -> bool:
-    name = Path(rel).name
-    return bool(_PROVENANCE_BASENAME.match(name) or _PROVENANCE_BODY.search(body))
+def _named_files(dest_path: Path, basename: str) -> list[str]:
+    return [rel for rel in list_files(dest_path) if Path(rel).name == basename]
 
 
 def assert_license_and_provenance_material(dest: str | Path) -> None:
-    """Dest contains license material and provenance material as files."""
+    """Dest holds a non-empty ``LICENSE`` and a non-empty ``UPSTREAM.md``.
+
+    The Interface Contract states both basenames exactly; where under dest
+    they sit, and their wording, are free.
+    """
     dest_path = Path(dest).resolve()
-    texts: dict[str, str] = {}
-    for rel, data in snapshot_files(dest_path).items():
-        try:
-            texts[rel] = data.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-    license_files = [
-        rel for rel, body in texts.items() if _is_license_material(rel, body)
-    ]
-    provenance_files = [
-        rel for rel, body in texts.items() if _is_provenance_material(rel, body)
-    ]
-    print(
-        f"license-role files={license_files} provenance-role files={provenance_files}",
-        flush=True,
-    )
-    if not license_files:
-        raise AssertionError(
-            "dest contains no license material among its files"
-        )
-    if not provenance_files:
-        raise AssertionError(
-            "dest contains no provenance material among its files"
-        )
+    for role, basename in (
+        ("license", LICENSE_BASENAME),
+        ("provenance", PROVENANCE_BASENAME),
+    ):
+        found = _named_files(dest_path, basename)
+        print(f"{role} files named {basename}: {found}", flush=True)
+        if not found:
+            raise AssertionError(
+                f"dest contains no {role} file named {basename}"
+            )
+        if not any((dest_path / rel).read_bytes().strip() for rel in found):
+            raise AssertionError(
+                f"every {role} file named {basename} under dest is empty: {found}"
+            )
 
 
 def assert_tree_unchanged_outside_dest(
@@ -771,76 +662,40 @@ def copied_effect_specifier(
     dest: str | Path,
     generic_specifier: str | Path,
 ) -> str:
-    """Return a nested dest file, other than the generic specifier, that is
-    the Effect plugin: registered as published name lint-policy-effect, an
-    Effect rule fires when that entry is enabled.
+    """Return the Effect entry at its stated place and prove its identity.
 
-    A nested dest file the host will load at all is not enough. A nested
-    duplicate of the generic plugin, or any other loadable JavaScript
-    plugin that is not the Effect plugin, is rejected.
+    The Interface Contract states the Effect plugin entry is
+    ``<dest>/effect/index.ts``. That file must then be the Effect plugin:
+    registered as lint-policy-effect, an enabled Effect rule fires on its
+    violating construct and fails lint.
     """
     dest_path = Path(dest).resolve()
     if not dest_path.is_dir():
         raise HarnessError(f"dest is not a directory: {dest_path}")
-    ensure_host_plugin_modules(ws, generic_specifier)
-    generic_res = Path(generic_specifier).resolve()
-    probe_rel = f"effect-id-{fresh_ident('p')}.js"
-    probe = ws.write(probe_rel, snippet_manual_tag_comparison())
-    effect_rule = "no-manual-tag-comparison"
-    expected = rule_key(EFFECT_PLUGIN_NAME, effect_rule)
-    mapping = {expected: "error"}
-
-    candidates: list[Path] = []
-    for rel in list_files(dest_path):
-        if rel.endswith(".d.ts"):
-            continue
-        path = dest_path / rel
-        if path.suffix.lower() not in _PLUGIN_SUFFIXES:
-            continue
-        if path.resolve() == generic_res:
-            continue
-        candidates.append(path)
-
-    def _rank(path: Path) -> tuple[int, int, str]:
-        rel = path.relative_to(dest_path).as_posix()
-        nested = 0 if "/" in rel else 1
-        return (nested, len(rel), rel)
-
-    candidates.sort(key=_rank)
-    last_error: HarnessError | None = None
-    for candidate in candidates:
-        plugin = effect_plugin(specifier=candidate, root=ws.root)
-        try:
-            result = ws.lint([probe], plugins=[plugin], rules=mapping)
-            findings = effect_plugin_findings(result)
-        except HarnessError as exc:
-            last_error = exc
-            print(f"effect-identity miss {candidate}: {exc}", flush=True)
-            continue
-        print(
-            f"effect-identity probe {candidate} exit={result.returncode} "
-            f"findings={findings}",
-            flush=True,
+    candidate = dest_path / COPIED_EFFECT_REL
+    print(f"stated effect entry={candidate}", flush=True)
+    if not candidate.is_file():
+        raise AssertionError(
+            f"no Effect entry at {candidate} (<dest>/effect/index.ts)"
         )
-        if expected not in findings:
-            print(
-                f"effect-identity miss {candidate}: no {expected} diagnostic",
-                flush=True,
-            )
-            continue
-        if result.returncode == 0:
-            print(
-                f"effect-identity miss {candidate}: Effect rule id present "
-                "but lint succeeded",
-                flush=True,
-            )
-            continue
-        print(f"effect-identity hit {candidate}", flush=True)
-        return str(candidate.resolve())
-    raise HarnessError(
-        "no nested dest file other than the generic specifier is the "
-        f"Effect plugin ({EFFECT_PLUGIN_NAME}); last={last_error!r}"
+    ensure_host_plugin_modules(ws, generic_specifier)
+    probe = ws.write(f"effect-id-{fresh_ident('p')}.js", snippet_manual_tag_comparison())
+    expected = rule_key(EFFECT_PLUGIN_NAME, "no-manual-tag-comparison")
+    plugin = effect_plugin(specifier=candidate, root=ws.root)
+    result = ws.lint([probe], plugins=[plugin], rules={expected: "error"})
+    findings = effect_plugin_findings(result)
+    print(
+        f"effect-identity probe {candidate} exit={result.returncode} "
+        f"findings={findings}",
+        flush=True,
     )
+    if expected not in findings or result.returncode == 0:
+        raise AssertionError(
+            f"{candidate} registered as {EFFECT_PLUGIN_NAME} must report "
+            f"{expected} and fail lint; exit={result.returncode} "
+            f"findings={findings}"
+        )
+    return str(candidate.resolve())
 
 
 def lint_generic(

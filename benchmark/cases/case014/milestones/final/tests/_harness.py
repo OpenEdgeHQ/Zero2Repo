@@ -1819,7 +1819,6 @@ def _assert_compiled_library() -> ProductIdentity:
     :class:`FileNotFoundError` before that assertion.
     """
     ident = product_identity()
-    # TEST-FIX(F00): upstream Makefile:441 shows make pylib writes one shared object whose stem equals the Python package directory
     assert ident is not None, "python package directory was not found"
     assert ident.library is not None and ident.library.is_file(), (
         "shared library is missing after make pylib"
@@ -1872,7 +1871,6 @@ def test_invoke_links_public_header_and_returns_classified_result():
         flush=True,
     )
     assert isinstance(result, RunResult)
-    # TEST-FIX(F00): upstream src/geodetic_toolbox.c:120 shows zero roll, pitch, and yaw is the identity quaternion
     assert result.returncode == 0
     text = result.stdout_text.strip()
     assert text.startswith("harness-link "), text
@@ -1988,7 +1986,6 @@ def test_run_python_child_imports_package():
         f"stderr={result.stderr!r}",
         flush=True,
     )
-    # TEST-FIX(F00): upstream _core.py:54 shows importing the package loads the shared object from that package directory
     assert result.returncode == 0, result.stderr_text
     lines = result.stdout_text.strip().splitlines()
     assert len(lines) >= 4, f"child stdout missing name/cwd/file/load: {lines!r}"
@@ -2016,7 +2013,6 @@ def test_c_replay_runs_dataset_of_csv_and_config():
         exe = c_replay_bin()
     except FileNotFoundError:
         exe = None
-    # TEST-FIX(F00): upstream Makefile:144 shows make replay writes build/replay
     assert exe is not None and exe.is_file() and os.access(exe, os.X_OK)
     from F02_helpers import runtime_site
     from F10_helpers import write_replay_dataset
@@ -2026,7 +2022,6 @@ def test_c_replay_runs_dataset_of_csv_and_config():
         dataset = write_replay_dataset(
             ws, lat_deg=lat, lon_deg=lon, h_m=h, relpath="f00-static-pad"
         )
-        # TEST-FIX(F00): upstream tools/replay.c:25 shows replay reads a dataset directory or its config.yaml
         assert (dataset / "config.yaml").is_file()
         csv_files = sorted(dataset.glob("*.csv"))
         assert {c.name for c in csv_files} >= {"imu.csv", "ref.csv", "gnss.csv"}, csv_files
@@ -2083,7 +2078,6 @@ def test_workspace_root_fixture_is_built_repository(workspace_root):
     print(f"public_header={header} is_file={header.is_file()}", flush=True)
     assert header.is_file()
     ident = product_identity(root=workspace_root)
-    # TEST-FIX(F00): upstream Makefile:438 shows make pylib writes the shared object inside the Python package directory
     assert ident is not None
     assert ident.library is not None and ident.library.is_file()
     assert ident.library_stem == ident.package_name

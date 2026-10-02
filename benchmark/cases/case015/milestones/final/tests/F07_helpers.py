@@ -8,9 +8,9 @@ the product. These helpers are not a substitute public entry.
 
 from __future__ import annotations
 
+import re
 import secrets
 from pathlib import Path
-from typing import Sequence
 
 from F01_helpers import (
     BATCH_ARCHIVE_SUFFIX,
@@ -22,7 +22,6 @@ from F01_helpers import (
     unique_name,
 )
 from F02_helpers import replace_vorbis_comment
-from F03_helpers import shared_remainder_lacking_in, strip_paths_and_sizes
 from F04_helpers import archive_bytes, expand_to
 from _harness import HarnessError, RunResult, Workspace, stored_copy
 
@@ -118,122 +117,48 @@ def stderr_path_index(text: str, path: str) -> int:
     return min(found)
 
 
-def failure_leftover(text: str, paths: Sequence[str], sizes: Sequence[int]) -> str:
-    """Strip paths and sizes via the sealed helper. Empty leftover is a real value."""
+# Interface Contract, batch summary: one stderr line ending in
+# ``<failed> of <attempted> failed`` when at least one member did not succeed.
+_BATCH_SUMMARY = re.compile(r"(?<![0-9])(\d+) of (\d+) failed\s*$")
+
+
+def batch_summaries(text: str) -> list[tuple[int, int]]:
+    """Every ``(failed, attempted)`` pair of the stated summary form in *text*."""
     if not isinstance(text, str):
-        raise HarnessError(f"failure_leftover expected str, got {type(text)!r}")
-    return strip_paths_and_sizes(text, paths, sizes)
+        raise HarnessError(f"batch_summaries expected str, got {type(text)!r}")
+    found: list[tuple[int, int]] = []
+    for line in text.splitlines():
+        m = _BATCH_SUMMARY.search(line)
+        if m:
+            found.append((int(m.group(1)), int(m.group(2))))
+    return found
 
 
-def existing_sizes(ws: Workspace, rels: Sequence[str]) -> list[int]:
-    """Sizes of regular files that exist. Absence is skipped; other I/O raises."""
-    sizes: list[int] = []
-    for rel in rels:
-        if not isinstance(rel, str):
-            raise HarnessError(f"existing_sizes expected str path, got {type(rel)!r}")
-        found = ws.read_bytes_if_present(rel)
-        if found is not None:
-            sizes.append(len(found))
-    return sizes
-
-
-def arm_leftover(ws: Workspace, result: RunResult, paths: Sequence[str]) -> str:
-    """Leftover stderr after stripping *paths* and sizes of those that exist."""
-    sizes = existing_sizes(ws, paths)
-    leftover = failure_leftover(result.stderr_text, paths, sizes)
-    print(
-        f"[F07] leftover paths={list(paths)!r} sizes={sizes!r} leftover={leftover!r}",
-        flush=True,
+def require_batch_summary(
+    result: RunResult, failed: int, attempted: int, *, what: str
+) -> None:
+    """stderr carries exactly one summary line naming *failed* of *attempted*."""
+    if not isinstance(result, RunResult):
+        raise HarnessError(f"expected RunResult, got {type(result)!r}")
+    found = batch_summaries(result.stderr_text)
+    print(f"[F07] {what} batch summary={found!r}", flush=True)
+    assert found == [(failed, attempted)], (
+        f"{what}: when at least one batch member does not succeed, standard "
+        "error carries one summary line `<failed> of <attempted> failed` with "
+        f"failed={failed} attempted={attempted}; found={found!r} "
+        f"stderr={result.stderr_text!r}"
     )
-    return leftover
 
 
-def batch_member_name_paths(*members: str) -> list[str]:
-    """Caller paths plus derived compress and expand destinations (PRD names)."""
-    paths: list[str] = []
-    for rel in members:
-        if not isinstance(rel, str):
-            raise HarnessError(
-                f"batch_member_name_paths expected str, got {type(rel)!r}"
-            )
-        paths.append(rel)
-        paths.append(derived_batch_archive(rel))
-        paths.append(derived_batch_expand(rel))
-    return paths
-
-
-def mixed_failure_extra_remainder(
-    ws: Workspace,
-    mixed: RunResult,
-    success: RunResult,
-    paths: Sequence[str],
-) -> str:
-    """Mixed-stderr lines absent from same-shape all-success, after path/size strip.
-
-    This is the dedicated mixed-failure summary field plus per-file diagnostics
-    that all-success does not write. The two count payloads are isolated by
-    shared_remainder_lacking_in across mixed arms, not by leftover of the whole
-    stream or by mixed-to-mixed full-text. Empty extra is a real observation.
-    Type errors raise.
-    """
-    if not isinstance(mixed, RunResult):
-        raise HarnessError(
-            f"mixed_failure_extra_remainder expected RunResult mixed, "
-            f"got {type(mixed)!r}"
-        )
-    if not isinstance(success, RunResult):
-        raise HarnessError(
-            f"mixed_failure_extra_remainder expected RunResult success, "
-            f"got {type(success)!r}"
-        )
-    sizes = existing_sizes(ws, paths)
-    mix_left = strip_paths_and_sizes(mixed.stderr_text, paths, sizes)
-    ok_left = strip_paths_and_sizes(success.stderr_text, paths, sizes)
-    ok_lines = {ln.strip() for ln in ok_left.splitlines() if ln.strip()}
-    extra_lines = [
-        ln.strip()
-        for ln in mix_left.splitlines()
-        if ln.strip() and ln.strip() not in ok_lines
-    ]
-    extra = "\n".join(extra_lines)
-    print(
-        f"[F07] mixed extra paths={list(paths)!r} extra={extra!r}",
-        flush=True,
+def require_no_batch_summary(result: RunResult, *, what: str) -> None:
+    """An all-success batch writes no summary line."""
+    if not isinstance(result, RunResult):
+        raise HarnessError(f"expected RunResult, got {type(result)!r}")
+    found = batch_summaries(result.stderr_text)
+    assert not found, (
+        f"{what}: a batch in which every member succeeds writes no failure "
+        f"summary; found={found!r} stderr={result.stderr_text!r}"
     )
-    return extra
-
-
-def dedicated_mixed_failure_count_payloads(
-    extra_1_of_2: str,
-    extra_2_of_2: str,
-    extra_1_of_3: str,
-) -> tuple[frozenset[str], frozenset[str]]:
-    """Failed-count and attempted-count halves of the mixed-failure summary field.
-
-    Failed-count half: tokens two 1-fail extras share that the 2-fail extra
-    lacks. Attempted-count half: tokens two N=2 extras share that the N=3
-    extra lacks. A numeric token is a valid payload. Empty means that half
-    was silent or answered only by whole-stream leftover, leftover integers,
-    mixed-versus-all-success full-text, or mixed-to-mixed full-text.
-    """
-    for name, value in (
-        ("extra_1_of_2", extra_1_of_2),
-        ("extra_2_of_2", extra_2_of_2),
-        ("extra_1_of_3", extra_1_of_3),
-    ):
-        if not isinstance(value, str):
-            raise HarnessError(
-                f"dedicated_mixed_failure_count_payloads expected str "
-                f"{name}, got {type(value)!r}"
-            )
-    failed = shared_remainder_lacking_in(extra_1_of_2, extra_1_of_3, extra_2_of_2)
-    attempted = shared_remainder_lacking_in(extra_1_of_2, extra_2_of_2, extra_1_of_3)
-    print(
-        f"[F07] dedicated failed-count={sorted(failed)!r} "
-        f"attempted-count={sorted(attempted)!r}",
-        flush=True,
-    )
-    return failed, attempted
 
 
 def scramble_or_remove(ws: Workspace, rel: str, saved: bytes) -> None:

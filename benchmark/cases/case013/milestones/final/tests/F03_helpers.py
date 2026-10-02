@@ -84,12 +84,10 @@ class McpShowOutcome:
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _run_product_build(root: Path) -> None:
@@ -164,7 +162,7 @@ def resolve_show_binary() -> Path:
     pass on an empty workspace.
     """
     binary = _workdir_membundle()
-    # TEST-FIX(F03): upstream _harness.py:620 shows FileNotFoundError before show when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F03): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -173,7 +171,7 @@ def _raise_if_show_binary_missing(binary: Path, exc: FileNotFoundError) -> NoRet
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F03): upstream _harness.py:620 shows FileNotFoundError before show when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F03): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -316,74 +314,65 @@ def _normalized_remainder(text: str) -> str:
 
 def require_usage_failure(
     result: RunResult,
-    success_report: str,
-    nf_class_remainder: str,
+    success_report: str = "",
+    nf_class_remainder: str = "",
     *,
     path_tokens: Sequence[str] = (),
     ghost_identities: Sequence[str] = (),
 ) -> str:
-    """Missing-argument carrier: non-success, non-empty, not the not-found class."""
+    """Usage-failure form (Output forms, Failure classes): status 1 and usage
+    text containing the literal ``Usage:`` on either stream; not the
+    not-found form. Positional extras are kept for call compatibility."""
     report = combined_report(result)
     print(
         f"[F03] usage-failure exit={result.returncode} report={report!r}",
         flush=True,
     )
-    assert result.returncode != 0, (
-        f"show with a missing identity argument succeeded; report={report!r}"
+    assert result.returncode == 1, (
+        "show with a missing identity argument did not exit with status 1 "
+        f"(exit {result.returncode}); report={report!r}"
     )
-    assert report, (
-        "show with a missing identity argument produced empty combined streams"
+    assert "Usage:" in report, (
+        "show with a missing identity argument printed no usage text "
+        f"containing 'Usage:'; report={report!r}"
     )
     for ghost in ghost_identities:
         assert ghost not in report, (
             f"missing-argument report names live ghost identity {ghost!r}: "
             f"{report!r}"
         )
-    usage_rem = report_remainder_after_stripping_paths(
-        strip_generated_covariates(report), path_tokens
-    )
-    success_rem = report_remainder_after_stripping_paths(
-        strip_generated_covariates(success_report), path_tokens
-    )
-    print(
-        f"[F03] usage remainder={usage_rem!r} "
-        f"not-found class={nf_class_remainder!r}",
-        flush=True,
-    )
-    assert _normalized_remainder(usage_rem) != _normalized_remainder(
-        success_rem
+    assert not any(
+        line.startswith("Concept '") and " not found" in line
+        for line in _stderr_lines(result)
     ), (
-        "missing-argument report is not distinguishable from a successful "
-        f"show after stripping paths; remainder={usage_rem!r}"
+        "missing-argument report is the not-found form; "
+        f"stderr={result.stderr_text!r}"
     )
-    assert _normalized_remainder(usage_rem) != _normalized_remainder(
-        nf_class_remainder
-    ), (
-        "missing-argument report is the not-found class remainder; "
-        f"remainder={usage_rem!r}"
-    )
-    class_norm = _normalized_remainder(nf_class_remainder)
-    for token in usage_rem.split():
-        if not token or token in nf_class_remainder:
-            continue
-        stripped = usage_rem.replace(token, "", 1)
-        if _normalized_remainder(stripped) == class_norm:
-            raise AssertionError(
-                "missing-argument report is the not-found class remainder "
-                f"plus one extra token {token!r}; remainder={usage_rem!r}"
-            )
     return report
 
 
+def _stderr_lines(result: RunResult) -> list[str]:
+    return result.stderr_text.splitlines()
+
+
 def require_not_found(result: RunResult, identity: str) -> str:
-    """Not-found carrier: non-success and the report identifies *identity*."""
+    """Not-found form (Output forms, Failure classes): status 1 and a
+    standard-error line that begins ``Concept '<identity>' not found``."""
     report = require_show_failure(result)
-    assert report, (
-        f"not-found show of {identity!r} produced empty combined streams"
+    prefix = f"Concept '{identity}' not found"
+    lines = _stderr_lines(result)
+    print(
+        f"[F03] not-found exit={result.returncode} want prefix={prefix!r} "
+        f"stderr_lines={lines!r}",
+        flush=True,
     )
-    assert identity in report, (
-        f"not-found report does not identify identity {identity!r}: "
-        f"{report!r}"
+    assert result.returncode == 1, (
+        f"not-found show of {identity!r} did not exit with status 1 "
+        f"(exit {result.returncode}); report={report!r}"
+    )
+    assert any(line.startswith(prefix) for line in lines), (
+        f"not-found show has no standard-error line beginning {prefix!r}; "
+        f"stderr={result.stderr_text!r}"
     )
     return report
 
@@ -394,21 +383,31 @@ def require_load_error(
     path_tokens: Sequence[str],
     identity: str,
 ) -> str:
-    """Load-error carrier: non-success and remainder differs from not-found."""
+    """Load-failure form (Output forms, Failure classes): status 2 and a
+    standard-error line that begins ``Error loading bundle: ``.
+
+    ``not_found_report`` and ``path_tokens`` are kept for call compatibility;
+    the class is read from the stated form, not from a stripped remainder.
+    """
     report = require_show_failure(result)
-    assert report, (
-        f"load-error show of {identity!r} produced empty combined streams"
-    )
-    load_rem = not_found_class_remainder(report, identity, path_tokens)
-    nf_rem = not_found_class_remainder(not_found_report, identity, path_tokens)
+    lines = _stderr_lines(result)
     print(
-        f"[F03] load remainder={load_rem!r} not-found remainder={nf_rem!r}",
+        f"[F03] load-error exit={result.returncode} stderr_lines={lines!r}",
         flush=True,
     )
-    assert load_rem != nf_rem, (
-        "load-error report is not distinguishable from not-found after "
-        f"stripping paths, identity {identity!r}, and generated covariates; "
-        f"remainder={load_rem!r}"
+    assert result.returncode == 2, (
+        f"load-error show of {identity!r} did not exit with status 2 "
+        f"(exit {result.returncode}); report={report!r}"
+    )
+    assert any(line.startswith("Error loading bundle: ") for line in lines), (
+        "load-error show has no standard-error line beginning "
+        f"'Error loading bundle: '; stderr={result.stderr_text!r}"
+    )
+    assert not any(
+        line.startswith(f"Concept '{identity}' not found") for line in lines
+    ), (
+        f"load-error show of {identity!r} also reports the not-found form; "
+        f"stderr={result.stderr_text!r}"
     )
     return report
 
@@ -561,39 +560,136 @@ def body_value_candidates(body: str) -> frozenset[str]:
     return frozenset({body, stripped, stripped + "\n"})
 
 
+def show_record_field(record: Any, key: str) -> Any:
+    """Read one stated key of the concept record (``show --json`` / ``membundle_show``)."""
+    if not isinstance(record, Mapping):
+        raise AssertionError(
+            f"concept record is not a JSON object: {type(record).__name__} {record!r}"
+        )
+    if key not in record:
+        raise AssertionError(
+            f"concept record has no {key!r} key; keys={sorted(record)!r}"
+        )
+    return record[key]
+
+
 def require_record_has_identity_type_body(
     record: Any,
     identity: str,
     concept_type: str,
     body: str,
 ) -> None:
-    """Identity, type, and post-frontmatter body each appear as exact values."""
-    values = record_string_values(record)
-    body_ok = bool(body_value_candidates(body) & values)
+    """Concept record keys ``id``, ``type``, ``body`` (Output forms: show --json).
+
+    ``body`` is compared with leading and trailing whitespace removed, which
+    the form declares unscored.
+    """
+    rid = show_record_field(record, "id")
+    rtype = show_record_field(record, "type")
+    rbody = show_record_field(record, "body")
     print(
-        f"[F03] record values include identity={identity in values} "
-        f"type={concept_type in values} body={body_ok}",
+        f"[F03] record id={rid!r} type={rtype!r} body={rbody!r}",
         flush=True,
     )
-    if identity not in values:
+    assert rid == identity, (
+        f"concept record id is {rid!r}, wanted the resolved identity {identity!r}"
+    )
+    assert rtype == concept_type, (
+        f"concept record type is {rtype!r}, wanted {concept_type!r}"
+    )
+    assert isinstance(rbody, str) and rbody.strip() == body.strip(), (
+        "concept record body is not the post-frontmatter body; "
+        f"wanted={body!r} got={rbody!r}"
+    )
+
+
+@dataclass(frozen=True)
+class HumanShow:
+    """Human ``show`` output read by the stated form (Output forms: show (human)).
+
+    ``fields`` maps each labeled line's label (``ID``, ``Type``, ``Title``,
+    ``Description``, ``Tags``, ``Generated``, ``Inbound``, ``Outbound``) to
+    its value; ``body`` is the text after the ``--- Body ---`` line.
+    ``report`` is stdout+stderr, kept for token-absence checks.
+    """
+
+    fields: dict[str, str]
+    body: str
+    report: str
+
+    def value(self, label: str) -> str:
+        if label not in self.fields:
+            raise AssertionError(
+                f"human show has no {label}: line; fields={self.fields!r}"
+            )
+        return self.fields[label]
+
+    def id_list(self, label: str) -> list[str]:
+        """``Inbound``/``Outbound`` identities (``, ``-joined); [] when the line is absent."""
+        if label not in self.fields:
+            return []
+        return self.fields[label].split(", ")
+
+
+_HUMAN_LABELS = (
+    "ID",
+    "Type",
+    "Title",
+    "Description",
+    "Tags",
+    "Generated",
+    "Inbound",
+    "Outbound",
+)
+_HUMAN_REQUIRED = ("ID", "Type", "Title", "Description")
+_HUMAN_LINE = re.compile(r"^(" + "|".join(_HUMAN_LABELS) + r"): +(.*)$")
+_BODY_MARKER = "--- Body ---"
+
+
+def parse_human_show(result: RunResult) -> HumanShow:
+    """Parse human ``show`` stdout: labeled lines in the stated order, an
+    empty line, ``--- Body ---``, then the stripped body."""
+    stdout = result.stdout_text
+    lines = stdout.split("\n")
+    if _BODY_MARKER not in lines:
         raise AssertionError(
-            f"structured record has no exact identity value {identity!r}; "
-            f"values={sorted(values)!r}"
+            f"human show has no {_BODY_MARKER!r} line: {stdout!r}"
         )
-    if f"{identity}.md" in values and identity not in values:
-        raise AssertionError(
-            f"structured identity value is {identity}.md, not the stripped identity"
+    marker = lines.index(_BODY_MARKER)
+    assert marker >= 1 and lines[marker - 1] == "", (
+        f"human show has no empty line before {_BODY_MARKER!r}: {stdout!r}"
+    )
+    fields: dict[str, str] = {}
+    last_rank = -1
+    for line in lines[: marker - 1]:
+        match = _HUMAN_LINE.match(line)
+        assert match is not None, (
+            f"human show line before the body is not a stated labeled line: "
+            f"{line!r}; stdout={stdout!r}"
         )
-    if concept_type not in values:
-        raise AssertionError(
-            f"structured record has no exact type value {concept_type!r}; "
-            f"values={sorted(values)!r}"
+        label, value = match.group(1), match.group(2)
+        rank = _HUMAN_LABELS.index(label)
+        assert rank > last_rank, (
+            f"human show label {label!r} is out of the stated order or "
+            f"repeated; stdout={stdout!r}"
         )
-    if not body_ok:
-        raise AssertionError(
-            "structured record has no exact post-frontmatter body value; "
-            f"wanted={body!r} values={sorted(values)!r}"
+        last_rank = rank
+        fields[label] = value
+    for label in _HUMAN_REQUIRED:
+        assert label in fields, (
+            f"human show has no {label}: line; stdout={stdout!r}"
         )
+    body = "\n".join(lines[marker + 1 :])
+    if body.endswith("\n"):
+        body = body[: -1]
+    print(f"[F03] human fields={fields!r} body={body!r}", flush=True)
+    return HumanShow(fields=fields, body=body, report=combined_report(result))
+
+
+def require_human_show(result: RunResult) -> HumanShow:
+    """Human success: status 0, then the stated human form on stdout."""
+    require_show_success(result)
+    return parse_human_show(result)
 
 
 def human_identity_after_removing_body(report: str, body: str) -> str:
@@ -680,7 +776,7 @@ def snapshot_tree(directory: str | Path) -> dict[str, bytes]:
 
 
 def assert_human_presents(
-    report: str,
+    shown: HumanShow,
     *,
     identity: str,
     concept_type: str,
@@ -688,33 +784,36 @@ def assert_human_presents(
     description: str,
     body_token: str,
 ) -> None:
-    """Human combined output contains the named field values (not labels)."""
+    """Human show labeled lines carry the field values; the body carries the token."""
     print(
         f"[F03] human presents identity={identity!r} type={concept_type!r} "
         f"title={title!r} desc={description!r} body_token={body_token!r}",
         flush=True,
     )
-    assert identity in report, (
-        f"human show does not present identity {identity!r}: {report!r}"
+    assert shown.value("ID") == identity, (
+        f"human show ID: is {shown.value('ID')!r}, wanted {identity!r}"
     )
-    assert concept_type in report, (
-        f"human show does not present type {concept_type!r}: {report!r}"
+    assert shown.value("Type") == concept_type, (
+        f"human show Type: is {shown.value('Type')!r}, wanted {concept_type!r}"
     )
-    assert title in report, (
-        f"human show does not present title {title!r}: {report!r}"
+    assert shown.value("Title") == title, (
+        f"human show Title: is {shown.value('Title')!r}, wanted {title!r}"
     )
-    assert description in report, (
-        f"human show does not present description {description!r}: {report!r}"
+    assert shown.value("Description") == description, (
+        f"human show Description: is {shown.value('Description')!r}, "
+        f"wanted {description!r}"
     )
-    assert body_token in report, (
-        f"human show does not present body token {body_token!r}: {report!r}"
+    assert body_token in shown.body, (
+        f"human show body does not carry body token {body_token!r}: "
+        f"{shown.body!r}"
     )
 
 
-def unselected_token_absent(report: str, token: str) -> None:
-    """The unselected decoy's unique token is absent from the show."""
-    assert token not in report, (
-        f"show presented unselected decoy token {token!r}: {report!r}"
+def unselected_token_absent(report: Any, token: str) -> None:
+    """The unselected decoy's unique token is absent from the whole output."""
+    text = report.report if isinstance(report, HumanShow) else report
+    assert token not in text, (
+        f"show presented unselected decoy token {token!r}: {text!r}"
     )
 
 
@@ -743,7 +842,7 @@ def mcp_is_protocol_error(reply: Mapping[str, Any]) -> bool:
 
 
 def mcp_is_tool_error(reply: Mapping[str, Any]) -> bool:
-    """True when the reply is an MCP tool-error result (L265)."""
+    """True when the reply is an MCP tool-error result."""
     result = reply.get("result")
     if not isinstance(result, Mapping):
         return False
@@ -751,7 +850,7 @@ def mcp_is_tool_error(reply: Mapping[str, Any]) -> bool:
 
 
 def mcp_is_invalid_params(reply: Mapping[str, Any]) -> bool:
-    """True when the reply is JSON-RPC invalid-params (L269)."""
+    """True when the reply is JSON-RPC invalid-params."""
     if not mcp_is_protocol_error(reply):
         return False
     error = reply.get("error")
@@ -769,33 +868,73 @@ def mcp_is_invalid_params(reply: Mapping[str, Any]) -> bool:
     return int(code) == -32602
 
 
-def require_mcp_tool_level_failure(outcome: McpShowOutcome) -> str:
-    """Invalid-identity carrier: tool-level failure, not a protocol error."""
-    if mcp_is_protocol_error(outcome.reply):
-        raise AssertionError(
-            "membundle_show rejected the identity as a JSON-RPC protocol error; "
-            "L265 requires tool-level failures as tool errors, not protocol "
-            f"errors; reply={outcome.reply!r}"
-        )
-    assert mcp_is_tool_error(outcome.reply), (
-        "membundle_show of an invalid identity is not a tool-level failure; a "
-        "successful tools/call (including an empty or differently shaped "
-        f"result) is not a non-success inspection; reply={outcome.reply!r}"
+def mcp_first_text(reply: Mapping[str, Any]) -> str:
+    """Text of the first content item of a tools/call result."""
+    result = reply.get("result")
+    assert isinstance(result, Mapping), (
+        f"tools/call reply has no result object: {reply!r}"
     )
-    return outcome.report_text
+    content = result.get("content")
+    assert isinstance(content, list) and content, (
+        f"tools/call result has no content items: {reply!r}"
+    )
+    first = content[0]
+    assert isinstance(first, Mapping) and isinstance(first.get("text"), str), (
+        f"first content item has no text: {reply!r}"
+    )
+    return first["text"]
+
+
+def require_mcp_tool_error_prefix(reply: Mapping[str, Any], prefix: str) -> str:
+    """Tool-level failure: ``isError`` true and first content text begins *prefix*."""
+    assert not mcp_is_protocol_error(reply), (
+        "membundle_show failed as a JSON-RPC protocol error instead of a "
+        f"tool-level failure; reply={reply!r}"
+    )
+    assert mcp_is_tool_error(reply), (
+        f"membundle_show reply is not a tool-level failure (isError true); "
+        f"reply={reply!r}"
+    )
+    text = mcp_first_text(reply)
+    print(f"[F03] tool error text={text!r} want prefix={prefix!r}", flush=True)
+    assert text.startswith(prefix), (
+        f"tool-level failure text does not begin {prefix!r}: {text!r}"
+    )
+    return text
+
+
+def require_mcp_tool_level_failure(outcome: McpShowOutcome) -> str:
+    """Rejected identity: tool-level failure beginning ``Invalid concept_id: ``."""
+    return require_mcp_tool_error_prefix(outcome.reply, "Invalid concept_id: ")
 
 
 def require_mcp_required_identity_non_success(outcome: McpShowOutcome) -> str:
-    """Missing concept_id: tool error or JSON-RPC invalid-params (L128, L269)."""
-    tool_error = mcp_is_tool_error(outcome.reply)
-    invalid_params = mcp_is_invalid_params(outcome.reply)
-    assert tool_error or invalid_params, (
-        "membundle_show without a concept identity must be a tool error or the "
-        "JSON-RPC invalid-params used for unreadable parameters; a "
-        "successful tools/call (including an empty result) is not a "
-        f"non-success inspection; reply={outcome.reply!r}"
+    """Missing concept_id: tool-level failure beginning ``Invalid concept_id: ``
+    (draft Output forms), or JSON-RPC invalid-params."""
+    if mcp_is_protocol_error(outcome.reply):
+        assert mcp_is_invalid_params(outcome.reply), (
+            "membundle_show without concept_id is a JSON-RPC error other than "
+            f"invalid-params; reply={outcome.reply!r}"
+        )
+        return outcome.report_text
+    return require_mcp_tool_error_prefix(outcome.reply, "Invalid concept_id: ")
+
+
+def mcp_show_record(outcome: McpShowOutcome) -> Any:
+    """Success: not an error; the first content text is one JSON object."""
+    assert not mcp_is_protocol_error(outcome.reply), (
+        f"membundle_show returned a protocol error instead of a concept record: "
+        f"{outcome.reply!r}"
     )
-    return outcome.report_text
+    assert not mcp_is_tool_error(outcome.reply), (
+        f"membundle_show marked a tool error on a real concept: "
+        f"{outcome.report_text!r}"
+    )
+    record = parse_json(mcp_first_text(outcome.reply), what="membundle_show text")
+    assert isinstance(record, Mapping), (
+        f"membundle_show text is not one JSON object: {record!r}"
+    )
+    return record
 
 
 def _tool_content_texts(result: Any) -> list[str]:
@@ -903,39 +1042,27 @@ def require_mcp_success_record(
     concept_type: str,
     body: str,
 ) -> Any:
-    """MCP success: a concept record with identity, type, and body values."""
-    if mcp_is_protocol_error(outcome.reply):
-        raise AssertionError(
-            f"membundle_show returned a protocol error instead of a concept record: "
-            f"{outcome.reply!r}"
-        )
-    if mcp_is_tool_error(outcome.reply):
-        raise AssertionError(
-            f"membundle_show marked a tool error on a real concept: "
-            f"{outcome.report_text!r}"
-        )
-    require_record_has_identity_type_body(
-        outcome.payload, identity, concept_type, body
-    )
-    return outcome.payload
+    """MCP success: the concept record with ``id``, ``type``, ``body``."""
+    record = mcp_show_record(outcome)
+    require_record_has_identity_type_body(record, identity, concept_type, body)
+    return record
 
 
 def require_mcp_not_found(outcome: McpShowOutcome, identity: str) -> str:
-    """MCP not-found: tool-error channel plus the missing identity."""
-    if mcp_is_protocol_error(outcome.reply):
-        raise AssertionError(
-            "membundle_show not-found used a JSON-RPC protocol error instead of "
-            f"the tool-error channel: {outcome.reply!r}"
-        )
-    assert mcp_is_tool_error(outcome.reply), (
-        "membundle_show not-found is not marked as a tool error (L265); "
-        f"reply={outcome.reply!r}"
+    """MCP not-found: ``isError`` true, text begins ``Concept '<identity>' not found``."""
+    return require_mcp_tool_error_prefix(
+        outcome.reply, f"Concept '{identity}' not found"
     )
-    assert identity in outcome.report_text, (
-        f"membundle_show not-found does not identify {identity!r}: "
-        f"{outcome.report_text!r}"
+
+
+def _record_matches(record: Any, identity: str, concept_type: str, body: str) -> bool:
+    return (
+        isinstance(record, Mapping)
+        and record.get("id") == identity
+        and record.get("type") == concept_type
+        and isinstance(record.get("body"), str)
+        and record["body"].strip() == body.strip()
     )
-    return outcome.report_text
 
 
 def structured_stdout_is_success_record(
@@ -944,19 +1071,14 @@ def structured_stdout_is_success_record(
     concept_type: str,
     body: str,
 ) -> bool:
-    """True when stdout parses as a walkable identity+type+body record."""
+    """True when stdout is the concept record of *identity* (stated keys)."""
     if not result.stdout.strip():
         return False
     try:
         record = json_stdout(result)
-        values = record_string_values(record)
     except HarnessError:
         return False
-    return (
-        identity in values
-        and concept_type in values
-        and bool(body_value_candidates(body) & values)
-    )
+    return _record_matches(record, identity, concept_type, body)
 
 
 def mcp_is_success_record(
@@ -965,18 +1087,14 @@ def mcp_is_success_record(
     concept_type: str,
     body: str,
 ) -> bool:
-    """True when the reply walks as identity+type+body without a tool error."""
+    """True when the reply is a non-error result whose text is that concept record."""
     if mcp_is_protocol_error(outcome.reply) or mcp_is_tool_error(outcome.reply):
         return False
     try:
-        values = record_string_values(outcome.payload)
-    except HarnessError:
+        record = parse_json(mcp_first_text(outcome.reply), what="membundle_show text")
+    except (HarnessError, AssertionError):
         return False
-    return (
-        identity in values
-        and concept_type in values
-        and bool(body_value_candidates(body) & values)
-    )
+    return _record_matches(record, identity, concept_type, body)
 
 
 def reject_identity_on_all_show_modes(
@@ -1008,24 +1126,17 @@ def require_not_successful_inspection(
     forbidden_body: str | None = None,
     forbidden_file_bytes: bytes | None = None,
 ) -> str:
-    """Non-success, and the aimed file is not delivered as a successful show."""
+    """Non-success, and the aimed file's content is not delivered on stdout."""
     report = require_show_failure(result)
     if forbidden_file_bytes is not None:
         assert result.stdout != forbidden_file_bytes, (
             "rejected identity still emitted the aimed file bytes on stdout"
         )
-    if forbidden_body and result.stdout.strip():
-        try:
-            record = json_stdout(result)
-            values = record_string_values(record)
-        except HarnessError:
-            record = None
-            values = frozenset()
-        if record is not None:
-            assert forbidden_body not in values, (
-                "rejected identity produced a structured concept record "
-                f"containing {forbidden_body!r}; stdout={result.stdout!r}"
-            )
+    if forbidden_body:
+        assert forbidden_body.encode("utf-8") not in result.stdout, (
+            "rejected identity delivered the aimed concept's body token "
+            f"{forbidden_body!r} on stdout; stdout={result.stdout!r}"
+        )
     return report
 
 

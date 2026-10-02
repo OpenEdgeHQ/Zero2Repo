@@ -198,102 +198,28 @@ def feed_empty(conn: Any) -> None:
     print("feed_empty ok", flush=True)
 
 
-def _strip_payload_text(text: str, payload: bytes) -> str:
-    cleaned = text
-    if payload:
-        try:
-            letters = payload.decode("ascii")
-        except UnicodeDecodeError:
-            letters = ""
-        if letters:
-            cleaned = cleaned.replace(letters, "")
-        cleaned = cleaned.replace(repr(payload), "")
-        cleaned = cleaned.replace(str(payload), "")
-        cleaned = cleaned.replace(payload.hex(), "")
-    return cleaned
+def short_body_quantities(exc: BaseException, *, strip: bytes = b"") -> frozenset[int]:
+    """Whole decimal numbers in the short-body error message.
 
-
-def short_body_quantities(exc: BaseException, *, strip: bytes) -> frozenset[int]:
-    """Collect integers from a short-body failure after stripping *strip*.
-
-    Probe failure raises. An empty set is never returned to mean
-    "could not look". Suggested status 400 may appear in the set.
+    The Interface Contract states the carrier: ``str(error)``, in which a
+    quantity the PRD requires appears as a decimal number. Wording is free;
+    only the numbers are read. An unreadable message raises.
     """
     if not isinstance(exc, BaseException):
         raise HarnessError(
             f"short_body_quantities expected an exception; got {type(exc)!r}"
         )
-    found: set[int] = set()
-
-    def _add(value: Any) -> None:
-        if type(value) is int:
-            found.add(value)
-
-    try:
-        mapping = getattr(exc, "__dict__", None)
-        if isinstance(mapping, dict):
-            for value in mapping.values():
-                _add(value)
-    except Exception as probe_exc:
-        raise HarnessError(
-            f"cannot read short-body exception fields: {probe_exc}"
-        ) from probe_exc
-
-    try:
-        names = dir(exc)
-    except Exception as probe_exc:
-        raise HarnessError(
-            f"cannot list short-body exception attributes: {probe_exc}"
-        ) from probe_exc
-    for name in names:
-        if name.startswith("_"):
-            continue
-        try:
-            value = getattr(exc, name)
-        except Exception:
-            continue
-        if callable(value):
-            continue
-        _add(value)
-
     try:
         report = str(exc)
     except Exception as probe_exc:
         raise HarnessError(
-            f"cannot read short-body exception report: {probe_exc}"
+            f"cannot read short-body exception message: {probe_exc}"
         ) from probe_exc
-    try:
-        report_repr = repr(exc)
-    except Exception as probe_exc:
-        raise HarnessError(
-            f"cannot read short-body exception repr: {probe_exc}"
-        ) from probe_exc
-
-    cleaned = _strip_payload_text(report + " " + report_repr, strip)
-    try:
-        args = getattr(exc, "args", ())
-    except Exception as probe_exc:
-        raise HarnessError(
-            f"cannot read short-body exception args: {probe_exc}"
-        ) from probe_exc
-    pieces = [cleaned]
-    if isinstance(args, tuple):
-        for item in args:
-            if isinstance(item, str):
-                pieces.append(_strip_payload_text(item, strip))
-            elif type(item) is int:
-                found.add(item)
-    text = " ".join(pieces)
-    for match in re.finditer(r"-?\d+", text):
-        found.add(int(match.group(0)))
-
-    if not found:
-        raise HarnessError(
-            "short-body failure has no readable integers after stripping "
-            f"payload {strip!r}: {exc!r}"
-        )
-    print(f"short_body_quantities={sorted(found)} strip={strip!r}", flush=True)
-    return frozenset(found)
+    found = frozenset(
+        int(m.group(0)) for m in re.finditer(r"(?<![0-9])[0-9]+(?![0-9])", report)
+    )
+    print(f"short_body_quantities={sorted(found)} message={report!r}", flush=True)
+    return found
 
 
 def require_short_body_pair(
@@ -303,12 +229,12 @@ def require_short_body_pair(
     *,
     payload: bytes,
 ) -> frozenset[int]:
-    """Require the stripped integer set contains *received* and *expected*."""
-    nums = short_body_quantities(exc, strip=payload)
+    """Require the short-body message conveys both *received* and *expected*."""
+    nums = short_body_quantities(exc)
     if received not in nums or expected not in nums:
         raise AssertionError(
-            f"short-body integers {sorted(nums)} do not contain both "
-            f"{received} and {expected} after stripping {payload!r}"
+            f"short-body message numbers {sorted(nums)} do not include both "
+            f"received={received} and declared={expected}"
         )
     print(
         f"require_short_body_pair received={received} expected={expected}",
@@ -317,24 +243,24 @@ def require_short_body_pair(
     return nums
 
 
-def public_gibberish_block() -> bytes:
-    """The public unparseable ``gibberish`` line plus a blank line."""
+def fixed_gibberish_block() -> bytes:
+    """The fixed unparseable ``gibberish`` line plus a blank line."""
     block = b"gibberish\r\n\r\n"
-    print(f"public_gibberish_block len={len(block)}", flush=True)
+    print(f"fixed_gibberish_block len={len(block)}", flush=True)
     return block
 
 
-def public_big_header_unfinished() -> bytes:
-    """The public ``GET / HTTP/1.0`` + ``Big`` 4000-``a`` header, still unfinished."""
+def fixed_big_header_unfinished() -> bytes:
+    """The fixed ``GET / HTTP/1.0`` + ``Big`` 4000-``a`` header, still unfinished."""
     block = b"GET / HTTP/1.0\r\nBig: " + (b"a" * 4000)
-    print(f"public_big_header_unfinished len={len(block)}", flush=True)
+    print(f"fixed_big_header_unfinished len={len(block)}", flush=True)
     return block
 
 
-def public_big_header_block() -> bytes:
-    """The public ``GET / HTTP/1.0`` + ``Big`` 4000-``a`` header + terminator."""
-    block = public_big_header_unfinished() + b"\r\n\r\n"
-    print(f"public_big_header_block len={len(block)}", flush=True)
+def fixed_big_header_block() -> bytes:
+    """The fixed ``GET / HTTP/1.0`` + ``Big`` 4000-``a`` header + terminator."""
+    block = fixed_big_header_unfinished() + b"\r\n\r\n"
+    print(f"fixed_big_header_block len={len(block)}", flush=True)
     return block
 
 
@@ -373,7 +299,7 @@ def pull_request_then_eom(conn: Any) -> Any:
 
 
 def runtime_unparseable_block() -> bytes:
-    """An unparseable line plus a blank line that is not the public gibberish."""
+    """An unparseable line plus a blank line that is not the fixed gibberish."""
     token = runtime_token()
     if token.lower() == "gibberish":
         token = token + "z"
@@ -598,14 +524,14 @@ def send_empty_200(server: Any, *, headers: Any = ()) -> bytes:
 
 
 def generated_host() -> str:
-    """A Host that is not the public sample ``a`` or ``example.com``."""
+    """A Host that is not the fixture ``a`` or ``example.com``."""
     host = runtime_token() + ".host"
     print(f"generated_host={host!r}", flush=True)
     return host
 
 
 def generated_target() -> str:
-    """A request target that is not a public sample path."""
+    """A request target that is not a fixture path."""
     target = "/t" + runtime_token()[:8]
     print(f"generated_target={target!r}", flush=True)
     return target

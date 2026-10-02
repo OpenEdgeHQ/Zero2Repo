@@ -17,7 +17,6 @@ from typing import Mapping, Sequence
 
 from F01_helpers import (
     require_ok,
-    require_refusal,
     require_stdout_text,
     run_product,
     unique_name,
@@ -30,7 +29,6 @@ from F02_helpers import (
     ogg_crc_page,
     parse_ogg_pages,
     replace_vorbis_comment,
-    require_no_usable_compress_dest,
     rewrite_first_page_packet,
 )
 from _harness import HarnessError, RunResult, Workspace, read_bytes
@@ -476,21 +474,14 @@ def dump_stdout(ws: Workspace, archive: str) -> str:
     return require_stdout_text(result)
 
 
-def strip_paths_and_sizes(
-    text: str, paths: Sequence[str], sizes: Sequence[int]
-) -> str:
-    """Strip workspace paths and known per-file byte sizes.
+def without_paths(text: str, paths: Sequence[str]) -> str:
+    """Replace each caller-typed path (and its basename) with ``<path>``.
 
-    Decimal integers and hex-like runs that are not those sizes remain: a
-    dedicated kind slot or codec-mode field may itself be a number or a hex
-    value (L156 / L160). Offsets that vary with the file are not this strip;
-    a shared payload across two same-kind observations excludes them. Type
-    errors raise; they are not returned as empty meaning "could not look".
-    A nonempty buffer that strips to empty is a real remainder.
+    Used so that a number or word inside a path cannot stand in for what a
+    diagnostic itself states. Type errors raise.
     """
     if not isinstance(text, str):
-        raise HarnessError(f"strip expected str, got {type(text)!r}")
-    remainder = text
+        raise HarnessError(f"without_paths expected str, got {type(text)!r}")
     tokens: list[str] = []
     for raw in paths:
         piece = str(raw)
@@ -499,97 +490,44 @@ def strip_paths_and_sizes(
             name = Path(piece).name
             if name and name != piece:
                 tokens.append(name)
+    remainder = text
     for tok in sorted(set(tokens), key=len, reverse=True):
-        if tok:
-            remainder = remainder.replace(tok, " ")
-    size_vals: list[int] = []
-    for raw in sizes:
-        if isinstance(raw, bool) or not isinstance(raw, int):
-            raise HarnessError(f"size expected int, got {type(raw)!r}")
-        if raw < 0:
-            raise HarnessError(f"size {raw} is negative")
-        size_vals.append(raw)
-    for n in sorted(set(size_vals), reverse=True):
-        remainder = re.sub(rf"(?<!\d){n}(?!\d)", " ", remainder)
+        remainder = remainder.replace(tok, "<path>")
     return remainder
 
 
-def strip_paths_and_covariates(text: str, paths: Sequence[str]) -> str:
-    """Strip workspace paths. Does not delete decimal or hex payloads.
-
-    Per-file byte sizes that are not the kind payload are stripped by
-    strip_paths_and_sizes. A nonempty buffer that strips to empty is a
-    real remainder. Type errors raise; they are not returned as empty
-    meaning "could not look".
-    """
-    return strip_paths_and_sizes(text, paths, ())
-
-
-def leftover_whitespace_tokens(text: str) -> frozenset[str]:
-    """Whitespace tokens of an already-stripped leftover. Type errors raise."""
+def states_decimal(text: str, value: int) -> bool:
+    """True when *text* contains *value* as a whole decimal number."""
     if not isinstance(text, str):
-        raise HarnessError(
-            f"leftover_whitespace_tokens expected str, got {type(text)!r}"
-        )
-    return frozenset(text.split())
+        raise HarnessError(f"states_decimal expected str, got {type(text)!r}")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise HarnessError(f"states_decimal expected a non-negative int, got {value!r}")
+    return re.search(rf"(?<![0-9A-Za-z.]){value}(?![0-9])", text) is not None
 
 
-def shared_remainder_lacking_in(
-    left_a: str, left_b: str, other: str
-) -> frozenset[str]:
-    """Tokens present in both leftovers and absent from *other*.
+# Contract `dump`: a line consisting of ``Ogg Opus mode`` marks an archive made
+# from Ogg Opus; a ``level <stage>`` field carries the stored encoding stage.
+_OPUS_MODE_LINE = re.compile(r"^\s*Ogg Opus mode\s*$", re.MULTILINE)
+_STORED_STAGE = re.compile(r"(?<![A-Za-z0-9_-])level (\d+)(?![0-9])")
 
-    This is the dedicated-slot remainder: two same-kind observations share
-    it, a different kind does not. A numeric or hex token is a valid
-    payload. Per-file ASCII that is not in both leftovers is not this
-    remainder. An empty result is a real remainder, not a lookup failure.
-    """
-    shared = leftover_whitespace_tokens(left_a) & leftover_whitespace_tokens(
-        left_b
+
+def dump_marks_opus(text: str) -> bool:
+    """True when dump stdout carries the Contract's ``Ogg Opus mode`` line."""
+    if not isinstance(text, str):
+        raise HarnessError(f"dump_marks_opus expected str, got {type(text)!r}")
+    return _OPUS_MODE_LINE.search(text) is not None
+
+
+def dump_stored_stage(text: str) -> int:
+    """The decimal ``<stage>`` of dump stdout's ``level <stage>`` field."""
+    if not isinstance(text, str):
+        raise HarnessError(f"dump_stored_stage expected str, got {type(text)!r}")
+    found = {int(m.group(1)) for m in _STORED_STAGE.finditer(text)}
+    assert len(found) == 1, (
+        "dump standard output does not carry exactly one stored-stage field "
+        f"`level <stage>`; found={sorted(found)!r} stdout={text!r}"
     )
-    return shared - leftover_whitespace_tokens(other)
-
-
-def dedicated_codec_mode_field(
-    opus_a: str,
-    opus_b: str,
-    vorbis: str,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Dedicated dump-stdout codec-mode payloads shared by two Opus archives.
-
-    PRD L156: after stripping archive paths and per-file byte sizes, two
-    successful Opus dumps share a dedicated codec-mode field payload that
-    a Vorbis dump of a different input lacks. A number or a hex value is
-    a valid payload. Exact wording is the implementer's. Empty means the
-    field was silent or answered only by path or size. Type errors raise.
-    """
-    left_a = strip_paths_and_sizes(opus_a, paths, sizes)
-    left_b = strip_paths_and_sizes(opus_b, paths, sizes)
-    left_v = strip_paths_and_sizes(vorbis, paths, sizes)
-    return shared_remainder_lacking_in(left_a, left_b, left_v)
-
-
-def dedicated_kind_slot(
-    refused_a: str,
-    refused_b: str,
-    never_recognized: str,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Dedicated compress-stderr kind-slot payloads of two same-kind refusals.
-
-    PRD L160: after stripping paths and per-file size or offset that are
-    not the kind payload, two same-kind refusals share a dedicated kind
-    slot payload that never-recognized lacks. A numeric payload is valid.
-    Empty means the slot was silent or answered only by path or size.
-    Type errors raise.
-    """
-    left_a = strip_paths_and_sizes(refused_a, paths, sizes)
-    left_b = strip_paths_and_sizes(refused_b, paths, sizes)
-    neither = strip_paths_and_sizes(never_recognized, paths, sizes)
-    return shared_remainder_lacking_in(left_a, left_b, neither)
+    return found.pop()
 
 
 def run_product_long(
@@ -611,27 +549,6 @@ def run_product_long(
         flush=True,
     )
     return result
-
-
-def compress_refusal_leftover(
-    ws: Workspace, src: str, dest: str, paths: Sequence[str]
-) -> str:
-    """Compress *src*, require L24 refusal, return path-stripped stderr.
-
-    Does not delete decimal or hex tokens: those may be the kind payload.
-    Callers that also strip known per-file sizes use strip_paths_and_sizes
-    on the returned text, or strip before comparing. Refusal is asserted
-    here; a dedicated-slot contrast is a separate observation.
-    """
-    enc = run_product(ws, ["e", src, dest])
-    require_refusal(enc)
-    require_no_usable_compress_dest(ws, dest)
-    leftover = strip_paths_and_covariates(enc.stderr_text, paths)
-    print(
-        f"[F03] G leftover src={src!r} dest={dest!r} rem_len={len(leftover)}",
-        flush=True,
-    )
-    return leftover
 
 
 def runtime_mapping_family() -> int:
@@ -665,11 +582,9 @@ __all__ = (
     "LONG_TIMEOUT",
     "OPUS_MAX_PACKET",
     "OPUS_TAGS_MAX",
-    "compress_refusal_leftover",
-    "dedicated_codec_mode_field",
-    "dedicated_kind_slot",
+    "dump_marks_opus",
     "dump_stdout",
-    "leftover_whitespace_tokens",
+    "dump_stored_stage",
     "opus_head_fields",
     "place_opus_classified",
     "replace_opus_tags",
@@ -681,13 +596,12 @@ __all__ = (
     "runtime_ogg_version",
     "set_opus_head_channels",
     "set_opus_head_family",
-    "shared_remainder_lacking_in",
-    "strip_paths_and_covariates",
-    "strip_paths_and_sizes",
+    "states_decimal",
     "with_first_audio_code3_padding",
     "with_later_audio_code3_padding",
     "with_ogg_version",
     "with_opus_head_padded",
+    "without_paths",
 )
 
 
@@ -757,9 +671,8 @@ def place_codec_mode_contrast(ws: Workspace) -> tuple[list[str], list[str]]:
     The Opus inputs differ from each other in every file-dependent value a
     dump could print: page count, link count, channel count, duration,
     RFC 7845 input sample rate, pre-skip, and output gain. One Vorbis input
-    carries a 48 kHz identification rate. A token all three Opus dumps
-    share and no Vorbis dump carries is then the codec answer, not a
-    coincidence of the inputs. Returns ``(opus_paths, vorbis_paths)``.
+    carries a 48 kHz identification rate. The codec report must follow the
+    codec alone across all of them. Returns ``(opus_paths, vorbis_paths)``.
     """
     celt = _runtime_opus_tags(_opus_kind_bytes("celt"))
     silk = _truncated_with_eos(_runtime_opus_tags(_opus_kind_bytes("silk")), 7)
@@ -806,42 +719,14 @@ def place_codec_mode_contrast(ws: Workspace) -> tuple[list[str], list[str]]:
     return opus_paths, vorbis_paths
 
 
-def codec_mode_payload_across(
-    opus_texts: Sequence[str],
-    vorbis_texts: Sequence[str],
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Tokens every Opus dump carries and no Vorbis dump carries.
+def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> None:
+    """Compress/expand the contrast inputs at *effort*, dump, read the codec.
 
-    Leftovers are taken after stripping paths and per-file sizes. With
-    inputs from place_codec_mode_contrast, a nonempty result is a
-    dedicated codec-mode payload rather than a shared file covariate.
-    """
-    if len(opus_texts) < 3 or len(vorbis_texts) < 3:
-        raise HarnessError("codec-mode contrast needs three dumps per codec")
-    opus_sets = [
-        leftover_whitespace_tokens(strip_paths_and_sizes(t, paths, sizes))
-        for t in opus_texts
-    ]
-    vorbis_sets = [
-        leftover_whitespace_tokens(strip_paths_and_sizes(t, paths, sizes))
-        for t in vorbis_texts
-    ]
-    return frozenset.intersection(*opus_sets) - frozenset().union(*vorbis_sets)
-
-
-def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> frozenset[str]:
-    """Compress/expand the contrast inputs at *effort*, dump, find the field.
-
-    Each input must round-trip byte-for-byte. The dedicated codec-mode
-    payload is a token every Opus dump carries and no Vorbis dump carries
-    after path and size strip; every Vorbis leftover must also differ from
-    every Opus leftover. Returns the Opus payload tokens.
+    Each input must round-trip byte-for-byte. Every Opus dump carries the
+    Contract's ``Ogg Opus mode`` line and no Vorbis dump carries it (PRD
+    FP-09: the report depends only on the codec).
     """
     opus_paths, vorbis_paths = place_codec_mode_contrast(ws)
-    paths: list[str] = [str(ws.path)]
-    sizes: list[int] = []
     texts: dict[str, str] = {}
     for src in (*opus_paths, *vorbis_paths):
         arc = unique_name("mode-arc")
@@ -854,25 +739,18 @@ def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> frozen
         assert ws.read_bytes(rec) == src_bytes, (
             f"{what}: expand of {src!r} did not restore the original bytes"
         )
-        paths += [src, arc, rec]
-        sizes += [len(src_bytes), len(ws.read_bytes(arc))]
         texts[src] = dump_stdout(ws, arc)
-    opus_texts = [texts[p] for p in opus_paths]
-    vorbis_texts = [texts[p] for p in vorbis_paths]
-    payload = codec_mode_payload_across(opus_texts, vorbis_texts, paths, sizes)
-    print(f"[F03] {what} codec-mode payload={sorted(payload)!r}", flush=True)
-    assert payload, (
-        "On dump standard output, a dedicated codec-mode field — not the "
-        "archive path, not a byte size, not a leftover that varies with the "
-        "file — answers whether the archive is Opus or Vorbis: Opus archives "
-        "that differ in page count, link count, channels, duration, input "
-        "rate, pre-skip, and gain share one payload of that field that no "
-        f"Vorbis archive carries ({what})"
-    )
-    opus_left = [strip_paths_and_sizes(t, paths, sizes) for t in opus_texts]
-    for text in vorbis_texts:
-        left = strip_paths_and_sizes(text, paths, sizes)
-        assert all(left != other for other in opus_left), (
-            f"{what}: a Vorbis dump is not distinguishable from an Opus dump"
+    marks = {src: dump_marks_opus(text) for src, text in texts.items()}
+    print(f"[F03] {what} codec marks={marks!r}", flush=True)
+    for src in opus_paths:
+        assert marks[src], (
+            f"{what}: dump of an archive made from Ogg Opus ({src!r}) does not "
+            "carry the `Ogg Opus mode` line; stdout="
+            f"{texts[src]!r}"
         )
-    return payload
+    for src in vorbis_paths:
+        assert not marks[src], (
+            f"{what}: dump of an archive made from Ogg Vorbis ({src!r}) carries "
+            "the `Ogg Opus mode` line; stdout="
+            f"{texts[src]!r}"
+        )

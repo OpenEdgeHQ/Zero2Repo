@@ -113,7 +113,7 @@ def test_fused_counts_split_one_prefix_above_2_pow_32():
         raise AssertionError("each side's exclusive value inside that prefix did not count as 1")
 
 
-def test_fused_counts_against_empty_on_the_named_set():
+def test_fused_counts_against_empty_on_a_fixed_five_value_set():
     absent = unpublished_u64_f08(NAMED_SET_F08)
     report = run_f08_probe(
         r"""
@@ -224,7 +224,7 @@ def test_fused_union_of_two_empty_bitmaps_is_zero():
         raise AssertionError("empty operands changed")
 
 
-def test_fused_counts_of_the_named_set_against_itself():
+def test_fused_counts_of_a_fixed_five_value_set_against_itself():
     absent = unpublished_u64_f08(NAMED_SET_F08)
     report = run_f08_probe(
         r"""
@@ -249,7 +249,7 @@ def test_fused_counts_of_the_named_set_against_itself():
     )
 
 
-def test_fused_counts_when_prefixes_miss_the_named_set():
+def test_fused_counts_when_prefixes_miss_a_fixed_five_value_set():
     other, absent = prefixes_miss_named_f08()
     named = list(NAMED_SET_F08)
     report = _expect_lists(named, other, absent)

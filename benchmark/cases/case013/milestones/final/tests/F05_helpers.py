@@ -68,9 +68,19 @@ _COMBINED_AT = re.compile(
 )
 
 SEED_LOG_DATE = "2020-01-01"
-PUBLIC_SAMPLE_IDENTITY = "decisions/auth-flow"
-PUBLIC_SAMPLE_TYPE = "Decision"
-PUBLIC_SAMPLE_TITLE = "OAuth2 Authorization Flow"
+# Generated nested-identity sample (parent directory plus a hyphenated leaf),
+# a capitalized type word, and a three-word title with a letters-plus-digit
+# word. Fresh per test process; the documents carry none of these values.
+def _gen_hex(n: int = 8) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+SAMPLE_PARENT = f"d{_gen_hex(7)}"
+SAMPLE_IDENTITY = f"{SAMPLE_PARENT}/a{_gen_hex(6)}-f{_gen_hex(6)}"
+SAMPLE_TYPE = f"T{_gen_hex(7)}"
+SAMPLE_TITLE = f"Q{_gen_hex(5)}2 A{_gen_hex(6)} F{_gen_hex(6)}"
 
 # Recipe artifact name. The binary is built in a writable copy, not the judge cwd.
 _BIN_REL = Path("bin") / "membundle"
@@ -140,12 +150,10 @@ def seed_bundle(
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -260,7 +268,7 @@ def resolve_create_binary() -> Path:
     workspace.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so create never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it create never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -269,7 +277,7 @@ def _raise_if_create_binary_missing(binary: Path, exc: FileNotFoundError) -> NoR
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F05): upstream _harness.py:620 shows FileNotFoundError before create when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F05): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -414,30 +422,31 @@ def _filename_as_path(value: str, filename: str) -> bool:
 def require_create_structured_success(
     result: RunResult, identity: str, filename: str
 ) -> Any:
-    """Structured success: POSIX 0 plus identity and a distinct path string."""
+    """``create --json`` success: status 0 and one JSON object on stdout.
+
+    Output forms: ``status`` is the string ``success``, ``concept_id`` is
+    the identity, ``path`` is ``<identity>.md``. Other keys are not read.
+    *filename* is kept for call compatibility; the stated ``path`` value
+    is the bundle-relative ``<identity>.md``.
+    """
     require_create_success(result)
     parsed = json_stdout(result)
-    values = record_string_values(parsed)
-    print(
-        f"[F05] structured values identity_present={identity in values} "
-        f"n={len(values)}",
-        flush=True,
+    print(f"[F05] structured create object={parsed!r}", flush=True)
+    if not isinstance(parsed, dict):
+        raise AssertionError(
+            f"create --json stdout is not one JSON object; parsed={parsed!r}"
+        )
+    assert parsed.get("status") == "success", (
+        f"create --json status is not the string 'success'; parsed={parsed!r}"
     )
-    if identity not in values:
-        raise AssertionError(
-            f"structured create has no exact identity value {identity!r}; "
-            f"values={sorted(values)!r}"
-        )
-    path_hits = [
-        value
-        for value in values
-        if value != identity and _filename_as_path(value, filename)
-    ]
-    if not path_hits:
-        raise AssertionError(
-            "structured create has no distinct string value that names the "
-            f"concept filename {filename!r} as a path; values={sorted(values)!r}"
-        )
+    assert parsed.get("concept_id") == identity, (
+        f"create --json concept_id is not this run's identity {identity!r}; "
+        f"parsed={parsed!r}"
+    )
+    assert parsed.get("path") == f"{identity}.md", (
+        f"create --json path is not {identity + '.md'!r} "
+        f"(filename {filename!r}); parsed={parsed!r}"
+    )
     return parsed
 
 
@@ -451,47 +460,90 @@ def _class_remainder(report: str, path_tokens: Sequence[str]) -> str:
     )
 
 
-def require_create_usage_failure(
-    result: RunResult,
-    empty_identity_report: str,
-    reserved_report: str,
-    success_report: str,
-    path_tokens: Sequence[str],
-) -> str:
-    """Missing identity: non-success, non-empty, unlike empty/reserved/success."""
+def _stderr_lines(result: RunResult) -> list[str]:
+    return result.stderr_text.splitlines()
+
+
+def require_cli_usage_failure(result: RunResult, what: str) -> str:
+    """Output forms, Usage failure: status 1, usage text contains ``Usage:``.
+
+    Whether the usage text is on stdout or stderr is free; both are read.
+    """
     report = combined_report(result)
     print(
-        f"[F05] usage-failure exit={result.returncode} report={report!r}",
+        f"[F05] usage-class {what} exit={result.returncode} report={report!r}",
         flush=True,
     )
-    assert result.returncode != 0, (
-        f"create with a missing identity argument succeeded; report={report!r}"
+    assert result.returncode == 1, (
+        f"{what}: usage failure must end with status 1, got "
+        f"{result.returncode}; report={report!r}"
     )
-    assert report, (
-        "create with a missing identity argument produced empty combined streams"
+    assert "Usage:" in report, (
+        f"{what}: usage failure text does not contain the literal 'Usage:'; "
+        f"report={report!r}"
     )
-    usage_rem = _class_remainder(report, path_tokens)
-    empty_rem = _class_remainder(empty_identity_report, path_tokens)
-    reserved_rem = _class_remainder(reserved_report, path_tokens)
-    success_rem = _class_remainder(success_report, path_tokens)
+    return report
+
+
+def require_cli_rejected_failure(result: RunResult, what: str) -> str:
+    """Output forms, Rejected input or refused write: status 1, stderr line ``Error: ``."""
+    lines = _stderr_lines(result)
     print(
-        f"[F05] usage remainder={usage_rem!r} empty={empty_rem!r} "
-        f"reserved={reserved_rem!r} success={success_rem!r}",
+        f"[F05] rejected-class {what} exit={result.returncode} stderr={lines!r}",
         flush=True,
     )
-    assert usage_rem != empty_rem, (
-        "missing-identity report is not distinguishable from empty-identity "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
+    assert result.returncode == 1, (
+        f"{what}: rejected input must end with status 1, got "
+        f"{result.returncode}; stderr={lines!r}"
     )
-    assert usage_rem != reserved_rem, (
-        "missing-identity report is not distinguishable from reserved-index "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
+    assert any(line.startswith("Error: ") for line in lines), (
+        f"{what}: standard error has no line that begins 'Error: '; "
+        f"stderr={lines!r} stdout={result.stdout_text!r}"
     )
-    assert usage_rem != success_rem, (
-        "missing-identity report is not distinguishable from a live success "
-        f"report after stripping paths and generated covariates; "
-        f"remainder={usage_rem!r}"
+    return result.stderr_text
+
+
+def require_create_report_line(
+    result: RunResult, identity: str, title: str, bundle: str
+) -> str:
+    """Output forms, ``create`` (human): exactly one stdout line, wording free.
+
+    The line contains ``'<identity>.md'`` and ``'<bundle>'``, where
+    ``<bundle>`` is the bundle path as the caller named it (or the default
+    bundle path when omitted). *title* is accepted for call compatibility.
+    """
+    del title
+    require_create_success(result)
+    expected = (f"'{identity}.md'", f"'{bundle}'")
+    lines = result.stdout_text.splitlines()
+    print(f"[F05] create stdout lines={lines!r} expected={expected!r}", flush=True)
+    assert len(lines) == 1 and all(part in lines[0] for part in expected), (
+        f"create human success is not one line containing {expected!r}; "
+        f"stdout={result.stdout_text!r}"
     )
+    return lines[0]
+
+
+def require_create_usage_failure(
+    missing: RunResult,
+    empty_identity: RunResult,
+    reserved: RunResult,
+    success: RunResult,
+    identity: str,
+    title: str,
+    bundle: str,
+) -> str:
+    """Missing identity is the Usage failure class; the others are their own classes.
+
+    Each outcome is read in the class the Output forms section states for
+    it: the missing identity argument is a Usage failure; the empty and
+    the reserved identity are Rejected input; the live create is the
+    ``create`` human success line.
+    """
+    report = require_cli_usage_failure(missing, "create with no identity argument")
+    require_cli_rejected_failure(empty_identity, "create of the empty identity")
+    require_cli_rejected_failure(reserved, "create of the reserved identity index")
+    require_create_report_line(success, identity, title, bundle)
     return report
 
 
@@ -661,7 +713,7 @@ def require_mcp_create_tool_error(outcome: McpCreateOutcome) -> str:
     if mcp_is_protocol_error(outcome.reply):
         raise AssertionError(
             "membundle_create rejected the call as a JSON-RPC protocol error; "
-            "L177/L265 require tool-level failures as tool errors, not "
+            "the PRD requires tool-level failures as tool errors, not "
             f"protocol errors; reply={outcome.reply!r}"
         )
     assert mcp_is_tool_error(outcome.reply), (
@@ -669,6 +721,74 @@ def require_mcp_create_tool_error(outcome: McpCreateOutcome) -> str:
         f"is not this class; reply={outcome.reply!r}"
     )
     return outcome.report_text
+
+
+def mcp_first_content_text(reply: Mapping[str, Any]) -> str:
+    """Text of the first content item of a tools/call result."""
+    result = reply.get("result")
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"tools/call reply has no result object: {reply!r}")
+    content = result.get("content")
+    if (
+        not isinstance(content, Sequence)
+        or isinstance(content, (str, bytes))
+        or not content
+        or not isinstance(content[0], Mapping)
+        or not isinstance(content[0].get("text"), str)
+    ):
+        raise AssertionError(
+            f"tools/call result has no first text content item: {reply!r}"
+        )
+    return content[0]["text"]
+
+
+def require_mcp_tool_error_prefix(reply: Mapping[str, Any], prefix: str, what: str) -> str:
+    """Output forms, tool-level failures: ``isError`` true and first text begins *prefix*."""
+    if mcp_is_protocol_error(reply):
+        raise AssertionError(
+            f"{what}: JSON-RPC protocol error instead of a tool error; reply={reply!r}"
+        )
+    assert mcp_is_tool_error(reply), (
+        f"{what}: tool result is not marked isError true; reply={reply!r}"
+    )
+    text = mcp_first_content_text(reply)
+    print(f"[F05] {what} tool-error text={text!r} prefix={prefix!r}", flush=True)
+    assert text.startswith(prefix), (
+        f"{what}: tool-error text does not begin {prefix!r}; text={text!r}"
+    )
+    return text
+
+
+def mcp_bundle_dir(ws: Workspace, bundle: str | Path | None) -> str:
+    """Absolute bundle directory (symbolic links resolved) an MCP write targets."""
+    base = ws.path if bundle is None else ws.path / bundle
+    return str(Path(base).resolve())
+
+
+def require_mcp_create_report(
+    outcome: McpCreateOutcome, identity: str, bundle_dir: str
+) -> str:
+    """Output forms, ``membundle_create`` result: exactly one line, wording free.
+
+    The line contains ``<identity>.md`` and ends with `` <bundle>``, where
+    ``<bundle>`` is the absolute bundle directory (symbolic links resolved).
+    """
+    require_mcp_create_success(outcome)
+    text = mcp_first_content_text(outcome.reply)
+    line = text[:-1] if text.endswith("\n") else text
+    print(
+        f"[F05] mcp create text={text!r} identity={identity!r} bundle={bundle_dir!r}",
+        flush=True,
+    )
+    assert (
+        "\n" not in line
+        and f"{identity}.md" in line
+        and line.endswith(f" {bundle_dir}")
+    ), (
+        f"membundle_create success text is not one line containing "
+        f"{identity + '.md'!r} and ending with {' ' + bundle_dir!r}; text={text!r}"
+    )
+    return text
 
 
 def _strip_yaml_quotes(scalar: str) -> str:
@@ -1203,13 +1323,20 @@ def _creation_item_in_section(
     title: str | None,
     path_tokens: Sequence[str],
 ) -> str | None:
+    """List item in the stated Creation bullet form for *identity*.
+
+    Proposed log-bullet form: the item text (after the list marker) begins
+    ``**Creation**: `` and contains ``<identity>.md``. *filename*, *title*,
+    and *path_tokens* are kept for call compatibility and are not read.
+    """
+    return _log_bullet_in_section(section, "Creation", identity)
+
+
+def _log_bullet_in_section(section: str, kind: str, identity: str) -> str | None:
+    prefix = f"**{kind}**: "
+    concept_path = f"{identity}.md"
     for item in _list_item_texts(section):
-        if not _item_names_file(item, identity, filename):
-            continue
-        remainder = _creation_remainder(
-            item, identity, filename, title, path_tokens
-        )
-        if _whole_token_present(remainder, "Creation"):
+        if item.startswith(prefix) and concept_path in item:
             return item
     return None
 
@@ -1314,14 +1441,14 @@ def _is_reserved_md(rel: str, bundle_rel: str) -> bool:
 def report_names_named_bundle(report: str, named: str) -> None:
     """Success report identifies *named* as the bundle, not only nested knowledge/.
 
-    L185 requires that human CLI success and the MCP create confirmation name
+    the PRD requires that human CLI success and the MCP create confirmation name
     the named path as the bundle. This does not pin message wording: it
     requires the caller-supplied path to appear, and requires at least one
     occurrence that is not the nested ``named/knowledge`` spelling.
     """
     if not report:
         raise AssertionError(
-            "success report is empty; L185 requires it name the named path "
+            "success report is empty; the PRD requires it name the named path "
             f"{named!r} as the bundle"
         )
     if named not in report:
@@ -1366,7 +1493,7 @@ def assert_named_path_create_landing(
 ) -> tuple[str, str]:
     """Concept and default bookkeeping land under the named path, not nested knowledge/.
 
-    L173/L185: a named path is the write root even when it has no root
+    a named path is the write root even when it has no root
     ``index.md`` and contains a nested conventional bundle subdirectory.
     The new concept file, parent index, and log bookkeeping are present
     under the named path and absent from that nested subdirectory.

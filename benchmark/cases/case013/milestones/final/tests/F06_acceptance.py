@@ -6,8 +6,8 @@ Context Protocol tool. Observations go through the sealed harness
 ``workspace`` / ``invoke`` / ``mcp_batch`` path and the on-disk files
 the update rewrote or refused to rewrite. These tests do not import Go
 packages, do not call internal SaveConcept helpers, and do not use
-``membundle show`` / ``membundle validate`` / ``membundle create`` / ``membundle init`` as an
-oracle.
+``membundle show`` / ``membundle validate`` / ``membundle create`` / ``membundle init`` to
+judge results.
 """
 
 from __future__ import annotations
@@ -36,10 +36,9 @@ from F03_helpers import (
     unique_tokens,
 )
 from F05_helpers import (
-    PUBLIC_SAMPLE_IDENTITY,
-    PUBLIC_SAMPLE_TYPE,
+    SAMPLE_IDENTITY,
+    SAMPLE_TYPE,
     SEED_LOG_DATE,
-    _class_remainder,
     assert_no_new_concept_file,
     assert_no_verified_key,
     concept_file,
@@ -48,11 +47,11 @@ from F05_helpers import (
     generated_by_and_at,
     heading_texts,
     parent_index_path,
-    report_names_named_bundle,
+    mcp_bundle_dir,
     tag_scalars,
 )
 from F06_helpers import (
-    PUBLIC_SAMPLE_DESC,
+    SAMPLE_DESC,
     SEED_GENERATED_AT,
     SEED_GENERATED_BY,
     assert_concept_updated,
@@ -67,7 +66,12 @@ from F06_helpers import (
     assert_update_absent,
     assert_update_bullet,
     assert_verified_survives,
-    class_remainder_after_identity,
+    require_mcp_update_load_failure,
+    require_mcp_update_not_found,
+    require_mcp_update_report,
+    require_update_load_failure,
+    require_update_not_found,
+    require_update_report_line,
     mcp_membundle_update,
     mcp_update,
     mcp_update_with_instants,
@@ -82,6 +86,11 @@ from F06_helpers import (
     seed_updatable_concept,
 )
 
+
+
+# Generated per test process: the leaf a ``..`` identity aims at, outside
+# the bundle (the documents carry no such value).
+_OUTSIDE_LEAF = f"o{__import__('uuid').uuid4().hex[:8]}"
 
 def _bundle() -> str:
     return unique_tokens("kb")[0]
@@ -215,12 +224,12 @@ def _live_mcp_rewrite(ws, rel: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_public_sample_description_only_keeps_type_extras_and_refreshes_generated_at():
-    """CLI description-only of decisions/auth-flow with Use PKCE. keeps type/extra key, new generated.at, listing, Update (L200)."""
+def test_cli_generated_sample_description_only_keeps_type_extras_and_refreshes_generated_at():
+    """CLI description-only update of a generated nested sample keeps type/extra key, new generated.at, listing, Update."""
     with workspace() as ws:
-        identity = "decisions/auth-flow"
-        old_description = "Use PKCE."
-        concept_type = "Decision"
+        identity = SAMPLE_IDENTITY
+        old_description = SAMPLE_DESC
+        concept_type = SAMPLE_TYPE
         title, body, sentence_token = unique_tokens("ptl", "pbd", "pnd")
         new_desc = f"Prefer {sentence_token}."
         extra = _extras("pxk1", "pxv1", "pxk2", "pxv2")
@@ -253,8 +262,6 @@ def test_cli_public_sample_description_only_keeps_type_extras_and_refreshes_gene
             description=new_desc,
             body_token=body,
         )
-        assert identity == "decisions/auth-flow"
-        assert old_description == "Use PKCE."
         assert frontmatter_scalar(mapping, "description") == new_desc, (
             "after an update that changes only the description to a new sentence, "
             "the concept does not show the new description"
@@ -316,13 +323,13 @@ def test_cli_public_sample_description_only_keeps_type_extras_and_refreshes_gene
             "log.md has no heading whose text is today's UTC ISO 8601 date"
         )
         print(
-            "cli decisions/auth-flow description-only kept type/extra key and wrote Update",
+            "cli sample description-only kept type/extra key and wrote Update",
             flush=True,
         )
 
 
-def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_mcp():
-    """MCP description-only of decisions/auth-flow writes agent/mcp and bookkeeps (L192, L194)."""
+def test_mcp_generated_sample_description_only_keeps_type_extras_and_writes_agent_mcp():
+    """MCP description-only update of the generated sample writes agent/mcp and bookkeeps."""
     with workspace() as ws:
         title, body, new_desc = unique_tokens("mptl", "mpbd", "mpnd")
         extra = _extras("mpxk1", "mpxv1", "mpxk2", "mpxv2")
@@ -330,21 +337,21 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
         root = seed_updatable_concept(
             ws,
             rel,
-            PUBLIC_SAMPLE_IDENTITY,
-            concept_type=PUBLIC_SAMPLE_TYPE,
+            SAMPLE_IDENTITY,
+            concept_type=SAMPLE_TYPE,
             title=title,
-            description=PUBLIC_SAMPLE_DESC,
+            description=SAMPLE_DESC,
             body=body,
             extra=extra,
         )
         outcome, before, after = mcp_update_with_instants(
-            ws, PUBLIC_SAMPLE_IDENTITY, description=new_desc, bundle=rel
+            ws, SAMPLE_IDENTITY, description=new_desc, bundle=rel
         )
         today = utc_today_iso()
         require_mcp_update_success(outcome)
         mapping, body_after = assert_concept_updated(
-            concept_file(root, PUBLIC_SAMPLE_IDENTITY),
-            concept_type=PUBLIC_SAMPLE_TYPE,
+            concept_file(root, SAMPLE_IDENTITY),
+            concept_type=SAMPLE_TYPE,
             generated_by="agent/mcp",
             seed_generated_at=SEED_GENERATED_AT,
             before=before,
@@ -353,8 +360,6 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
             description=new_desc,
             body_token=body,
         )
-        assert PUBLIC_SAMPLE_IDENTITY == "decisions/auth-flow"
-        assert PUBLIC_SAMPLE_DESC == "Use PKCE."
         extra_key, extra_value = next(iter(extra.items()))
         assert frontmatter_scalar(mapping, "description") == new_desc, (
             "after an update that changes only the description to a new sentence, "
@@ -363,7 +368,7 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
         assert frontmatter_scalar(mapping, extra_key) == extra_value, (
             "custom extra frontmatter key did not remain after the rewrite"
         )
-        assert frontmatter_scalar(mapping, "type") == PUBLIC_SAMPLE_TYPE, (
+        assert frontmatter_scalar(mapping, "type") == SAMPLE_TYPE, (
             "concept does not still have its original type"
         )
         _by, generated_at = generated_by_and_at(mapping)
@@ -371,13 +376,13 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
             "update did not write a new generated.at"
         )
         assert_extra_keys_survive(mapping, extra)
-        filename = concept_filename(PUBLIC_SAMPLE_IDENTITY)
+        filename = concept_filename(SAMPLE_IDENTITY)
         listing_item = assert_listing_follows_description(
-            parent_index_path(root, PUBLIC_SAMPLE_IDENTITY),
-            identity=PUBLIC_SAMPLE_IDENTITY,
+            parent_index_path(root, SAMPLE_IDENTITY),
+            identity=SAMPLE_IDENTITY,
             filename=filename,
             new_description=new_desc,
-            old_description=PUBLIC_SAMPLE_DESC,
+            old_description=SAMPLE_DESC,
             title=title,
         )
         assert new_desc in listing_item, (
@@ -385,7 +390,7 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
         )
         update_item = assert_update_bullet(
             root / "log.md",
-            identity=PUBLIC_SAMPLE_IDENTITY,
+            identity=SAMPLE_IDENTITY,
             filename=filename,
             today=today,
             title=title,
@@ -399,8 +404,8 @@ def test_mcp_public_sample_description_only_keeps_type_extras_and_writes_agent_m
         print("mcp public sample description-only wrote agent/mcp", flush=True)
 
 
-def test_cli_public_sample_shape_has_runtime_twin():
-    """A runtime-unique CLI description-only update is not only the public sample (L200)."""
+def test_cli_generated_sample_shape_has_runtime_twin():
+    """A runtime-unique CLI description-only update is not only the public sample."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -446,8 +451,8 @@ def test_cli_public_sample_shape_has_runtime_twin():
         print("cli public-sample shape has runtime twin", flush=True)
 
 
-def test_mcp_public_sample_shape_has_runtime_twin():
-    """A runtime-unique MCP description-only update is not only the public sample (L200)."""
+def test_mcp_generated_sample_shape_has_runtime_twin():
+    """A runtime-unique MCP description-only update is not only the public sample."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -499,7 +504,7 @@ def test_mcp_public_sample_shape_has_runtime_twin():
 
 
 def test_cli_title_only_leaves_description_and_body():
-    """CLI title-only stores the new title; description, body, type remain; at + Update (L194)."""
+    """CLI title-only stores the new title; description, body, type remain; at + Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nt")
         new_title = rest[0]
@@ -544,7 +549,7 @@ def test_cli_title_only_leaves_description_and_body():
 
 
 def test_mcp_title_only_leaves_description_and_body():
-    """MCP title-only stores the new title; description and body remain; at + Update (L194)."""
+    """MCP title-only stores the new title; description and body remain; at + Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnt")
         new_title = rest[0]
@@ -589,7 +594,7 @@ def test_mcp_title_only_leaves_description_and_body():
 
 
 def test_cli_body_only_replaces_body_and_leaves_title_and_description():
-    """CLI body-only replaces the post-fence body; title and description remain (L194)."""
+    """CLI body-only replaces the post-fence body; title and description remain."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nb")
         new_body = rest[0]
@@ -635,7 +640,7 @@ def test_cli_body_only_replaces_body_and_leaves_title_and_description():
 
 
 def test_mcp_body_only_replaces_body_and_leaves_title_and_description():
-    """MCP body-only replaces the post-fence body; title and description remain (L192, L194)."""
+    """MCP body-only replaces the post-fence body; title and description remain."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnb")
         new_body = rest[0]
@@ -681,7 +686,7 @@ def test_mcp_body_only_replaces_body_and_leaves_title_and_description():
 
 
 def test_cli_identity_only_refreshes_generated_and_leaves_content_fields():
-    """CLI identity-only refreshes generated.at, keeps content and two extras, writes Update (L194)."""
+    """CLI identity-only refreshes generated.at, keeps content and two extras, writes Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -724,7 +729,7 @@ def test_cli_identity_only_refreshes_generated_and_leaves_content_fields():
 
 
 def test_mcp_identity_only_refreshes_generated_and_leaves_content_fields():
-    """MCP identity-only refreshes generated.at, keeps content and two extras, writes Update (L194)."""
+    """MCP identity-only refreshes generated.at, keeps content and two extras, writes Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -767,7 +772,7 @@ def test_mcp_identity_only_refreshes_generated_and_leaves_content_fields():
 
 
 def test_cli_title_and_description_together_leave_body():
-    """CLI title+description in one invoke stores both and leaves the body (L192, L194)."""
+    """CLI title+description in one invoke stores both and leaves the body."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nt2", "nd2")
         new_title, new_desc = rest
@@ -813,7 +818,7 @@ def test_cli_title_and_description_together_leave_body():
 
 
 def test_mcp_title_and_description_together_leave_body():
-    """MCP title+description in one invoke stores both and leaves the body (L192, L194)."""
+    """MCP title+description in one invoke stores both and leaves the body."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnt2", "mnd2")
         new_title, new_desc = rest
@@ -864,7 +869,7 @@ def test_mcp_title_and_description_together_leave_body():
 
 
 def test_cli_update_preserves_verified_sources_tags_and_recognized_unspecified_fields():
-    """CLI description-only keeps verified, sources, tags, status, governance, code_refs (L29, L194)."""
+    """CLI description-only keeps verified, sources, tags, status, governance, code_refs."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields(
             "nd", "vby", "src", "tg1", "tg2", "st", "gv", "cr"
@@ -914,7 +919,7 @@ def test_cli_update_preserves_verified_sources_tags_and_recognized_unspecified_f
 
 
 def test_mcp_update_preserves_verified_sources_tags_and_recognized_unspecified_fields():
-    """MCP description-only keeps verified, sources, tags, status, governance, code_refs (L31, L194)."""
+    """MCP description-only keeps verified, sources, tags, status, governance, code_refs."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields(
             "mnd", "mvby", "msrc", "mtg1", "mtg2", "mst", "mgv", "mcr"
@@ -965,7 +970,7 @@ def test_mcp_update_preserves_verified_sources_tags_and_recognized_unspecified_f
 
 
 def test_cli_update_does_not_invent_verified():
-    """CLI description-only of a seed without verified writes generated and no verified key (L31)."""
+    """CLI description-only of a seed without verified writes generated and no verified key."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -999,7 +1004,7 @@ def test_cli_update_does_not_invent_verified():
 
 
 def test_mcp_update_does_not_invent_verified():
-    """MCP description-only of a seed without verified writes generated and no verified key (L31)."""
+    """MCP description-only of a seed without verified writes generated and no verified key."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -1038,7 +1043,7 @@ def test_mcp_update_does_not_invent_verified():
 
 
 def test_cli_omitted_actor_writes_agent_cli_not_seed_actor():
-    """CLI omit actor writes generated.by agent/cli even when the seed by differed (L32, L192)."""
+    """CLI omit actor writes generated.by agent/cli even when the seed by differed."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1074,7 +1079,7 @@ def test_cli_omitted_actor_writes_agent_cli_not_seed_actor():
 
 
 def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
-    """CLI empty and whitespace actor each write generated.by agent/membundle-tool (L32, L192)."""
+    """CLI empty and whitespace actor each write generated.by agent/membundle-tool."""
     with workspace() as ws:
         rel = _bundle()
         for actor, prefix in (("", "ae"), ("   ", "aw")):
@@ -1108,7 +1113,7 @@ def test_cli_empty_and_whitespace_actor_each_write_agent_membundle_tool():
 
 
 def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
-    """A producer-slash-version actor is written through as generated.by (L32, L192)."""
+    """A producer-slash-version actor is written through as generated.by."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "al", "ar")
         new_desc, left, right = rest
@@ -1142,7 +1147,7 @@ def test_cli_supplied_producer_slash_actor_is_written_as_generated_by():
 
 
 def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
-    """A prefix-colon-id actor is written through as generated.by (L32, L192)."""
+    """A prefix-colon-id actor is written through as generated.by."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ap", "ar")
         new_desc, prefix, rest_id = rest
@@ -1176,7 +1181,7 @@ def test_cli_supplied_prefix_colon_actor_is_written_as_generated_by():
 
 
 def test_mcp_generated_by_is_agent_mcp():
-    """MCP update writes generated.by agent/mcp with no actor argument (L32, L192)."""
+    """MCP update writes generated.by agent/mcp with no actor argument."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -1209,7 +1214,7 @@ def test_mcp_generated_by_is_agent_mcp():
 
 
 def test_cli_generated_at_is_new_current_utc_iso8601_combined_datetime():
-    """CLI generated.at is combined date-and-time in the invoke window and differs from seed (L31, L194)."""
+    """CLI generated.at is combined date-and-time in the invoke window and differs from seed."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1242,7 +1247,7 @@ def test_cli_generated_at_is_new_current_utc_iso8601_combined_datetime():
 
 
 def test_mcp_generated_at_is_new_current_utc_iso8601_combined_datetime():
-    """MCP generated.at is combined date-and-time in the invoke window and differs from seed (L31, L194)."""
+    """MCP generated.at is combined date-and-time in the invoke window and differs from seed."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -1280,7 +1285,7 @@ def test_mcp_generated_at_is_new_current_utc_iso8601_combined_datetime():
 
 
 def test_parent_index_listing_follows_the_new_description():
-    """Nested parent listing item follows the new description; old token gone from that item (L194, L200)."""
+    """Nested parent listing item follows the new description; old token gone from that item."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1322,7 +1327,7 @@ def test_parent_index_listing_follows_the_new_description():
 
 
 def test_root_level_listing_follows_the_new_description():
-    """Root-level identity listing in bundle-root index.md follows the new description (L194, L200)."""
+    """Root-level identity listing in bundle-root index.md follows the new description."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1363,7 +1368,7 @@ def test_root_level_listing_follows_the_new_description():
 
 
 def test_cli_skip_index_does_not_update_an_existing_parent_listing_and_still_writes_update_bullet():
-    """On the CLI with index skipped, the parent index listing is not updated (L202)."""
+    """On the CLI with index skipped, the parent index listing is not updated."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1440,7 +1445,7 @@ def test_cli_skip_index_does_not_update_an_existing_parent_listing_and_still_wri
 
 
 def test_mcp_update_always_writes_parent_listing_and_update_bullet():
-    """The Model Context Protocol update tool cannot skip bookkeeping: it still writes the parent listing and the Update bullet (L202)."""
+    """The Model Context Protocol update tool cannot skip bookkeeping: it still writes the parent listing and the Update bullet."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -1507,7 +1512,7 @@ def test_mcp_update_always_writes_parent_listing_and_update_bullet():
 
 
 def test_log_inserts_today_utc_heading_with_update_bullet_naming_the_file():
-    """Among dated headings, today precedes the older seed and that section names the file as Update (L46, L194)."""
+    """Among dated headings, today precedes the older seed and that section names the file as Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1544,7 +1549,7 @@ def test_log_inserts_today_utc_heading_with_update_bullet_naming_the_file():
 
 
 def test_cli_skip_log_does_not_gain_update_bullet_and_still_updates_listing():
-    """On the CLI with log skipped, log.md does not gain that Update bullet (L202)."""
+    """On the CLI with log skipped, log.md does not gain that Update bullet."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -1625,7 +1630,7 @@ def test_cli_skip_log_does_not_gain_update_bullet_and_still_updates_listing():
 
 
 def test_cli_log_heading_uses_utc_date_not_process_local_timezone():
-    """CLI log heading date digits are UTC today, not the process-local date (L46, L194)."""
+    """CLI log heading date digits are UTC today, not the process-local date."""
     tz_value, local_date = tz_offset_where_local_date_differs()
     print(f"cli TZ contrast tz={tz_value!r} local={local_date}", flush=True)
     with workspace() as ws:
@@ -1675,7 +1680,7 @@ def test_cli_log_heading_uses_utc_date_not_process_local_timezone():
 
 
 def test_mcp_log_heading_uses_utc_date_not_process_local_timezone():
-    """MCP log heading date digits are UTC today, not the process-local date (L46, L194)."""
+    """MCP log heading date digits are UTC today, not the process-local date."""
     tz_value, local_date = tz_offset_where_local_date_differs()
     print(f"mcp TZ contrast tz={tz_value!r} local={local_date}", flush=True)
     with workspace() as ws:
@@ -1728,7 +1733,7 @@ def test_mcp_log_heading_uses_utc_date_not_process_local_timezone():
 
 
 def test_cli_empty_description_clears_description():
-    """CLI empty description clears the value; listing item remains without the old token (L203)."""
+    """CLI empty description clears the value; listing item remains without the old token."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         live_desc = rest[0]
@@ -1794,7 +1799,7 @@ def test_cli_empty_description_clears_description():
 
 
 def test_mcp_empty_description_clears_description():
-    """MCP empty-string description clears the value; listing item remains (L203)."""
+    """MCP empty-string description clears the value; listing item remains."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         live_desc = rest[0]
@@ -1860,7 +1865,7 @@ def test_mcp_empty_description_clears_description():
 
 
 def test_cli_omitted_description_leaves_existing_description():
-    """CLI omit of description while supplying a new title leaves the old description (L203)."""
+    """CLI omit of description while supplying a new title leaves the old description."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nt")
         new_title = rest[0]
@@ -1895,7 +1900,7 @@ def test_cli_omitted_description_leaves_existing_description():
 
 
 def test_mcp_omitted_description_leaves_existing_description():
-    """MCP omit of description while supplying a new title leaves the old description (L203)."""
+    """MCP omit of description while supplying a new title leaves the old description."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnt")
         new_title = rest[0]
@@ -1930,7 +1935,7 @@ def test_mcp_omitted_description_leaves_existing_description():
 
 
 def test_cli_whitespace_only_description_fails_without_successful_update():
-    """CLI whitespace-only description fails; planted generated.at and log stay (L196, L203)."""
+    """CLI whitespace-only description fails; planted generated.at and log stay."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -1963,7 +1968,7 @@ def test_cli_whitespace_only_description_fails_without_successful_update():
 
 
 def test_mcp_whitespace_only_description_is_tool_error_and_does_not_rewrite():
-    """MCP whitespace-only description fails and does not rewrite (L196, L203)."""
+    """MCP whitespace-only description fails and does not rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -2000,7 +2005,7 @@ def test_mcp_whitespace_only_description_is_tool_error_and_does_not_rewrite():
 
 
 def test_cli_empty_and_whitespace_title_each_fail_without_successful_update():
-    """CLI empty and whitespace title each fail without a successful rewrite (L196)."""
+    """CLI empty and whitespace title each fail without a successful rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -2034,7 +2039,7 @@ def test_cli_empty_and_whitespace_title_each_fail_without_successful_update():
 
 
 def test_mcp_empty_and_whitespace_title_each_is_tool_error_and_does_not_rewrite():
-    """MCP empty and whitespace title each fails and does not rewrite (L196)."""
+    """MCP empty and whitespace title each fails and does not rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, _rest = _runtime_fields()
         ident = f"decisions/{ident}"
@@ -2075,7 +2080,7 @@ def test_mcp_empty_and_whitespace_title_each_is_tool_error_and_does_not_rewrite(
 
 
 def test_omit_path_without_knowledge_dir_updates_cwd():
-    """Omit bundle path with no knowledge/ directory rewrites the cwd concept (L49, L192)."""
+    """Omit bundle path with no knowledge/ directory rewrites the cwd concept."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -2100,7 +2105,7 @@ def test_omit_path_without_knowledge_dir_updates_cwd():
 
 
 def test_omit_path_with_knowledge_dir_updates_knowledge_not_cwd():
-    """Omit bundle path with knowledge/ as a directory rewrites knowledge/, not a cwd decoy (L49)."""
+    """Omit bundle path with knowledge/ as a directory rewrites knowledge/, not a cwd decoy."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "dk")
         new_desc, decoy = rest
@@ -2134,7 +2139,7 @@ def test_omit_path_with_knowledge_dir_updates_knowledge_not_cwd():
 
 
 def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
-    """A file named knowledge is not a directory, so omit-path uses cwd (L49)."""
+    """A file named knowledge is not a directory, so omit-path uses cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -2163,7 +2168,7 @@ def test_omit_path_knowledge_file_is_not_treated_as_bundle_dir():
 
 
 def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
-    """A named bundle path is the write target even when cwd has knowledge/ (L49, L192)."""
+    """A named bundle path is the write target even when cwd has knowledge/."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "dk")
         new_desc, decoy = rest
@@ -2194,7 +2199,7 @@ def test_explicit_bundle_path_is_not_overridden_by_cwd_knowledge():
 
 
 def test_named_path_without_root_index_updates_named_path_nested_files_unchanged():
-    """Named path with no root index.md updates the named path; nested knowledge/ stays (L204)."""
+    """Named path with no root index.md updates the named path; nested knowledge/ stays."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -2242,12 +2247,12 @@ def test_named_path_without_root_index_updates_named_path_nested_files_unchanged
             allowed_dates=_dates(today, utc_today_iso()),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(report, rel)
+        require_update_report_line(result, ident, rel)
         print("cli named path updated named root; nested unchanged", flush=True)
 
 
 def test_mcp_omit_bundle_without_knowledge_dir_updates_cwd():
-    """MCP omit bundle, no knowledge/ directory: rewrite lands at cwd (L49, L192)."""
+    """MCP omit bundle, no knowledge/ directory: rewrite lands at cwd."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -2272,7 +2277,7 @@ def test_mcp_omit_bundle_without_knowledge_dir_updates_cwd():
 
 
 def test_mcp_omit_bundle_with_knowledge_dir_updates_knowledge_not_cwd():
-    """MCP omit bundle with knowledge/ as a directory rewrites knowledge/, not a cwd decoy (L49)."""
+    """MCP omit bundle with knowledge/ as a directory rewrites knowledge/, not a cwd decoy."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd", "dk")
         new_desc, decoy = rest
@@ -2306,7 +2311,7 @@ def test_mcp_omit_bundle_with_knowledge_dir_updates_knowledge_not_cwd():
 
 
 def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
-    """MCP named bundle writes there even when cwd has a knowledge/ decoy (L49, L192)."""
+    """MCP named bundle writes there even when cwd has a knowledge/ decoy."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd", "dk")
         new_desc, decoy = rest
@@ -2336,7 +2341,7 @@ def test_mcp_named_bundle_is_not_overridden_by_cwd_knowledge():
 
 
 def test_mcp_named_path_without_root_index_updates_named_path_nested_files_unchanged():
-    """MCP named path with no root index.md updates the named path; nested knowledge/ stays (L204)."""
+    """MCP named path with no root index.md updates the named path; nested knowledge/ stays."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("mnd")
         new_desc = rest[0]
@@ -2384,7 +2389,7 @@ def test_mcp_named_path_without_root_index_updates_named_path_nested_files_uncha
             allowed_dates=_dates(today, utc_today_iso()),
             path_tokens=path_tokens_for(rel, named, ws.path),
         )
-        report_names_named_bundle(outcome.report_text, rel)
+        require_mcp_update_report(outcome, ident, mcp_bundle_dir(ws, rel))
         print("mcp named path updated named root; nested unchanged", flush=True)
 
 
@@ -2394,7 +2399,7 @@ def test_mcp_named_path_without_root_index_updates_named_path_nested_files_uncha
 
 
 def test_empty_identity_fails_without_successful_update():
-    """Empty identity fails without a successful update on CLI and MCP (L196)."""
+    """Empty identity fails without a successful update on CLI and MCP."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -2418,7 +2423,7 @@ def test_empty_identity_fails_without_successful_update():
 
 
 def test_absolute_identity_fails_without_successful_update():
-    """An absolute-path identity fails without a successful update on CLI and MCP (L196)."""
+    """An absolute-path identity fails without a successful update on CLI and MCP."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ab")
         new_desc, leaf = rest
@@ -2443,7 +2448,7 @@ def test_absolute_identity_fails_without_successful_update():
 
 
 def test_dotdot_identity_fails_and_does_not_write_outside_the_bundle():
-    """../outside and foo/../outside fail; nothing is written outside the bundle (L51, L196)."""
+    """../outside and foo/../outside fail; nothing is written outside the bundle."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -2452,9 +2457,9 @@ def test_dotdot_identity_fails_and_does_not_write_outside_the_bundle():
             ws, rel, ident, concept_type=typ, title=title, description=desc, body=body, extra=extra
         )
         assert_snapshot_helper_sees_write(ws, unique_tokens("snap")[0])
-        outside = ws.path / "outside.md"
-        nested_outside = ws.path / "outside"
-        for aimed in ("../outside", "foo/../outside"):
+        outside = ws.path / f"{_OUTSIDE_LEAF}.md"
+        nested_outside = ws.path / _OUTSIDE_LEAF
+        for aimed in (f"../{_OUTSIDE_LEAF}", f"foo/../{_OUTSIDE_LEAF}"):
             before_snap = snapshot_tree(ws.path)
             result = run_update(ws, aimed, rel, description=new_desc)
             require_update_failure(result)
@@ -2472,7 +2477,7 @@ def test_dotdot_identity_fails_and_does_not_write_outside_the_bundle():
 
 
 def test_leading_hyphen_identity_fails_without_successful_update():
-    """A leading-hyphen identity fails without a successful update on CLI and MCP (L196)."""
+    """A leading-hyphen identity fails without a successful update on CLI and MCP."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "hy")
         new_desc, leaf = rest
@@ -2497,7 +2502,7 @@ def test_leading_hyphen_identity_fails_without_successful_update():
 
 
 def test_cli_newline_cr_and_tab_identities_each_fail_without_successful_update():
-    """CLI newline, CR, and tab identities each fail without a successful update (L196)."""
+    """CLI newline, CR, and tab identities each fail without a successful update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "cl", "cr")
         new_desc, left, right = rest
@@ -2515,7 +2520,7 @@ def test_cli_newline_cr_and_tab_identities_each_fail_without_successful_update()
 
 
 def test_mcp_newline_cr_tab_and_nul_identities_each_are_tool_errors_and_write_nothing():
-    """MCP newline, CR, tab, and NUL identities fail and write nothing (L196)."""
+    """MCP newline, CR, tab, and NUL identities fail and write nothing."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ml", "mr")
         new_desc, left, right = rest
@@ -2568,7 +2573,7 @@ def test_mcp_newline_cr_tab_and_nul_identities_each_are_tool_errors_and_write_no
 
 
 def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_successful_update():
-    """Reserved index, nested index, root log, and root AGENTS fail; reserved files unchanged (L28, L196)."""
+    """Reserved index, nested index, root log, and root AGENTS fail; reserved files unchanged."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "rs")
         new_desc, nest = rest
@@ -2621,7 +2626,7 @@ def test_reserved_index_nested_index_root_log_and_root_agents_fail_without_succe
 
 
 def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_tool_errors_and_write_nothing():
-    """MCP reserved index / nested index / root log / root AGENTS fail and write nothing (L28, L196)."""
+    """MCP reserved index / nested index / root log / root AGENTS fail and write nothing."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "mr")
         new_desc, nest = rest
@@ -2660,7 +2665,7 @@ def test_mcp_reserved_index_nested_index_root_log_and_root_agents_are_tool_error
 
 
 def test_nested_log_and_agents_are_updatable():
-    """Nested log.md is not-found and is not rewritten; nested non-log.md and AGENTS.md rewrite (L196, L201)."""
+    """Nested log.md is not-found and is not rewritten; nested non-log.md and AGENTS.md rewrite."""
     with workspace() as ws:
         nest, typ, title, desc, body = unique_tokens("nldir", "nlty", "nltl", "nlds", "nlb")
         extra = _extras("nlxk1", "nlxv1", "nlxk2", "nlxv2")
@@ -2736,28 +2741,13 @@ def test_nested_log_and_agents_are_updatable():
         )
         load_error = run_update(ws, ghost, missing_dir, description=new_desc)
         require_update_failure(load_error)
-        nested_rem = class_remainder_after_identity(
-            combined_report(nested_log).replace(concept_filename(log_ident), ""),
-            paths,
-            log_ident,
+        require_update_not_found(
+            nested_log, log_ident, "update of a nested identity whose file is named log.md"
         )
-        nf_rem = class_remainder_after_identity(
-            combined_report(not_found).replace(concept_filename(ghost), ""),
-            paths,
-            ghost,
+        require_update_not_found(
+            not_found, ghost, "update of an identity not in the loaded concept set"
         )
-        load_rem = class_remainder_after_identity(
-            combined_report(load_error), paths, ghost
-        )
-        assert nested_rem != load_rem, (
-            "nested log.md update is not distinguishable from a load error "
-            f"after stripping paths and identity; remainder={nested_rem!r}"
-        )
-        assert nested_rem == nf_rem, (
-            "command-line update of a nested identity whose file is named "
-            "log.md is not the same not-found failure as an identity not in "
-            f"the loaded concept set; nested={nested_rem!r} not_found={nf_rem!r}"
-        )
+        require_update_load_failure(load_error, "update in a missing bundle directory")
         note_result, note_before_t, note_after_t = run_update_with_instants(
             ws, note_ident, rel, description=new_desc
         )
@@ -2810,7 +2800,7 @@ def test_nested_log_and_agents_are_updatable():
 
 
 def test_mcp_nested_log_and_agents_are_updatable():
-    """MCP nested log.md is not-found and is not rewritten; nested non-log.md and AGENTS.md rewrite (L196, L201)."""
+    """MCP nested log.md is not-found and is not rewritten; nested non-log.md and AGENTS.md rewrite."""
     with workspace() as ws:
         nest, typ, title, desc, body = unique_tokens("mldir", "mlty", "mltl", "mlds", "mlb")
         extra = _extras("mlxk1", "mlxv1", "mlxk2", "mlxv2")
@@ -2892,28 +2882,13 @@ def test_mcp_nested_log_and_agents_are_updatable():
             ws, ghost, description=new_desc, bundle=missing_dir, request_id=56
         )
         require_mcp_update_non_success(load_error)
-        nested_rem = class_remainder_after_identity(
-            nested_log.report_text.replace(concept_filename(log_ident), ""),
-            paths,
-            log_ident,
+        require_mcp_update_not_found(
+            nested_log, log_ident, "membundle_update of a nested identity whose file is named log.md"
         )
-        nf_rem = class_remainder_after_identity(
-            not_found.report_text.replace(concept_filename(ghost), ""),
-            paths,
-            ghost,
+        require_mcp_update_not_found(
+            not_found, ghost, "membundle_update of an identity not in the bundle"
         )
-        load_rem = class_remainder_after_identity(
-            load_error.report_text, paths, ghost
-        )
-        assert nested_rem != load_rem, (
-            "MCP nested log.md update is not distinguishable from a missing-"
-            f"bundle load failure after stripping; remainder={nested_rem!r}"
-        )
-        assert nested_rem == nf_rem, (
-            "Model Context Protocol update of a nested identity whose file is "
-            "named log.md is not the same not-found failure as an identity not "
-            f"in the loaded concept set; nested={nested_rem!r} not_found={nf_rem!r}"
-        )
+        require_mcp_update_load_failure(load_error, "membundle_update of a missing named bundle")
         note_outcome, note_before_t, note_after_t = mcp_update_with_instants(
             ws, note_ident, description=new_desc, bundle=rel, request_id=57
         )
@@ -2978,7 +2953,7 @@ def test_mcp_nested_log_and_agents_are_updatable():
 
 
 def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_tool_errors_and_write_nothing():
-    """MCP ../outside, absolute, empty, and leading-hyphen identities fail and write nothing (L196)."""
+    """MCP ../outside, absolute, empty, and leading-hyphen identities fail and write nothing."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "mx")
         new_desc, leaf = rest
@@ -2987,7 +2962,7 @@ def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_tool_errors_and_write_
             ws, rel, ident, concept_type=typ, title=title, description=desc, body=body, extra=extra
         )
         for request_id, aimed in enumerate(
-            ("../outside", f"/{leaf}", "", f"-{leaf}"), start=70
+            (f"../{_OUTSIDE_LEAF}", f"/{leaf}", "", f"-{leaf}"), start=70
         ):
             before_snap = snapshot_tree(ws.path)
             outcome = mcp_membundle_update(
@@ -3002,7 +2977,7 @@ def test_mcp_dotdot_absolute_empty_and_leading_hyphen_are_tool_errors_and_write_
 
 
 def test_escaping_symlink_write_is_refused():
-    """Write through a .md symlink whose target leaves the bundle is refused (L51)."""
+    """Write through a .md symlink whose target leaves the bundle is refused."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "sc")
         new_desc, secret_leaf = rest
@@ -3048,7 +3023,7 @@ def test_escaping_symlink_write_is_refused():
 
 
 def test_missing_identity_argument_is_non_success_usage_and_does_not_rewrite():
-    """membundle update with no identity argument is usage-class, unlike empty/reserved/not-found/load/success (L196)."""
+    """membundle update with no identity argument is usage-class, unlike empty/reserved/not-found/load/success."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "nf")
         new_desc, missing_id = rest
@@ -3063,7 +3038,7 @@ def test_missing_identity_argument_is_non_success_usage_and_does_not_rewrite():
         success, _before, _after = run_update_with_instants(
             ws, ident, rel, description=new_desc
         )
-        success_report = require_update_success(success)
+        require_update_success(success)
         empty = run_update(ws, "", rel, description=new_desc)
         require_update_failure(empty)
         reserved = run_update(ws, "index", rel, description=new_desc)
@@ -3073,21 +3048,19 @@ def test_missing_identity_argument_is_non_success_usage_and_does_not_rewrite():
         missing_dir = unique_tokens("noload")[0]
         load_error = run_update(ws, missing_id, missing_dir, description=new_desc)
         require_update_failure(load_error)
-        empty_report = combined_report(empty)
-        reserved_report = combined_report(reserved)
-        not_found_report = combined_report(not_found)
-        load_error_report = combined_report(load_error)
         before_snap = snapshot_tree(ws.path)
         missing = run_update(ws, None, None)
         require_update_failure(missing)
         usage_report = require_update_usage_failure(
             missing,
-            empty_report,
-            reserved_report,
-            not_found_report,
-            load_error_report,
-            success_report,
-            paths,
+            empty,
+            reserved,
+            not_found,
+            load_error,
+            success,
+            not_found_identity=missing_id,
+            success_identity=ident,
+            success_bundle=rel,
         )
         assert_no_new_concept_file(ws.path, before_snap, bundle_rel=".")
         assert_no_successful_rewrite(
@@ -3098,12 +3071,6 @@ def test_missing_identity_argument_is_non_success_usage_and_does_not_rewrite():
             seed_body=body,
             path_tokens=paths,
         )
-        usage_rem = _class_remainder(usage_report, paths)
-        empty_rem = _class_remainder(empty_report, paths)
-        reserved_rem = _class_remainder(reserved_report, paths)
-        not_found_rem = _class_remainder(not_found_report, paths)
-        load_rem = _class_remainder(load_error_report, paths)
-        success_rem = _class_remainder(success_report, paths)
         print("missing identity is usage-class and did not rewrite", flush=True)
         assert missing.returncode != 0, (
             f"update with a missing identity argument succeeded; "
@@ -3113,31 +3080,10 @@ def test_missing_identity_argument_is_non_success_usage_and_does_not_rewrite():
             "update with a missing identity argument produced empty combined "
             "streams"
         )
-        assert usage_rem != empty_rem, (
-            "missing-identity report is not distinguishable from empty-identity "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != reserved_rem, (
-            "missing-identity report is not distinguishable from reserved-index "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != not_found_rem, (
-            "missing-identity report is not distinguishable from not-found "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != load_rem, (
-            "missing-identity report is not distinguishable from a load error "
-            f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-        )
-        assert usage_rem != success_rem, (
-            "missing-identity report is not distinguishable from a live success "
-            f"report after stripping paths and generated covariates; "
-            f"remainder={usage_rem!r}"
-        )
 
 
 def test_mcp_missing_identity_is_tool_error_and_does_not_rewrite():
-    """MCP tools-call missing concept_id is a tool error, not a protocol error (L196, L265)."""
+    """MCP tools-call missing concept_id is a tool error, not a protocol error."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -3161,7 +3107,7 @@ def test_mcp_missing_identity_is_tool_error_and_does_not_rewrite():
 
 
 def test_missing_identity_in_bundle_is_not_found_and_does_not_create_a_file():
-    """Well-formed identity not in a loadable bundle is not-found and creates no file (L196, L201)."""
+    """Well-formed identity not in a loadable bundle is not-found and creates no file."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ghost")
         new_desc, ghost = rest
@@ -3182,18 +3128,14 @@ def test_missing_identity_in_bundle_is_not_found_and_does_not_create_a_file():
         assert_no_new_concept_file(ws.path, before_snap, bundle_rel=rel)
         load_error = run_update(ws, ghost, missing_dir, description=new_desc)
         require_update_failure(load_error)
-        nf_rem = class_remainder_after_identity(combined_report(not_found), paths, ghost)
-        load_rem = class_remainder_after_identity(combined_report(load_error), paths, ghost)
-        assert nf_rem != load_rem, (
-            "not-found report is not distinguishable from a missing-directory "
-            f"load error after stripping paths and identity; remainder={nf_rem!r}"
-        )
+        require_update_not_found(not_found, ghost, "update of an absent identity")
+        require_update_load_failure(load_error, "update in a missing bundle directory")
         _live_cli_rewrite(ws, rel)
         print("missing identity in bundle is not-found and created no file", flush=True)
 
 
 def test_mcp_missing_identity_in_bundle_is_tool_error_and_does_not_create_a_file():
-    """MCP missing identity does not succeed and does not create a file (L196, L201)."""
+    """MCP missing identity does not succeed and does not create a file."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ghost")
         new_desc, ghost = rest
@@ -3216,17 +3158,13 @@ def test_mcp_missing_identity_in_bundle_is_tool_error_and_does_not_create_a_file
             ws, ghost, description=new_desc, bundle=missing_dir, request_id=82
         )
         require_mcp_update_non_success(load_error)
-        nf_rem = class_remainder_after_identity(not_found.report_text, paths, ghost)
-        load_rem = class_remainder_after_identity(load_error.report_text, paths, ghost)
-        assert nf_rem != load_rem, (
-            "MCP not-found remainder is not distinguishable from MCP "
-            f"missing-bundle after stripping paths and identity; remainder={nf_rem!r}"
-        )
+        require_mcp_update_not_found(not_found, ghost, "membundle_update of an absent identity")
+        require_mcp_update_load_failure(load_error, "membundle_update of a missing named bundle")
         print("mcp missing identity failed and created no file", flush=True)
 
 
 def test_missing_bundle_directory_is_load_error_not_not_found():
-    """Missing bundle directory is a load error, distinguishable from not-found (L196)."""
+    """Missing bundle directory is a load error, distinguishable from not-found."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -3241,15 +3179,14 @@ def test_missing_bundle_directory_is_load_error_not_not_found():
         require_update_failure(not_found)
         load_error = run_update(ws, ident, missing_dir, description=new_desc)
         require_update_failure(load_error)
-        nf_rem = class_remainder_after_identity(combined_report(not_found), paths, ghost)
-        load_rem = class_remainder_after_identity(combined_report(load_error), paths, ident)
-        assert nf_rem != load_rem
+        require_update_not_found(not_found, ghost, "update of an absent identity")
+        require_update_load_failure(load_error, "update in a missing bundle directory")
         _live_cli_rewrite(ws, rel)
         print("missing bundle directory is load error not not-found", flush=True)
 
 
 def test_mcp_missing_bundle_is_tool_error_distinct_from_not_found():
-    """MCP named missing bundle is a load failure distinct from MCP not-found (L196)."""
+    """MCP named missing bundle is a load failure distinct from MCP not-found."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd", "ghost")
         new_desc, ghost = rest
@@ -3265,9 +3202,8 @@ def test_mcp_missing_bundle_is_tool_error_distinct_from_not_found():
             ws, ghost, description=new_desc, bundle=missing_dir, request_id=84
         )
         require_mcp_update_non_success(load_error)
-        nf_rem = class_remainder_after_identity(not_found.report_text, paths, ghost)
-        load_rem = class_remainder_after_identity(load_error.report_text, paths, ghost)
-        assert nf_rem != load_rem
+        require_mcp_update_not_found(not_found, ghost, "membundle_update of an absent identity")
+        require_mcp_update_load_failure(load_error, "membundle_update of a missing named bundle")
         print("mcp missing bundle is load failure distinct from not-found", flush=True)
 
 
@@ -3277,7 +3213,7 @@ def test_mcp_missing_bundle_is_tool_error_distinct_from_not_found():
 
 
 def test_cli_newline_in_each_of_title_description_and_actor_fails_without_successful_update():
-    """CLI newline in title, description, and actor each fails without a rewrite (L196)."""
+    """CLI newline in title, description, and actor each fails without a rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("bad")
         poison = rest[0] + "\n" + unique_tokens("nlx")[0]
@@ -3310,7 +3246,7 @@ def test_cli_newline_in_each_of_title_description_and_actor_fails_without_succes
 
 
 def test_cli_frontmatter_delimiter_in_each_of_title_description_and_actor_fails_without_successful_update():
-    """CLI three-dash delimiter in title, description, and actor each fails without a rewrite (L196)."""
+    """CLI three-dash delimiter in title, description, and actor each fails without a rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("bad")
         poison = rest[0] + "---" + unique_tokens("ddx")[0]
@@ -3343,7 +3279,7 @@ def test_cli_frontmatter_delimiter_in_each_of_title_description_and_actor_fails_
 
 
 def test_mcp_newline_in_each_of_title_and_description_is_tool_error_and_does_not_rewrite():
-    """MCP newline in title and description each fails and does not rewrite (L196)."""
+    """MCP newline in title and description each fails and does not rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("bad")
         poison = rest[0] + "\n" + unique_tokens("mnlx")[0]
@@ -3374,7 +3310,7 @@ def test_mcp_newline_in_each_of_title_and_description_is_tool_error_and_does_not
 
 
 def test_mcp_frontmatter_delimiter_in_each_of_title_and_description_is_tool_error_and_does_not_rewrite():
-    """MCP three-dash delimiter in title and description each fails without a rewrite (L196)."""
+    """MCP three-dash delimiter in title and description each fails without a rewrite."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("bad")
         poison = rest[0] + "---" + unique_tokens("mddx")[0]
@@ -3410,7 +3346,7 @@ def test_mcp_frontmatter_delimiter_in_each_of_title_and_description_is_tool_erro
 
 
 def test_structured_cli_still_rewrites_concept_files():
-    """Structured CLI success still rewrites the concept, listing, and Update bullet (L192, L202)."""
+    """Structured CLI success still rewrites the concept, listing, and Update bullet."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]
@@ -3448,7 +3384,7 @@ def test_structured_cli_still_rewrites_concept_files():
 
 
 def test_human_mode_still_rewrites_concept_files():
-    """Default human mode on a twin still rewrites the concept, listing, and Update (L192)."""
+    """Default human mode on a twin still rewrites the concept, listing, and Update."""
     with workspace() as ws:
         ident, typ, title, desc, body, extra, rest = _runtime_fields("nd")
         new_desc = rest[0]

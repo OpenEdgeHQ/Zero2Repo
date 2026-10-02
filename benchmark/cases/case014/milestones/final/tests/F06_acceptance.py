@@ -181,7 +181,7 @@ def _unwrapped_yaw(snaps, what):
 def _score_against_bias_corrected(yaw_unwrapped, corrected, earth, what):
     """Score unwrapped yaw on this run's bias-corrected integral.
 
-    L259 / L260: yaw is the integral of the bias-corrected z-rate and Earth
+    PRD: yaw is the integral of the bias-corrected z-rate and Earth
     rate is not corrected. The bias-corrected integral must fit the
     published yaw strictly better than the same integral shifted by the
     Earth-rate effect in either direction, i.e. the residual stays inside
@@ -230,7 +230,7 @@ def _duration_wrapped_away_from_zero(omega, *, min_s=110.0):
 
 
 def test_ars_constant_z_rate_integrates_yaw():
-    """L259 / L263: constant z-rate integrates as this run's bias-corrected integral.
+    """constant z-rate integrates as this run's bias-corrected integral.
 
     Roll and pitch are corrected from the accelerometer against gravity.
     No fraction of the raw rate-times-time and no fixed level band.
@@ -264,12 +264,12 @@ def test_ars_constant_z_rate_integrates_yaw():
             f"corrected={math.degrees(corrected)} err={math.degrees(err)} deg",
             flush=True,
         )
-        # L259: nearer level than the same z-rate on a tilted specific force.
+        # nearer level than the same z-rate on a tilted specific force.
         assert level_off < tilt_off, (
             "level specific force did not leave roll and pitch nearer level "
             "than the tilted twin"
         )
-        # L259 / L263: nearer this run's bias-corrected integral than a heading
+        # nearer this run's bias-corrected integral than a heading
         # that did not integrate. Not a fraction of the raw rate-times-time.
         assert abs(corrected) > 0.0, (
             "bias-corrected z-rate integral is not distinguishable from a heading that did not integrate"
@@ -290,7 +290,7 @@ def test_ars_constant_z_rate_integrates_yaw():
 
 
 def test_ars_earth_rate_is_not_corrected():
-    """L259: ARS yaw is the integral of the bias-corrected z-rate; Earth rate is not corrected.
+    """ARS yaw is the integral of the bias-corrected z-rate; Earth rate is not corrected.
 
     Roll and pitch are corrected from the accelerometer against gravity.
     No frozen level band: the level arm only has to sit nearer level than
@@ -332,7 +332,7 @@ def test_ars_earth_rate_is_not_corrected():
         f"wrapped_free={math.degrees(wrapped_free)} earth={math.degrees(earth)} deg",
         flush=True,
     )
-    # L259: nearer level than the same z-rate on a tilted specific force.
+    # nearer level than the same z-rate on a tilted specific force.
     # No frozen degree band.
     assert level_off < tilt_off, (
         "level specific force did not leave roll and pitch nearer level "
@@ -363,7 +363,7 @@ def test_ars_earth_rate_is_not_corrected():
 
 
 def test_ars_ignores_magnetometer_when_present():
-    """L259 / L263: roll and pitch come from the accelerometer against gravity.
+    """roll and pitch come from the accelerometer against gravity.
 
     The sentence names no degree band. The with-magnetometer arm only has
     to finish nearer level than the same z-rate on a tilted specific force.
@@ -421,13 +421,13 @@ def test_ars_ignores_magnetometer_when_present():
         f"level_off={math.degrees(level_off)} tilt_off={math.degrees(tilt_off)} deg",
         flush=True,
     )
-    # L259: nearer level than the same z-rate on a tilted specific force.
+    # nearer level than the same z-rate on a tilted specific force.
     # No frozen degree band.
     assert level_off < tilt_off, (
         "with-magnetometer level specific force did not leave roll and pitch "
         "nearer level than the tilted twin"
     )
-    # L259: the no-magnetometer arm is this run's bias-corrected z-rate
+    # the no-magnetometer arm is this run's bias-corrected z-rate
     # integral. A fraction of the raw rate times time, or of an angular
     # floor, is not that integral.
     corrected = bias_corrected_z_integral(none.snaps, omega)
@@ -469,7 +469,7 @@ def test_ars_ignores_magnetometer_when_present():
     assert between < to_mag, (
         "ARS with a magnetometer is nearer the magnetometer heading than the no-mag twin"
     )
-    # L263 on the suite path: the navigator pushes this magnetometer, then
+    # PRD on the suite path: the navigator pushes this magnetometer, then
     # the published suite ARS yaw is read. The unaided twin never pushes one.
     # A navigator with no magnetometer push cannot run the aided epoch.
     lat, lon, h = runtime_site()
@@ -559,7 +559,7 @@ def test_ars_ignores_magnetometer_when_present():
 
 
 def test_ars_yaw_integral_removes_estimated_z_bias():
-    """L259: the z-rate that is integrated has the estimated z-axis gyro bias removed."""
+    """the z-rate that is integrated has the estimated z-axis gyro bias removed."""
     omega = runtime_z_rate_rps()
     acc = SPECIFIC_FORCE_LEVEL
     learn_s = 4.0
@@ -591,7 +591,7 @@ def test_ars_yaw_integral_removes_estimated_z_bias():
         f"raw={math.degrees(raw)} deg",
         flush=True,
     )
-    # L259: the coast is the integral of (z-rate minus the published z-bias).
+    # the coast is the integral of (z-rate minus the published z-bias).
     # Nearer that integral than the raw z-rate integral. The bias need not
     # have crossed the midpoint, and the residual is not a fixed angle or
     # a fraction of the separation.
@@ -626,7 +626,7 @@ def test_ars_yaw_integral_removes_estimated_z_bias():
         )
     )
     _assert_init_ok(twin, "no-flag twin")
-    # L259: gyro bias is estimated online even when the zero-rotation flag
+    # gyro bias is estimated online even when the zero-rotation flag
     # is not raised. Score this twin on its own bias-corrected integral.
     # A frozen fraction of the raw rate-times-time is not that integral.
     twin_corrected = bias_corrected_z_integral(twin.snaps, omega)
@@ -658,7 +658,7 @@ def test_ars_yaw_integral_removes_estimated_z_bias():
 
 
 def test_ahrs_estimates_gyro_bias_online():
-    """L260: AHRS estimates gyro bias online the same way ARS does."""
+    """AHRS estimates gyro bias online the same way ARS does."""
     bx = runtime_z_rate_rps() * 0.08
     yaw_ref = runtime_att_yaw_rad()
     acc = SPECIFIC_FORCE_LEVEL
@@ -695,7 +695,7 @@ def test_ahrs_estimates_gyro_bias_online():
         f"truth={math.degrees(bx)} deg/s",
         flush=True,
     )
-    # L259–L260: estimated online. The zero-gyro twin is the contrast.
+    # estimated online. The zero-gyro twin is the contrast.
     # Nearer the injected rate than that twin is enough; crossing the
     # midpoint between zero and the injected rate is not required.
     assert abs(est - bx) < abs(est_still - bx), (
@@ -704,7 +704,7 @@ def test_ahrs_estimates_gyro_bias_online():
 
 
 def test_ahrs_earth_rate_is_not_corrected():
-    """L260: AHRS does not correct Earth rate. Same contrast as ARS, no magnetometer.
+    """AHRS does not correct Earth rate. Same contrast as ARS, no magnetometer.
 
     Roll and pitch are corrected from the accelerometer against gravity.
     No frozen level band: the level arm only has to sit nearer level than
@@ -743,7 +743,7 @@ def test_ahrs_earth_rate_is_not_corrected():
         f"corrected={math.degrees(corrected)} earth={math.degrees(earth)} deg",
         flush=True,
     )
-    # L259: nearer level than the same z-rate on a tilted specific force.
+    # nearer level than the same z-rate on a tilted specific force.
     # No frozen degree band.
     assert level_off < tilt_off, (
         "level specific force did not leave roll and pitch nearer level "
@@ -760,7 +760,7 @@ def test_ahrs_earth_rate_is_not_corrected():
 
 
 def test_ars_gnss_measurement_does_not_correct_yaw():
-    """L263: a GNSS measurement on the ARS instance does not correct published yaw."""
+    """a GNSS measurement on the ARS instance does not correct published yaw."""
     omega = runtime_z_rate_rps()
     duration_s = 4.0
     acc = SPECIFIC_FORCE_LEVEL
@@ -781,7 +781,7 @@ def test_ars_gnss_measurement_does_not_correct_yaw():
         y0 = bare.last().ars_att
         y1 = gnss.last().ars_att
         assert y0 is not None and y1 is not None, f"{kind}: suite ARS did not publish"
-        # L263: the no-GNSS arm is this run's bias-corrected z-rate integral.
+        # the no-GNSS arm is this run's bias-corrected z-rate integral.
         # A fraction of the raw rate times time, or of an angular floor, is not.
         bare_views = suite_ars_as_att(bare.snaps, f"{kind} ARS no GNSS")
         corrected = bias_corrected_z_integral(bare_views, omega)
@@ -841,7 +841,7 @@ def test_ahrs_persistent_heading_error_pulled_to_mag():
         f"err_ars={math.degrees(err_ars)} deg",
         flush=True,
     )
-    # L263 / L276: pulled toward the magnetic reference means strictly nearer
+    # pulled toward the magnetic reference means strictly nearer
     # that heading than the ARS twin. No degree window is frozen.
     assert err_ahrs < err_ars, (
         "AHRS yaw was not nearer that magnetometer heading than the ARS twin"
@@ -866,7 +866,7 @@ def _yaw_at(run, t_us, what):
 
 
 def test_ars_yaw_drifts_with_residual_z_bias():
-    """L276: ARS yaw moves with a residual z-bias; AHRS is pulled to the mag heading.
+    """ARS yaw moves with a residual z-bias; AHRS is pulled to the mag heading.
 
     The drift rate is not scored. A heading that stays put fails. The
     size of that move is not compared to the heading error AHRS still
@@ -894,7 +894,7 @@ def test_ars_yaw_drifts_with_residual_z_bias():
         f"ars_miss={math.degrees(ars_miss)}",
         flush=True,
     )
-    # L259 / L276: residual z-bias can stay small because the bias is
+    # residual z-bias can stay small because the bias is
     # estimated online. The move only has to be a move. It does not have
     # to exceed the heading error AHRS still has.
     assert moved > 0.0, (
@@ -908,7 +908,7 @@ def test_ars_yaw_drifts_with_residual_z_bias():
 
 
 def test_modes_stay_distinct_across_epochs():
-    """L258–L260, L263: mode is fixed per instance.
+    """mode is fixed per instance.
 
     The same magnetometer sample pulls AHRS yaw toward that heading and
     does not measurement-correct ARS. At each epoch AHRS is strictly
@@ -991,7 +991,7 @@ def test_ahrs_magnetic_disturbance_does_not_tilt_roll_pitch():
             angle_diff_rad(published, other)
         )
 
-    # L259: roll and pitch are corrected from the accelerometer against
+    # roll and pitch are corrected from the accelerometer against
     # gravity. Nearer that specific-force tilt than the attitude the run
     # started from. Pitch's tilt is the initial pitch, so its other side
     # is the magnetometer heading. No degree band is frozen.
@@ -1007,7 +1007,7 @@ def test_ahrs_magnetic_disturbance_does_not_tilt_roll_pitch():
     assert _nearer(pa, held_pitch, yaw_ref), (
         "ARS pitch sat on the magnetometer heading rather than the specific-force tilt"
     )
-    # L260: magnetic disturbances do not tilt roll/pitch. The disturbed arm
+    # magnetic disturbances do not tilt roll/pitch. The disturbed arm
     # stays on the clean arm rather than on the magnetometer heading.
     assert _nearer(rd, rc, yaw_ref), (
         "disturbed AHRS roll sat on the magnetometer heading rather than the clean arm"
@@ -1114,7 +1114,7 @@ def test_ahrs_yaw_magnetic_until_position_supplied():
         f"err_t={math.degrees(err_t)} err_t_as_mag={math.degrees(err_t_as_mag)} deg",
         flush=True,
     )
-    # L260: yaw stays magnetic until a geographic position and a decimal year
+    # yaw stays magnetic until a geographic position and a decimal year
     # are both supplied, and is true-north only after both are supplied.
     # Each incomplete arm is nearer magnetic north than true north; the
     # both-supplied arm is the reverse. No arrival window and no fraction
@@ -1134,7 +1134,7 @@ def test_ahrs_yaw_magnetic_until_position_supplied():
 
 
 def test_ahrs_persistent_error_pulled_to_true_north():
-    """L260 / L263: a persistent heading error is pulled toward the active reference.
+    """a persistent heading error is pulled toward the active reference.
 
     After a geographic position and a decimal year are both supplied, that
     reference is true north, so the pull sits nearer true north than
@@ -1172,7 +1172,7 @@ def test_ahrs_persistent_error_pulled_to_true_north():
         f"err_as_mag={math.degrees(err_as_mag)} err_mag={math.degrees(err_mag)}",
         flush=True,
     )
-    # L260 / L263: nearer the named north than the other one. A pull that
+    # nearer the named north than the other one. A pull that
     # is only just on that side still matches; 8° and 0.4 of declination
     # are not part of the sentence.
     assert err_true < err_as_mag, (
@@ -1230,7 +1230,7 @@ def test_supplying_position_steps_yaw_by_declination_without_bias_jump():
             f"y0={math.degrees(y0)} y1={math.degrees(y1)}",
             flush=True,
         )
-        # L260 / L276: the switching arm's yaw change is nearer the declination
+        # the switching arm's yaw change is nearer the declination
         # change than the non-switching twin's yaw change on the same update.
         # No fraction, floor, or multiple of the local declination is frozen.
         assert align < twin_align, (
@@ -1266,7 +1266,7 @@ def test_leveling_helper_zero_on_minus_g():
     assert abs(r1) > math.radians(REF_INIT_ERR_DEG), (
         "tilted specific force still reported near-zero roll"
     )
-    # L276: (0, 0, −g) is near-zero. L262's 0.2° is the 10 s filter's
+    # (0, 0, −g) is near-zero. PRD's 0.2° is the 10 s filter's
     # arrived roll and pitch, not this helper. 3° is that scenario's
     # initial error. A reading has left that neighborhood when it is
     # closer to zero than to the initial error (2.9° has not; 1° has).
@@ -1285,7 +1285,7 @@ def test_leveling_helper_zero_on_minus_g():
 
 
 def test_tilt_compensated_mag_heading_helper():
-    """L252: yaw from a tilt-compensated magnetometer sample.
+    """yaw from a tilt-compensated magnetometer sample.
 
     No degree window. The published heading only has to sit nearer the
     yaw the sample was built from than a heading that ignored the tilt.
@@ -1325,7 +1325,7 @@ def test_tilt_compensated_mag_heading_helper():
 
 
 def test_standalone_init_accepts_zero_attitude():
-    """L261 / L276: a zero initial attitude is accepted, not refused."""
+    """a zero initial attitude is accepted, not refused."""
     zero = (0.0, 0.0, 0.0)
     for scen, name in ((_ars(rpy=zero), "ARS"), (_ahrs(rpy=zero), "AHRS")):
         run = c_att_run(scen)
@@ -1441,7 +1441,7 @@ def test_nonfinite_gyro_acc_drops_epoch_counter_increases():
         assert following.n_invalid > accepted.n_invalid, (
             f"{name}: invalid-input counter did not increase"
         )
-        # L269: the following epoch proceeds. Score that move on this run's
+        # the following epoch proceeds. Score that move on this run's
         # bias-corrected integral of the following z-rate, nearer that integral
         # than a heading that did not move. No fraction of the raw product.
         assert math.isfinite(corrected) and abs(corrected) > 0.0, (
@@ -1605,7 +1605,7 @@ def _continuing_integral(anchor, later, omega, what):
 
 
 def test_backwards_timestamp_skips_epoch():
-    """L270: a backwards timestamp skips that epoch; later timestamps continue.
+    """a backwards timestamp skips that epoch; later timestamps continue.
 
     The forward epoch is a live baseline scored on this run's bias-corrected
     integral. The resume is scored on its own bias-corrected integral. The
@@ -1629,7 +1629,7 @@ def test_backwards_timestamp_skips_epoch():
     dy_fwd = angle_diff_rad(y_fwd, y_fwd_pad)
     corrected_fwd = (omega - bz_fwd) * dt_fwd
     to_fwd, still_fwd = yaw_separations(dy_fwd, corrected_fwd, 0.0)
-    # L270 live baseline: one forward epoch moved. Nearer this run's
+    # PRD live baseline: one forward epoch moved. Nearer this run's
     # bias-corrected integral than a heading that did not move. Not a
     # fraction of the raw rate times 10 ms.
     assert math.isfinite(corrected_fwd) and abs(corrected_fwd) > 0.0, (
@@ -1793,7 +1793,7 @@ def test_mag_fusion_skipped_for_unusable_fields_and_gimbal_lock():
         f"to_sample={math.degrees(to_sample)} to_init={math.degrees(to_init)} deg",
         flush=True,
     )
-    # L271: a usable heading is fused. Nearer that heading than the yaw
+    # a usable heading is fused. Nearer that heading than the yaw
     # this run started from. No arrival angle is frozen.
     assert to_sample < to_init, (
         "usable magnetometer left yaw nearer the initial heading than that sample's heading"
@@ -2108,7 +2108,7 @@ def test_explicit_zero_rotation_flag_fuses_gyro_bias():
         f"omega={math.degrees(omega)} deg/s",
         flush=True,
     )
-    # L259 / L264: the flag is opt-in. Flag-off yaw is the integral of the
+    # the flag is opt-in. Flag-off yaw is the integral of the
     # bias-corrected z-rate, so a run that has already removed part of the
     # z-bias is still correct. Do not freeze a fraction of the raw rate
     # times time. The direct fusion is the contrast below.
@@ -2161,7 +2161,7 @@ def _assert_attitude_solution_has_no_velocity(att, bias, att_vel, nav_vel, what,
 
 
 def test_suite_standstill_fuses_bias_and_attitude_has_no_velocity():
-    """L264: the suite raises zero-rotation from INS standstill and fuses gyro bias.
+    """the suite raises zero-rotation from INS standstill and fuses gyro bias.
 
     While roll and pitch are already available, the published attitude
     solution itself has no velocity. A zero GNSS speed raises the flag; a
@@ -2302,7 +2302,7 @@ def _suite_site():
 def _assert_suite_ars_yaw_follows_known_heading(y0, yp, yh, yaw, name):
     """No-heading yaw stays nearer 0; each known heading stays nearer that heading than 0.
 
-    L265 names yaw 0 unless a prescribed attitude or a static yaw hint was
+    PRD names yaw 0 unless a prescribed attitude or a static yaw hint was
     supplied. It freezes no degree window, so the arms are scored against
     each other.
     """
@@ -2332,7 +2332,7 @@ def _assert_suite_ars_yaw_follows_known_heading(y0, yp, yh, yaw, name):
 
 
 def test_suite_ars_starts_on_imu_alone():
-    """L265: suite ARS bootstraps roll and pitch from the first valid IMU.
+    """suite ARS bootstraps roll and pitch from the first valid IMU.
 
     That sentence names no degree band. The level IMU only has to leave
     published roll and pitch nearer level than the same suite entry fed a
@@ -2426,7 +2426,7 @@ def test_suite_ahrs_waits_for_first_mag_sample():
 
 
 def test_suite_publishes_ars_and_ahrs_together():
-    """L252: one suite run publishes the ARS instance and the AHRS instance together."""
+    """one suite run publishes the ARS instance and the AHRS instance together."""
     lat, lon, h = _suite_site()
     mag = body_mag_for_yaw(0.0, 0.0, runtime_att_yaw_rad(), (20.0, 0.0, 40.0))
     epochs = suite_imu_stream(duration_s=1.2, acc=SPECIFIC_FORCE_LEVEL, mag=mag)
@@ -2474,7 +2474,7 @@ def test_suite_ars_yaw_zero_unless_known_heading():
 
 
 # ---------------------------------------------------------------------------
-# Precision-restart watchdog (L265 / L276)
+# Precision-restart watchdog
 # ---------------------------------------------------------------------------
 #
 # Documented ahrs_config_t defaults of the watchdog (zero field -> default):
@@ -2682,7 +2682,7 @@ def _assert_suite_ahrs_p1(run, marks, what):
 
 
 def test_suite_rebootstrap_after_uninitialized():
-    """L265 / L276: accessors fail once a reported 1-sigma exceeds its threshold.
+    """accessors fail once a reported 1-sigma exceeds its threshold.
 
     First-start arms stay: suite ARS on the first valid IMU, suite AHRS once
     a magnetometer sample has been seen. Inside the watchdog warm-up a short

@@ -70,12 +70,10 @@ def unique_leaf(prefix: str) -> str:
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def stage_writable_sources(root: Path) -> Path:
@@ -208,12 +206,12 @@ def run_init(
     print(f"[F01] init extra_args={list(extra_args)!r} cwd={cwd!r}", flush=True)
     binary = _workdir_membundle()
     if binary is None:
-        # TEST-FIX(F01): upstream _harness.py:620 shows FileNotFoundError before init when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        # TEST-FIX(F01): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
         return _init_without_executable(ws, args, cwd)
     try:
         return ws.invoke(args, env_updates=env_updates, cwd=cwd, binary=binary)
     except FileNotFoundError:
-        # TEST-FIX(F01): upstream _harness.py:620 shows FileNotFoundError before init when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        # TEST-FIX(F01): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
         if binary.is_file() and os.access(binary, os.X_OK):
             raise
         return _init_without_executable(ws, args, cwd)
@@ -252,67 +250,106 @@ def names_membundle_and_version(text: str) -> bool:
     return has_format and has_version
 
 
-def require_init_success(result: RunResult) -> str:
-    """Success carrier: POSIX success plus a non-empty v0.2 report."""
-    report = combined_report(result)
+INIT_FAILURE_PREFIX = "Error initializing bundle: "
+
+
+def init_named_path(result: RunResult) -> str | None:
+    """The path argument this test passed to ``init`` (``None`` when omitted).
+
+    Read from the test's own argument vector, not from product output.
+    """
+    args = list(result.argv[2:])
+    if args and not args[0].startswith("-"):
+        return args[0]
+    return None
+
+
+def init_success_names_path(report: str, path: str) -> bool:
+    """Contract Output forms, ``init``: the one success line contains ``'<path>'``."""
+    return f"'{path}'" in report
+
+
+def require_init_success(
+    result: RunResult, expected_path: str | None = None
+) -> str:
+    """Success carrier: status 0 and the stated one-line success report.
+
+    Contract Output forms, ``init``: success prints exactly one line on
+    standard output that contains ``'<path>'`` (other wording free), and
+    nothing on standard error. PRD FP-01: the report states that an
+    MEMBUNDLE v0.2 bundle was initialized at the target path, so the line
+    also names the format and version. ``<path>`` is the named path; an
+    omit-path caller passes the default bundle path (``knowledge`` or ``.``)
+    it set up.
+    """
+    named = init_named_path(result)
+    path = named if named is not None else expected_path
+    if path is None:
+        raise HarnessError(
+            "omit-path init: caller must pass the expected default bundle path"
+        )
+    stdout = result.stdout_text
+    stderr = result.stderr_text
+    expected = f"'{path}'"
     print(
-        f"[F01] success-carrier exit={result.returncode} report={report!r}",
+        f"[F01] success-carrier exit={result.returncode} stdout={stdout!r} "
+        f"stderr={stderr!r} expected-path={expected!r}",
         flush=True,
     )
     if result.returncode != 0:
         raise AssertionError(
             f"init did not end successfully (exit {result.returncode}); "
-            f"report={report!r}"
+            f"stdout={stdout!r} stderr={stderr!r}"
         )
-    if not report:
-        raise AssertionError("init succeeded but reported nothing")
-    if not names_membundle_and_version(report):
+    if not stdout.endswith("\n") or stdout.count("\n") != 1:
         raise AssertionError(
-            "init success report does not name the format (membundle / "
-            "Open Bundle Format) and 0.2/v0.2: "
-            f"{report!r}"
+            f"init success output is not exactly one line: {stdout!r}"
         )
-    return report
+    if not init_success_names_path(stdout, path):
+        raise AssertionError(
+            f"init success line does not contain {expected!r}: {stdout!r}"
+        )
+    if not names_membundle_and_version(stdout):
+        raise AssertionError(
+            f"init success line does not name the format and version 0.2: {stdout!r}"
+        )
+    if stderr:
+        raise AssertionError(
+            f"init success wrote on standard error: {stderr!r}"
+        )
+    return stdout
 
 
 def require_init_failure(
     result: RunResult,
-    success_report: str,
-    path_tokens: Sequence[str],
+    success_report: str | None = None,
+    path_tokens: Sequence[str] = (),
 ) -> str:
-    """Failure carrier: non-success plus a report unlike the success report.
+    """Failure carrier: the stated ``init`` failure form.
 
-    After stripping generated covariates and *path_tokens*, a stable
-    difference from *success_report* must remain. Empty streams fail.
+    Contract Output forms, failure classes: ``init`` failure is status ``1``
+    with a standard-error line that begins ``Error initializing bundle: ``.
+    *success_report* and *path_tokens* are accepted for call compatibility
+    and are not read.
     """
-    report = combined_report(result)
+    del success_report, path_tokens
+    stderr = result.stderr_text
     print(
-        f"[F01] failure-carrier exit={result.returncode} report={report!r}",
+        f"[F01] failure-carrier exit={result.returncode} "
+        f"stdout={result.stdout_text!r} stderr={stderr!r}",
         flush=True,
     )
-    assert result.returncode != 0, (
-        f"init succeeded on an unwritable/uncreatable target; "
-        f"report={report!r}"
+    assert result.returncode == 1, (
+        f"init of an uncreatable target did not end with status 1 "
+        f"(exit {result.returncode}); stderr={stderr!r}"
     )
-    assert report, (
-        "init failed with empty combined streams; no failure report"
+    assert any(
+        line.startswith(INIT_FAILURE_PREFIX) for line in stderr.splitlines()
+    ), (
+        f"init failure has no standard-error line beginning "
+        f"{INIT_FAILURE_PREFIX!r}: {stderr!r}"
     )
-    fail_remainder = report_remainder_after_stripping_paths(
-        strip_generated_covariates(report), path_tokens
-    )
-    ok_remainder = report_remainder_after_stripping_paths(
-        strip_generated_covariates(success_report), path_tokens
-    )
-    print(
-        f"[F01] failure remainder={fail_remainder!r} "
-        f"success remainder={ok_remainder!r}",
-        flush=True,
-    )
-    assert fail_remainder != ok_remainder, (
-        "init failure report is not distinguishable from a successful "
-        f"init after stripping path tokens; remainder={fail_remainder!r}"
-    )
-    return report
+    return stderr
 
 
 def strip_generated_covariates(report: str) -> str:
@@ -512,7 +549,7 @@ def list_markdown_relative(bundle_dir: str | Path) -> list[str]:
 
 
 def concept_markdown_relative(bundle_dir: str | Path) -> list[str]:
-    """``.md`` paths that are not reserved documents (L28)."""
+    """``.md`` paths that are not reserved documents."""
     extra: list[str] = []
     for rel in list_markdown_relative(bundle_dir):
         name = Path(rel).name

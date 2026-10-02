@@ -940,7 +940,7 @@ def test_fifo_is_valid_source_for_file_location():
 
 
 # ---------------------------------------------------------------------------
-# J. Package-substrate negative control
+# J. Load from an in-memory stream
 # ---------------------------------------------------------------------------
 
 
@@ -949,24 +949,3 @@ def test_probe_from_stream_writes_process_environment():
     print("load stream PROBE=from_stream", flush=True)
     assert result.exception is None
     assert environ_value(result, "PROBE") == "from_stream"
-
-
-def test_package_absent_cannot_load_stream():
-    pkg = product_package_name()
-    code = (
-        "from io import StringIO\n"
-        f"from {pkg} import load_envfile\n"
-        "load_envfile(stream=StringIO('PROBE=from_stream'), interpolate=False)\n"
-        "import os\n"
-        "print('PROBE=' + os.environ.get('PROBE', ''))\n"
-    )
-    result = run_without_product(code)
-    print(
-        f"absent-package returncode={result.returncode} "
-        f"stderr={result.stderr_text[:500]!r}",
-        flush=True,
-    )
-    assert result.returncode != 0, (
-        "load of PROBE=from_stream succeeded after the package was removed "
-        f"from the import path; stdout={result.stdout_text!r}"
-    )

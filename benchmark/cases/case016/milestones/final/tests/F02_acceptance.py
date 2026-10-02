@@ -10,26 +10,13 @@ import pytest
 
 from _harness import workspace
 from F01_helpers import (
-    CORE_SLOTS,
-    bind_character_layer_slot,
-    binding,
-    metrics_from_report,
-    structured_report,
     AI_REGISTER,
     SCAN_CAP,
-    SHORT_FACTUAL,
-    SHORT_SLOP,
-    bind_core_metric_paths,
-    bind_invisible_count,
-    bind_window_mark,
-    empty_input_identity,
     invisible_count_of,
-    pad_human,
     proxy_sink,
     require_absent_finding,
     require_finding,
     require_no_traceback,
-    require_structured_failure,
     require_success_report,
     scan_path,
     scan_stdin,
@@ -47,13 +34,17 @@ from F02_helpers import (
     assert_extract_has_words,
     assert_no_markup,
     check_file,
-    empty_input_kind,
     extract_via_cleanup,
     guard_write,
+    nudge_score,
     pad_file_to_size,
-    readable_scores_0_100,
     require_binary_ledger_record,
-    require_over_cap_kilobyte_report,
+    require_cannot_read_error,
+    require_check_cannot_read,
+    require_check_not_a_file,
+    require_check_over_cap,
+    require_empty_input_error,
+    require_show_size_skip,
     runtime_token,
     score_in_check_reply,
     show_session,
@@ -76,82 +67,6 @@ from F02_helpers import (
     write_xlsm,
     write_zip_slop,
 )
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _bind_f02_metrics():
-    """Bind core metrics, the invisible count, and the zip-based window mark.
-
-    Each step records its own failure; a test that reads a failed slot
-    fails with that reason, and no test is skipped.
-    """
-    window_runs = None
-    over_raw = None
-    window_error = None
-    try:
-        at_chars = window_body(SCAN_CAP)
-        over_chars = window_body(SCAN_CAP + 1)
-        extra_chars = window_body(SCAN_CAP + 2)
-        with workspace() as ws:
-            write_docx(ws, "at.docx", at_chars)
-            write_docx(ws, "over.docx", over_chars)
-            write_docx(ws, "extra.docx", extra_chars)
-            write_docx(ws, "short.docx", slop_extract_body())
-            window_runs = (
-                scan_path(ws, "at.docx"),
-                scan_path(ws, "over.docx"),
-                scan_path(ws, "extra.docx"),
-                scan_path(ws, "short.docx"),
-            )
-        over_raw = metrics_from_report(structured_report(window_runs[1]))
-    except Exception as exc:  # noqa: BLE001 - re-raised in the window step
-        window_error = exc
-    with binding(*CORE_SLOTS):
-        fact = scan_stdin(SHORT_FACTUAL)
-        slop = scan_stdin(SHORT_SLOP)
-        if fact.returncode != 0:
-            raise AssertionError(
-                f"factual bind failed: exit {fact.returncode} stderr={fact.stderr_text!r}"
-            )
-        if slop.returncode != 0:
-            raise AssertionError(
-                f"slop bind failed: exit {slop.returncode} stderr={slop.stderr_text!r}"
-            )
-        _ff, f_metrics = require_success_report(
-            fact, input_chars=unicode_len(SHORT_FACTUAL)
-        )
-        _sf, s_metrics = require_success_report(
-            slop, input_chars=unicode_len(SHORT_SLOP)
-        )
-        none_text = " ".join(["lock"] * 39)
-        high_text = pad_human(300)
-        none_r = scan_stdin(none_text)
-        high_r = scan_stdin(high_text)
-        if none_r.returncode != 0 or high_r.returncode != 0:
-            raise AssertionError("confidence bind probes must succeed")
-        _nf, none_m = require_success_report(none_r, input_chars=unicode_len(none_text))
-        _hf, high_m = require_success_report(high_r, input_chars=unicode_len(high_text))
-        bind_core_metric_paths(
-            f_metrics,
-            s_metrics,
-            none_metrics=none_m,
-            high_conf_metrics=high_m,
-            scanned_metrics=f_metrics,
-            scanned_chars=unicode_len(SHORT_FACTUAL),
-            scanned_over_metrics=over_raw,
-        )
-    with binding("invisible"):
-        bind_character_layer_slot("invisible")
-    with binding("window_mark"):
-        if window_error is not None:
-            raise window_error
-        at_r, over_r, extra_r, short_r = window_runs
-        _af, at_m = require_success_report(at_r, input_chars=SCAN_CAP)
-        _of, over_m = require_success_report(over_r, input_chars=SCAN_CAP + 1)
-        _ef, extra_m = require_success_report(extra_r, input_chars=SCAN_CAP + 2)
-        _shf, short_m = require_success_report(short_r)
-        bind_window_mark(at_m, over_m, extra_m, short_m)
-    print("[F02] bound core metrics, invisible count, zip-based window mark", flush=True)
 
 
 def _score_file(ws, relpath: str) -> tuple[object, object, int]:
@@ -520,16 +435,11 @@ def test_code_only_notebook_fails_as_empty_extracted_prose():
     body = slop_extract_body()
     with workspace() as ws:
         write_notebook(ws, "code.ipynb", code_source=body)
-        path = str(ws.resolve("code.ipynb"))
         result = scan_path(ws, "code.ipynb")
         empty = scan_stdin("")
-    err = require_structured_failure(result)
-    empty_err = require_structured_failure(empty)
+    err = require_empty_input_error(result)
+    require_empty_input_error(empty)
     require_no_traceback(result)
-    empty_input_identity(
-        [empty_input_kind(err, path), empty_input_kind(empty_err)],
-        [],
-    )
     print(f"[F02] code-only notebook err={err!r}", flush=True)
     assert result.returncode != 0
 
@@ -537,16 +447,11 @@ def test_code_only_notebook_fails_as_empty_extracted_prose():
 def test_invalid_json_notebook_fails_as_empty_extracted_prose():
     with workspace() as ws:
         ws.write("bad.ipynb", "{this is not json")
-        path = str(ws.resolve("bad.ipynb"))
         result = scan_path(ws, "bad.ipynb")
         empty = scan_stdin("")
-    err = require_structured_failure(result)
-    empty_err = require_structured_failure(empty)
+    err = require_empty_input_error(result)
+    require_empty_input_error(empty)
     require_no_traceback(result)
-    empty_input_identity(
-        [empty_input_kind(err, path), empty_input_kind(empty_err)],
-        [],
-    )
     print(f"[F02] invalid json notebook err={err!r}", flush=True)
 
 
@@ -563,16 +468,11 @@ def test_invalid_json_notebook_fails_as_empty_extracted_prose():
 def test_malformed_notebook_cells_fail_as_empty_extracted_prose(payload):
     with workspace() as ws:
         ws.write("malformed.ipynb", json.dumps(payload))
-        path = str(ws.resolve("malformed.ipynb"))
         result = scan_path(ws, "malformed.ipynb")
         empty = scan_stdin("")
-    err = require_structured_failure(result)
-    empty_err = require_structured_failure(empty)
+    err = require_empty_input_error(result)
+    require_empty_input_error(empty)
     require_no_traceback(result)
-    empty_input_identity(
-        [empty_input_kind(err, path), empty_input_kind(empty_err)],
-        [],
-    )
     print(f"[F02] malformed notebook {payload!r} err={err!r}", flush=True)
 
 
@@ -586,16 +486,11 @@ def test_pdf_and_rtf_containing_slop_bytes_are_not_extracted_as_prose(rel, heade
     body = slop_extract_body()
     with workspace() as ws:
         ws.write(rel, header + body.encode("utf-8"))
-        path = str(ws.resolve(rel))
         result = scan_path(ws, rel)
         empty = scan_stdin("")
-    err = require_structured_failure(result)
-    empty_err = require_structured_failure(empty)
+    err = require_empty_input_error(result)
+    require_empty_input_error(empty)
     require_no_traceback(result)
-    empty_input_identity(
-        [empty_input_kind(err, path), empty_input_kind(empty_err)],
-        [],
-    )
     print(f"[F02] {rel} not prose err={err!r}", flush=True)
 
 
@@ -614,14 +509,10 @@ def test_guard_records_pdf_and_rtf_as_binary_on_the_ledger(rel, header):
     assert guard_bin.returncode == 0
     assert guard_md.returncode == 0
     assert show_result.returncode == 0
-    assert not readable_scores_0_100(bin_blob), (
-        f"guard scored {rel!r}; blob={bin_blob[:400]!r}"
-    )
+    assert bin_blob == "", f"guard nudged on {rel!r}: {bin_blob[:400]!r}"
     require_binary_ledger_record(show_blob, rel)
-    assert md_score in readable_scores_0_100(md_blob), (
-        f"in-cap slop Write produced no scoring nudge; "
-        f"detector={md_score} blob={md_blob[:400]!r}"
-    )
+    assert md_blob, "in-cap slop Write produced no scoring nudge"
+    assert nudge_score(md_blob, "slop.md") == md_score
     print(
         f"[F02] guard {rel} exit={guard_bin.returncode} "
         f"show_len={len(show_blob)} md_nudge_len={len(md_blob)}",
@@ -633,11 +524,9 @@ def test_non_zip_docx_fails_structured_without_traceback():
     with workspace() as ws:
         ws.write("fake.docx", b"PK\x03 truncated-not-a-zip")
         result = scan_path(ws, "fake.docx")
-    err = require_structured_failure(result)
+    err = require_cannot_read_error(result)
     require_no_traceback(result)
     print(f"[F02] non-zip docx err={err!r}", flush=True)
-    assert result.returncode != 0
-    assert err
 
 
 def test_zip_with_no_extractable_prose_fails_as_empty_input():
@@ -645,16 +534,11 @@ def test_zip_with_no_extractable_prose_fails_as_empty_input():
         empty_zip = ws.resolve("empty.docx")
         with zipfile.ZipFile(empty_zip, "w") as zf:
             zf.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
-        path = str(empty_zip)
         result = scan_path(ws, "empty.docx")
         empty = scan_stdin("")
-    err = require_structured_failure(result)
-    empty_err = require_structured_failure(empty)
+    err = require_empty_input_error(result)
+    require_empty_input_error(empty)
     require_no_traceback(result)
-    empty_input_identity(
-        [empty_input_kind(err, path), empty_input_kind(empty_err)],
-        [],
-    )
     print(f"[F02] empty zip err={err!r}", flush=True)
 
 
@@ -774,25 +658,20 @@ def _check_agrees_with_detector(ws, relpath: str, *, floor: int | None) -> tuple
     return det_score, blob
 
 
-def _cannot_read_check_reply(ws) -> str:
+def _cannot_read_and_not_a_file_replies(ws) -> None:
+    """Contrast arms: cannot-read and not-a-file are their own stated replies."""
     missing = "absent.md"
     result, blob = check_file(ws, missing)
     assert result.returncode == 0
-    assert blob.strip(), "cannot-read check reply is empty"
-    dest = str(ws.resolve(missing))
-    cleaned = blob.replace(dest, "").replace(missing, "")
+    require_check_cannot_read(blob, str(ws.resolve(missing)))
     ws.mkdir("not-a-file")
     dir_result, dir_blob = check_file(ws, "not-a-file")
     assert dir_result.returncode == 0
-    assert dir_blob.strip(), "not-a-file check reply is empty"
-    dir_dest = str(ws.resolve("not-a-file"))
-    dir_cleaned = dir_blob.replace(dir_dest, "").replace("not-a-file", "")
+    require_check_not_a_file(dir_blob, str(ws.resolve("not-a-file")), "not-a-file")
     print(
-        f"[F02] cannot-read check blob_len={len(blob)} "
-        f"not-a-file blob_len={len(dir_blob)}",
+        f"[F02] cannot-read reply={blob!r} not-a-file reply={dir_blob!r}",
         flush=True,
     )
-    return cleaned + "\n" + dir_cleaned
 
 
 def test_check_scores_at_plain_text_cap_and_refuses_one_byte_over():
@@ -808,17 +687,15 @@ def test_check_scores_at_plain_text_cap_and_refuses_one_byte_over():
         _hf, _hm, human_det = _score_file(ws, "human.md")
         human_result, human_blob = check_file(ws, "human.md")
         over_result, over_blob = check_file(ws, "over.md")
-        unlike = _cannot_read_check_reply(ws)
+        _cannot_read_and_not_a_file_replies(ws)
     assert human_result.returncode == 0
     assert over_result.returncode == 0
     human_check = score_in_check_reply(human_blob, expected=human_det)
     assert human_check == human_det
     assert human_check < 40
-    require_over_cap_kilobyte_report(
-        over_blob, cap_bytes=PLAIN_CAP, unlike=unlike
-    )
+    require_check_over_cap(over_blob, cap_bytes=PLAIN_CAP)
     print(
-        f"[F02] plain cap at={at_score} human={human_check} over_reply_len={len(over_blob)}",
+        f"[F02] plain cap at={at_score} human={human_check} over_reply={over_blob!r}",
         flush=True,
     )
 
@@ -833,16 +710,11 @@ def test_check_scores_at_archive_cap_and_refuses_one_byte_over():
         at_score, _at_blob = _check_agrees_with_detector(ws, "at.docx", floor=40)
         _of, _om, over_det = _score_file(ws, "over.docx")
         over_result, over_blob = check_file(ws, "over.docx")
-        unlike = _cannot_read_check_reply(ws)
+        _cannot_read_and_not_a_file_replies(ws)
     assert over_result.returncode == 0
-    require_over_cap_kilobyte_report(
-        over_blob,
-        cap_bytes=ARCHIVE_CAP,
-        unlike=unlike,
-        absent_score=over_det,
-    )
+    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP)
     print(
-        f"[F02] archive cap at={at_score} over_reply_len={len(over_blob)}",
+        f"[F02] archive cap at={at_score} over_det={over_det} over_reply={over_blob!r}",
         flush=True,
     )
 
@@ -860,16 +732,12 @@ def test_check_scores_notebook_between_plain_text_and_archive_cap_and_refuses_on
         mid_score, _mid_blob = _check_agrees_with_detector(ws, "mid.ipynb", floor=40)
         _of, _om, over_det = _score_file(ws, "over.ipynb")
         over_result, over_blob = check_file(ws, "over.ipynb")
-        unlike = _cannot_read_check_reply(ws)
+        _cannot_read_and_not_a_file_replies(ws)
     assert over_result.returncode == 0
-    require_over_cap_kilobyte_report(
-        over_blob,
-        cap_bytes=ARCHIVE_CAP,
-        unlike=unlike,
-        absent_score=over_det,
-    )
+    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP)
     print(
-        f"[F02] notebook mid bytes={size} score={mid_score} over_reply_len={len(over_blob)}",
+        f"[F02] notebook mid bytes={size} score={mid_score} over_det={over_det} "
+        f"over_reply={over_blob!r}",
         flush=True,
     )
 
@@ -884,34 +752,26 @@ def test_guard_over_cap_write_exits_without_scoring_nudge():
         _of, _om, det_score = _score_file(ws, "over.md")
         _af, _am, in_score = _score_file(ws, "at.md")
         assert in_score > 40
+        assert det_score > 40
         guard_over, over_guard_blob = guard_write(ws, "over.md")
         show_result, show_blob = show_session(ws)
-        unlike = _cannot_read_check_reply(ws)
+        _cannot_read_and_not_a_file_replies(ws)
         check_result, check_blob = check_file(ws, "over.md")
         guard_in, in_guard_blob = guard_write(ws, "at.md")
     assert guard_over.returncode == 0
     assert guard_in.returncode == 0
     assert show_result.returncode == 0
     assert check_result.returncode == 0
-    assert in_score in readable_scores_0_100(in_guard_blob), (
-        f"in-cap slop Write produced no scoring nudge; "
-        f"detector={in_score} blob={in_guard_blob[:400]!r}"
-    )
-    assert det_score not in readable_scores_0_100(over_guard_blob)
-    assert not readable_scores_0_100(over_guard_blob), (
+    assert in_guard_blob, "in-cap slop Write produced no scoring nudge"
+    assert nudge_score(in_guard_blob, "at.md") == in_score
+    assert over_guard_blob == "", (
         f"over-cap Write still carried a scoring nudge: {over_guard_blob[:400]!r}"
     )
-    assert "over.md" in show_blob
-    require_over_cap_kilobyte_report(
-        show_blob, cap_bytes=PLAIN_CAP
-    )
-    require_over_cap_kilobyte_report(
-        check_blob, cap_bytes=PLAIN_CAP, unlike=unlike
-    )
+    require_show_size_skip(show_blob, "over.md", cap_bytes=PLAIN_CAP)
+    require_check_over_cap(check_blob, cap_bytes=PLAIN_CAP)
     print(
         f"[F02] guard over-cap exit={guard_over.returncode} "
-        f"nudge_len={len(over_guard_blob)} in_nudge_len={len(in_guard_blob)} "
-        f"show_len={len(show_blob)} check_len={len(check_blob)}",
+        f"in_nudge_len={len(in_guard_blob)} show={show_blob!r} check={check_blob!r}",
         flush=True,
     )
 
@@ -947,11 +807,9 @@ def test_guard_leaves_source_code_extension_alone(ext):
         guard_src, src_blob = guard_write(ws, rel)
     assert guard_md.returncode == 0
     assert guard_src.returncode == 0
-    assert md_score in readable_scores_0_100(md_blob), (
-        f"in-cap slop Write produced no scoring nudge; "
-        f"detector={md_score} blob={md_blob[:400]!r}"
-    )
-    assert not readable_scores_0_100(src_blob), (
+    assert md_blob, "in-cap slop Write produced no scoring nudge"
+    assert nudge_score(md_blob, "slop.md") == md_score
+    assert src_blob == "", (
         f"source-code Write of {rel!r} produced a scoring nudge: "
         f"{src_blob[:400]!r}"
     )
