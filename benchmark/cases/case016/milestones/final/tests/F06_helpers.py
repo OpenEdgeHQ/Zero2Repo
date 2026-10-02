@@ -933,7 +933,8 @@ def strip_tokens(text: str, tokens: Sequence[object]) -> str:
 
 def star_patterns(text: str) -> list[str]:
     found: list[str] = []
-    for raw in re.findall(r"\S*\*\S*", text):
+    # A glob list may be space-, comma-, or bracket-delimited.
+    for raw in re.findall(r"[^\s,\[\]]*\*[^\s,\[\]]*", text):
         token = raw.strip("`'\"),]")
         if token:
             found.append(token)

@@ -998,17 +998,29 @@ def test_progress_bar_label_once_without_terminal_hidden_prints_nothing():
 
     live = _dispatch(_cmd(shown), [])
     quiet = _dispatch(_cmd(hidden), [])
-    print(f"label-once={live.stdout_text!r} hidden={quiet.stdout_text!r}", flush=True)
+    print(
+        f"label-once={live.stdout_text!r} err={live.stderr_text!r} "
+        f"hidden={quiet.stdout_text!r} hidden-err={quiet.stderr_text!r}",
+        flush=True,
+    )
     require_success_marker_present(live, greeting)
     require_success_marker_present(quiet, greeting)
     assert labeled_stdout_field(live, "N:") == "3"
     assert labeled_stdout_field(quiet, "N:") == "3"
     shown_text = _stdout(live)
     assert shown_text.count(label) == 1, (
-        f"no-terminal label was not printed once; stdout={shown_text!r}"
+        f"no-terminal label was not printed once on standard output; "
+        f"stdout={shown_text!r} stderr={live.stderr_text!r}"
+    )
+    assert label not in (live.stderr_text or ""), (
+        f"no-terminal label also reached standard error; stderr={live.stderr_text!r}"
     )
     assert label not in _stdout(quiet), (
         f"explicitly hidden bar still printed the label; stdout={quiet.stdout_text!r}"
+    )
+    assert label not in (quiet.stderr_text or ""), (
+        f"explicitly hidden bar printed the label on standard error; "
+        f"stderr={quiet.stderr_text!r}"
     )
 
 

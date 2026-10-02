@@ -32,7 +32,7 @@ This document is the shell of the Signtoken library: the entries a caller import
 - `digest_method` — a hash constructor from `hashlib` (for example `hashlib.sha1`); when omitted or `None`, the signer type’s `default_digest_method`.
 - `algorithm` — an algorithm **instance** (`HMACAlgorithm(...)` or `NoneAlgorithm()`); when omitted or `None`, HMAC with the signer’s digest.
 - Values to sign are `str` or `bytes`; tokens passed to recovery/load may be `str` or `bytes`.
-- **Clock input.** Timestamped helpers read the system clock (`time.time()`) at each call.
+- **Clock input.** Timestamped helpers read the system wall clock as a Unix-epoch number through the Python standard library (`time.time` or `time.time_ns`) at each call; which of the two is used, and whether it is looked up on the `time` module or imported by name, is the implementer’s choice. No other time source is used.
 
 ## Token forms
 

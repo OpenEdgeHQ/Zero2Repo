@@ -63,9 +63,11 @@ _DOTTED_VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)*")
 
 # Version identity adjacent to a Git-Orbulk product name. Does not take a
 # dotted token from Git's own version line or a Go runtime version that
-# merely shares the same banner.
+# merely shares the same banner. Adjacency never crosses a line break: a
+# product-name mention at the end of one line is not adjacent to a dotted
+# token on the next line (such as Git's own version line in ``env``).
 _IDENTITY_NEAR_PRODUCT_RE = re.compile(
-    r"git[\s\-]*orbulk[^\d]{0,32}(" + _DOTTED_VERSION_RE.pattern + r")",
+    r"git[ \t\-]*orbulk[^\d\r\n]{0,32}(" + _DOTTED_VERSION_RE.pattern + r")",
     re.IGNORECASE,
 )
 
@@ -520,15 +522,34 @@ _PUSHURL_ECHO = re.compile(
 )
 
 
-def _drop_pushurl_echo_lines(report: str) -> str:
-    """Drop configuration-echo lines that only restate a *pushurl= value.
+# Upload-side marker word on a report line, outside any URL text. The
+# Contract lets ``env`` also present an upload endpoint on a line that
+# carries the word ``push`` or ``upload``; the endpoint line never does.
+# Case is free; the word may also lead a camel-case or key spelling
+# (``PushEndpoint``, ``lfs.pushurl``, ``remote.<r>.lfspushurl``).
+_UPLOAD_SIDE_WORD = re.compile(
+    r"(?<![A-Za-z0-9])(?i:lfs)?(?i:push(?:url)?|upload)(?![a-z0-9])"
+)
 
-    Those lines are not a dedicated would-use-server indication. Do not
+
+def _is_upload_side_line(line: str) -> bool:
+    """True when *line* (URLs removed) names the push/upload side."""
+    outside_urls = _HTTP_URL_RE.sub(" ", line)
+    return bool(_UPLOAD_SIDE_WORD.search(outside_urls))
+
+
+def _drop_pushurl_echo_lines(report: str) -> str:
+    """Drop push-URL echoes and upload-endpoint lines from the report.
+
+    A configuration echo that only restates a *pushurl= value, and a line
+    that presents the upload endpoint, are not the endpoint line. Do not
     drop ordinary ``*.url=`` lines: those may be the real endpoint.
     """
     kept: list[str] = []
     for line in report.splitlines():
         if _PUSHURL_ECHO.search(line.strip()):
+            continue
+        if _is_upload_side_line(line):
             continue
         kept.append(line)
     return "\n".join(kept)
@@ -10274,6 +10295,11 @@ def _fpath_zsh_inner_setup() -> str:
 setopt zle
 setopt no_aliases no_beep no_list_beep
 unsetopt prompt_cr prompt_sp
+# List candidates even when zsh first inserts an unambiguous common prefix
+# (a typed "-" that every flag candidate extends to "--"); without this,
+# such a completion inserts the prefix and shows no list.
+setopt auto_list
+unsetopt list_ambiguous
 PROMPT='---ZSHPROMPT---'
 RPROMPT=
 PROMPT2=

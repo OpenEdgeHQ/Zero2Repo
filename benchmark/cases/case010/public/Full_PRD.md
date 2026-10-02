@@ -197,7 +197,7 @@ LINGORA’s **recommended** tagger for English and for Russian is a separately p
 - **Unigram tagger.** Each word seen in training receives the tag it was seen with most often in training. Ties are broken in the implementer's choice of way. A word never seen in training receives no tag.
 - **Regular-expression tagger.** Rules are tried in the caller's order. A token receives the tag of the first rule whose pattern matches the token starting at its first character. A token no rule matches receives no tag.
 - **Backoff.** A backoff tagger is consulted only for tokens the primary tagger leaves without a tag. Tokens the primary tagger tagged keep their tags.
-- **Recommended English tagger.** It is the greedy averaged perceptron part-of-speech tagger published as *textblob-aptagger* (M. Honnibal, 2013), with that tagger's feature templates, word normalisation and sentence-boundary context. It reads its weights, tag dictionary and classes from the packaged English resource and returns the Penn Treebank tags that the packaged model assigns.
+- **Recommended English tagger.** It is the greedy averaged perceptron part-of-speech tagger published as *textblob-aptagger* (M. Honnibal, 2013), with that tagger's feature templates, word normalisation and sentence-boundary context. It reads its weights, tag dictionary and classes from the packaged English resource and returns the Penn Treebank tags that the packaged model assigns. The whole token list is tagged as one sentence, from left to right, and the tags already assigned to earlier tokens are context for later ones.
 - **Recommended Russian tagger.** It is the same algorithm reading the packaged Russian resource, and returns the model's Russian National Corpus tags.
 - **Universal tagset mapping.**
   - English tags are mapped with the packaged English Penn Treebank → universal table (the universal tagset of Petrov, Das and McDonald, 2012).
@@ -312,7 +312,7 @@ These metrics are pure functions of the arguments the caller supplies. They do n
 - **BLEU.** It is the standard sentence-level BLEU score (Papineni et al., 2002):
   - Each n-gram order has a modified precision: candidate n-gram counts are clipped by the maximum count of that n-gram in any one reference.
   - The precisions are combined as a geometric mean weighted by the caller's weights, one weight per order starting from unigrams. The default is equal weights on unigrams through 4-grams.
-  - The result is multiplied by the brevity penalty, computed from the reference length closest to the candidate length.
+  - The result is multiplied by the brevity penalty, computed from the reference length closest to the candidate length (the shorter one when two are equally close).
   - Tokens are compared exactly as given.
   - Without a smoothing function, the score is 0 when the candidate has no unigram match. When any other weighted order has no match (including an order longer than the candidate), the score is 0 or negligibly close to 0.
 

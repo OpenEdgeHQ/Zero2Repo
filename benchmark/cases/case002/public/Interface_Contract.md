@@ -156,9 +156,9 @@ Report forms (`<PATH>` is the path as given to `--file`, or the default path; `<
 
 **List formats** (`FORMAT` is `simple`, `json`, `shell`, or `export`; names in sorted order):
 
-- `simple` — one line per name that has a value: `<NAME>=<VALUE>`, value as parsed, no added quoting.
+- `simple` — one line per name, except names with no value (a name whose value is the empty string is included): `<NAME>=<VALUE>`, value as parsed, no added quoting.
 - `json` — one JSON object whose keys are all names, in sorted order, each mapped to its value as a JSON string or to `null` for a no-value name. It is pretty-printed: spread over several lines with indentation (indent width is the implementer’s choice), never the compact single-line encoding.
-- `shell` — one line per name that has a value: `<NAME>=<QUOTED>`, where `<QUOTED>` is the value quoted for a POSIX shell (the quoting style is the implementer’s choice, so long as a POSIX `sh` assignment of that line yields exactly the value).
+- `shell` — one line per name, except names with no value (a name whose value is the empty string is included): `<NAME>=<QUOTED>`, where `<QUOTED>` is the value quoted for a POSIX shell (the quoting style is the implementer’s choice, so long as a POSIX `sh` assignment of that line yields exactly the value).
 - `export` — the `shell` line prefixed with `export ` (the word and one space).
 
 **`run`.** `--override` / `--no-override` and an optional `--` come before `COMMAND`; every token from `COMMAND` on is passed to the child unchanged. The child is started with the program’s environment plus the selected bindings, and `envfile` exits with the child’s status. Failure forms:

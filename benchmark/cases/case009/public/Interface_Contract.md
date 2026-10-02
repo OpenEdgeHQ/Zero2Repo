@@ -25,7 +25,8 @@
 - `version` writes on standard output a line that contains `git-orbulk/<version>`, where `<version>` is this build's version as dot-separated decimal components (at least `<major>.<minor>`). The rest of the line is free.
 - `env` writes on standard output, one fact per line:
   - the same `git-orbulk/<version>` line that `version` prints;
-  - for the default remote, a line carrying the endpoint URL that would be used for it; for every other remote, a line carrying that remote's name and its endpoint URL. The endpoint is an `http://` or `https://` URL. Apart from the remote's own Git URL, no other URL appears on that line. The label and layout of the line are free;
+  - for the default remote, a line carrying the endpoint URL that would be used for it; for every other remote, a line carrying that remote's name and its endpoint URL. The endpoint is an `http://` or `https://` URL. Apart from the remote's own Git URL, no other URL appears on that line, and apart from the remote’s name and its Git URL, the line does not carry the word `push` or `upload`. The label and layout of the line are free;
+  - optionally, an upload (push) endpoint; any line that presents one or echoes a push-URL setting carries the word `push` or `upload` (case free; the word may also lead a camel-case or key spelling, such as `lfs.pushurl`);
   - a line for each of `filter.lfs.process`, `filter.lfs.smudge`, and `filter.lfs.clean` that carries the key's effective value verbatim (empty when the key is unset);
   - further facts (directories, transfer, recentness, prune, storage, and agent settings), in a layout the implementer chooses.
 
@@ -54,6 +55,7 @@ Keys are read from every Git configuration file and, for the keys marked `.lfsco
 | `lfs.transfer.maxretries` | integer | retry count (FP-07) | no |
 | `lfs.transfer.maxretrydelay` | integer seconds | delay between retries (FP-07) | no |
 | `lfs.dialtimeout` / `lfs.tlstimeout` / `lfs.activitytimeout` / `lfs.keepalive` | integer seconds | HTTP timeouts (FP-07) | no |
+| `http.sslverify` | boolean (default `true`) | TLS certificate verification of endpoint requests (FP-07) | no |
 | `lfs.fetchrecentrefsdays` / `lfs.fetchrecentcommitsdays` | integer days | recentness window (FP-08, FP-12) | no |
 | `lfs.fetchrecentalways` | boolean | always fetch recent (FP-08) | no |
 | `lfs.pruneoffsetdays` | integer days | prune offset (FP-12) | no |
@@ -91,7 +93,7 @@ Booleans are compared case-insensitively. Truthy: `true`, `1`, `on`, `yes`, `t`.
 - **Quarantine.** `fsck` moves a hash-mismatched object file to `<git-dir>/lfs/bad/<oid>`.
 - **Logs.** Stored logs are files under `<git-dir>/lfs/` (subdirectory free); each file's name is the log name that `logs` lists.
 - **Hooks.** `pre-push`, `post-checkout`, `post-commit`, `post-merge` in the hooks directory in use (`<git-dir>/hooks`, or `core.hooksPath`). Each is an executable shell script that runs `git orbulk <hook-name> "$@"`; the remaining text is free.
-- **`.gitattributes` tracking line.** `<pattern> filter=lfs diff=lfs merge=lfs -text`, followed by ` lockable` when lockable is requested. With `--filename`, glob metacharacters in `<pattern>` are escaped with a backslash. An excluded-pattern line is `<pattern> !filter` or `<pattern> -filter` (other attributes on the line free). Attribute files are written without the executable bit.
+- **`.gitattributes` tracking line.** `<pattern> filter=lfs diff=lfs merge=lfs -text`, followed by ` lockable` when lockable is requested. With `--filename`, glob metacharacters in `<pattern>` are escaped with a backslash. An excluded-pattern line is `<pattern> !filter`, `<pattern> -filter`, or `<pattern> filter=` (empty value) (other attributes on the line free). Attribute files are written without the executable bit.
 
 ### Pointer document
 
@@ -209,7 +211,7 @@ Each entry lists its options and positional arguments. Every printed text not de
 - The Git merge-driver command line is `git orbulk merge-driver --ancestor %O --current %A --other %B --marker-size %L --output %A`. On success the pointer of the merged content is written to the `--output` file.
 
 #### `migrate <info|import|export> [<path>…]`
-- `--include=<patterns>`, `--exclude=<patterns>`, `--include-ref=<ref>`, `--exclude-ref=<ref>`, `--everything`, `--yes`.
+- `--include=<patterns>`, `--exclude=<patterns>`, `--include-ref=<ref>`, `--exclude-ref=<ref>`, `--everything`, `--yes`. `<ref>` is a full ref name or a short local branch name.
 - `info`: `--pointers=<follow|ignore|no-follow>`. Writes one line per file type on standard output naming the type (for example its extension pattern) and carrying the total size and the file count as separate figures (order, units, and layout free).
 - `import`: `--fixup`, `--no-rewrite` (positional `<path>…` are the paths to convert), `--skip-fetch`.
 

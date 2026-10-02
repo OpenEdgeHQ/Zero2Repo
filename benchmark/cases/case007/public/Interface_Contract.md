@@ -82,7 +82,7 @@ TOTP(<base32 secret>, digits=<default>, digest=<default>, name=<text>, issuer=<t
 helper.now() -> <code>
 ```
 
-- No arguments. The current instant is read from the process clock by calling `time.time` or `datetime.datetime.now`, each looked up as an attribute of its module (`time`, `datetime.datetime`) at call time, never bound at import; the same holds wherever an instant is omitted below.
+- No arguments. The current instant is read from the process clock, at the time of the call, through one of the Python standard-library wall-clock functions `time.time`, `time.time_ns`, `datetime.datetime.now`, `datetime.datetime.utcnow` or `datetime.datetime.today` (whether it is looked up on its module at call time or a name for it was imported at module import); the same holds wherever an instant is omitted below.
 
 ```
 helper.at(<instant>, <offset>) -> <code>

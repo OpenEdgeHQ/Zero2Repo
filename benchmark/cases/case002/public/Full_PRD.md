@@ -236,7 +236,7 @@ Installing python-envfile **without** the `cli` extra leaves this program unable
 - **`set NAME VALUE`** writes that binding with FP-06 (creating the file if needed) under the chosen quote mode and export flag, then reports the requested name and value (not the quoted on-disk form) and exits successfully.
 - **`get NAME`** prints the stored value and exits successfully when the name is present with a non-empty value.
 - **`unset NAME`** removes the binding with FP-06, confirms the removal in one line naming the removed name, and exits successfully.
-- **`list`** shows every name of the file in sorted name order in the selected list format (default `simple`). In `simple`, values are shown as parsed, without added quotes. In `shell` and `export`, each value is quoted so that pasting the line into a POSIX shell assigns exactly that value. In `json`, names with no value are present with a null; in the other three formats they are omitted.
+- **`list`** shows every name of the file in sorted name order in the selected list format (default `simple`). In `simple`, values are shown as parsed, without added quotes. In `shell` and `export`, each value is quoted so that pasting the line into a POSIX shell assigns exactly that value. In `json`, names with no value are present with a null; in the other three formats they are omitted. A name whose value is the empty string is not a no-value name: it is shown in every format, with the empty string as its value.
 - The version flag shows the installed python-envfile version and exits successfully without running any subcommand, including when it appears before `run`. A version flag that belongs to the **child** command after `run` is not this flag (FP-08).
 
 **Boundary / error behavior:**

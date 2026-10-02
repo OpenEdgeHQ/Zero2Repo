@@ -75,6 +75,7 @@ Every code Otpkit emits or accepts is computed from the shared secret and the co
 - FIDO U2F, WebAuthn, or the sister project Warpkit. The README recommends them for new applications; they are not this product.
 - Steam TOTP. A third-party contribution exists that emits five-character Steam codes. It is not described by a standard, is not officially supported, and is provided for reference only. It is **not** a core capability of this product.
 - A command-line program, HTTP server, or authentication framework.
+- The RFC 4226 and RFC 6238 recommendations beyond computing and checking codes: look-ahead counter resynchronization, throttling, a time origin other than Unix time 0, and clock-drift compensation other than the caller-chosen acceptance window.
 - Guaranteeing a particular code-generation throughput.
 - Treating packaging scripts, the Makefile, or the project's own development tooling as product capabilities.
 
@@ -130,6 +131,7 @@ Every code Otpkit emits or accepts is computed from the shared secret and the co
 
 - The code for an instant is the RFC 6238 TOTP value with T0 = 0: the FP-02 HOTP value, under the configured digest and digit count, for the counter equal to the instant's time-step number (see Terminology: whole seconds, then division by the time-step length, each truncated toward zero). The account name and the issuer do not change the codes; an explicit time-step length of 30, digit count of 6 or SHA1 digest produces the same codes as the defaults.
 - The helper accepts either a Unix timestamp (integer or real number) or a datetime as the instant to use. A timezone-aware datetime is read as UTC. A timezone-naive datetime is read in the host local timezone. A Unix timestamp, an aware datetime and a naive local datetime that denote the same absolute instant yield the same code; an aware and a naive datetime with the same civil fields denote different instants whenever the host timezone is not UTC.
+- The current clock is the host wall clock, read at the moment of each current-clock generation or check; a value read earlier (for example at import or construction) is not reused, and no other time source is consulted.
 - Asking for the code at the current clock yields the same string as asking for the code at that same current instant supplied explicitly.
 - A time-step length other than 30 changes which instants share a code: all instants with the same time-step number share one code.
 - The caller may ask for the code at a given instant plus a whole-step offset k (0 when not given): that is the code for time-step number (step of the instant) + k.

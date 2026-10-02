@@ -35,6 +35,17 @@ Resource names, relative to a directory on `data.path`:
 
 Each model directory holds the files of the packaged resource of that name, in their published layout.
 
+The model files the library reads, all UTF-8 text, are read as shipped. In a text file, each line without its line terminator is one entry.
+
+| Resource | Files in the directory |
+| --- | --- |
+| Punkt sentence model | `abbrev_types.txt`: one `<type>` per line. `sent_starters.txt`: one `<type>` per line. `collocations.tab`: one `<type>` TAB `<type>` per line. `ortho_context.tab`: one `<type>` TAB `<integer>` per line. |
+| Averaged perceptron tagger (`<lang>` is `eng` or `rus`) | `averaged_perceptron_tagger_<lang>.weights.json`: a JSON object `{"<feature>": {"<tag>": <number>, …}, …}`. `averaged_perceptron_tagger_<lang>.tagdict.json`: a JSON object `{"<word>": "<tag>", …}`. `averaged_perceptron_tagger_<lang>.classes.json`: a JSON array `["<tag>", …]`, the tags the model can assign. |
+| Universal tagset tables | `en-ptb.map`: one `<Penn Treebank tag>` TAB `<universal tag>` per line. Other files in the directory are not read for English. |
+
+- In the Punkt files, `<type>` is a lowercased word form, written without its final period for an abbreviation, or the literal `##number##`, which stands for any number.
+- The `ortho_context.tab` `<integer>` is a bit set of orthographic observations of that type: `2` upper-case at a sentence start, `4` upper-case inside a sentence, `8` upper-case in an unknown position, `16` lower-case at a sentence start, `32` lower-case inside a sentence, `64` lower-case in an unknown position. A type absent from the file has no observation.
+
 ### Tokenizers — `lingora.tokenize`
 
 `from lingora.tokenize import RegexpTokenizer, TreebankWordTokenizer, TweetTokenizer, WhitespaceTokenizer, WordPunctTokenizer, blankline_tokenize, sent_tokenize, word_tokenize, wordpunct_tokenize` (the submodule is also `from lingora import tokenize`).

@@ -63,6 +63,7 @@ Every feature point below is implemented in the compiled Hrefparse library file;
 
 - Being an RFC 3986 parser, or matching curl’s “leave the string unchanged” behavior.
 - Shipping a regular-expression engine for URLPattern.
+- Parts of the cited standards outside the surfaces this document describes: reporting non-fatal validation errors (a parse or a write reports only success or failure and the resulting components), the JavaScript binding surface (thrown exceptions, static members), and URLPattern pattern lists, pattern comparison, and generating a URL from a pattern.
 - Guaranteeing a particular nanosecond-per-URL speed (speed is a design goal, not a requirement).
 - Language bindings maintained outside this repository (Rust, Go, Python, and others).
 - Treating build options, amalgamation scripts, release automation, fuzzers, or benchmarks as user-facing product capabilities.

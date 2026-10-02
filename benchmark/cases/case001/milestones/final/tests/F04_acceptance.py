@@ -814,6 +814,14 @@ def test_frozen_or_overwrite_is_decode_error_with_location():
     runtime_source = f"{key} = {n}\n[{key}.b.c.d]"
     runtime_exc = _refuse_invalid(runtime_source)
     require_interior_place(runtime_exc, runtime_source)
+    # An array-of-tables header that would overwrite a value is placed
+    # inside the document too, even as the last thing in it (FP-04).
+    aot_key = runtime_token()
+    aot_neighbor = _neighbor(f"{aot_key} = true")
+    require_bool(require_path(aot_neighbor, aot_key), True)
+    aot_source = f"{aot_key} = true\n[[{aot_key}]]"
+    aot_exc = _refuse_invalid(aot_source)
+    require_interior_place(aot_exc, aot_source)
 
 
 def test_frozen_inline_table_mutated_afterwards_is_decode_error():
