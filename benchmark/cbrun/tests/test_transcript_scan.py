@@ -44,8 +44,31 @@ def test_rules_come_from_denylist_and_manifest(rules):
     assert "cmd/gizmo" in rules.disclosed_terms
     assert "gizmo-cli" in rules.disclosed_terms
     assert "gizmo-cli" not in rules.names
+    # Words that only appear apart in the public text do not disclose a compound.
+    assert "widget-core" not in rules.disclosed_terms
+    assert "widget-core" in rules.names
+    # A file named after the product under a generic directory still counts
+    # when the product name itself is not public.
+    assert "src/widgetlib.py" not in rules.disclosed_terms
     # Prose terms only feed mentions.
     assert "Jane Doe" in rules.mention_terms
+
+
+@pytest.mark.parametrize(
+    "term,disclosed",
+    [
+        ("gizmo-cli", True),
+        ("Gizmo CLI", True),
+        ("cmd/gizmo", True),
+        ("github.com/acme/gizmo", False),  # "acme" is not public
+        ("widget-core", False),  # "widget" and "core" only apart
+        ("objects-store", False),  # "objects/store" is a path, not the phrase
+        ("objects/store", True),
+    ],
+)
+def test_disclosure_needs_the_phrase(term, disclosed):
+    public = ts._public_text(CASE) + " under . git / objects / store "
+    assert ts._is_disclosed(term, public) is disclosed
 
 
 @pytest.mark.parametrize(

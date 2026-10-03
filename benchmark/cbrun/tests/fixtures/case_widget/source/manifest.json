@@ -8,6 +8,8 @@
     "janedoe",
     "acme/widgetlib",
     "cmd/gizmo",
-    "gizmo-cli"
+    "gizmo-cli",
+    "widget-core",
+    "src/widgetlib.py"
   ]
 }

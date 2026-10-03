@@ -364,7 +364,7 @@ def load_rules(case_dir: Path | str) -> ScanRules:
             names.add(_norm(root))
         if stripped and _IDENT.match(stripped):
             names.add(_norm(stripped))
-    disclosed = _public_words(case_dir)
+    disclosed = _public_text(case_dir)
     skipped: list[str] = []
     for term in sensitive:
         text = term.strip()
@@ -391,37 +391,57 @@ def load_rules(case_dir: Path | str) -> ScanRules:
     )
 
 
-# Tokens too generic to identify a project on their own.
-_GENERIC_TOKENS = frozenset(
-    {
-        "github", "gitlab", "com", "org", "net", "www", "git", "http", "https",
-        # conventional directory names
-        "cmd", "bin", "src", "lib", "pkg", "internal", "include", "test", "tests", "docs",
-    }
+def _public_text(case_dir: Path) -> str:
+    """Public PRD/Contract text the agent was given, as single-spaced tokens."""
+    public = case_dir / "public"
+    if not public.is_dir():
+        return ""
+    words: list[str] = []
+    for path in sorted(public.glob("*.md")):
+        words.extend(_phrase_tokens(path.read_text(encoding="utf-8", errors="replace")))
+    return " " + " ".join(words) + " "
+
+
+# Path components that say where something lives, not what it is.
+_GENERIC_COMPONENTS = frozenset(
+    {"cmd", "bin", "src", "lib", "pkg", "internal", "include", "test", "tests", "docs", "tools", "python"}
 )
 
 
-def _public_words(case_dir: Path) -> frozenset[str]:
-    """Lowercased words of the public PRD/Contract the agent was given."""
-    public = case_dir / "public"
-    if not public.is_dir():
-        return frozenset()
-    words: set[str] = set()
-    for path in public.glob("*.md"):
-        words.update(re.findall(r"[a-z0-9]+", path.read_text(encoding="utf-8", errors="replace").lower()))
-    return frozenset(words)
+def _phrase_tokens(text: str) -> list[str]:
+    """Words, with ``/`` and ``.`` kept as tokens so ``git/lfs`` is not ``git lfs``."""
+    return re.findall(r"[a-z0-9]+|[/.]", text.lower())
 
 
-def _is_disclosed(term: str, public_words: frozenset[str]) -> bool:
-    """True when every distinctive word of ``term`` is in the public documents.
+def _phrase_in(text: str, public_text: str) -> bool:
+    tokens = _phrase_tokens(text)
+    return bool(tokens) and f" {' '.join(tokens)} " in public_text
+
+
+def _is_disclosed(term: str, public_text: str) -> bool:
+    """True when the public documents already use ``term``.
 
     The agent was told those words, so finding them in its commands or paths is
     no evidence of upstream access (for example a sensitive term that names the
-    neutralized product the Contract asks for). The denylist bans are never
+    neutralized product the Contract asks for). A term must appear as one
+    phrase (``js-yaml`` needs "js yaml" in a row, not "js" and "yaml" apart). A
+    path-like term is disclosed when each component is disclosed, a host name,
+    or a generic directory (``cmd/<product>``). The denylist bans are never
     skipped this way; only manifest ``sensitive_terms``.
     """
-    tokens = [t for t in re.findall(r"[a-z0-9]+", term.lower()) if len(t) >= 3 and t not in _GENERIC_TOKENS]
-    return bool(tokens) and all(t in public_words for t in tokens)
+    if not public_text.strip():
+        return False
+    text = term.strip().strip("/")
+    if "/" not in text:
+        return _phrase_in(text, public_text)
+    for index, part in enumerate(text.split("/")):
+        part = part.strip()
+        if not part or (index == 0 and re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", part)):
+            continue  # the host of a URL-like term
+        if part.lower() in _GENERIC_COMPONENTS or _phrase_in(part, public_text):
+            continue
+        return False
+    return True
 
 
 def _strip_version(text: str) -> str:
