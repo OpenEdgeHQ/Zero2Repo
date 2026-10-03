@@ -29,7 +29,7 @@ from .access_monitor import AccessMonitor, AccessMonitorError
 from .assets import AdapterError, CaseSpec, load_case
 from .denylist import (
     DEFAULT_FIX_RETRIES,
-    GITHUB_BLOCK_HOSTS,
+    CODE_HOST_BLOCK_HOSTS,
     ScanResult,
     build_access_fix_instruction,
     build_fix_instruction,
@@ -66,6 +66,9 @@ from .steps import Step, discover_steps
 from .submit import CONTAINER_SUBMIT_PATH, NO_SUBMIT_ERROR, is_valid_submit
 from .pricing import trial_cost
 from .usage import AGENT_LOG_NAMES, USAGE_ARCHIVE_DIR, collect_trial_usage
+from .transcript_scan import scan_trial as scan_transcript
+from .transcript_scan import summarize as summarize_transcript_scan
+from .transcript_scan import write_report as write_transcript_report
 
 __all__ = ["run_trial"]
 
@@ -228,7 +231,8 @@ def run_trial(
     result.provenance["agent_image"] = result.agent_image_id
     result.provenance["deliverable_image"] = result.deliverable_image_id
 
-    block_hosts = GITHUB_BLOCK_HOSTS if block_github else None
+    block_hosts = CODE_HOST_BLOCK_HOSTS if block_github else None
+    result.blocked_hosts = list(block_hosts or ())
     container = Container.start(
         image.agent_image,
         gpus=gpus,
@@ -261,6 +265,7 @@ def run_trial(
     finally:
         _archive_trial(container, out_dir=out_dir, result=result, invocation=invocation)
         _record_token_usage(out_dir, result)
+        _record_transcript_scan(out_dir, result, case_dir)
         result.finished_at = utc_now()
 
     return result
@@ -295,6 +300,18 @@ def _record_token_usage(out_dir: Path, result: TrialResult) -> None:
         result.token_usage = usage
     except Exception as exc:  # noqa: BLE001
         result.token_usage = {"complete": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _record_transcript_scan(out_dir: Path, result: TrialResult, case_dir: Path) -> None:
+    """Scan the archived transcript; flag the trial for review, never rescore it."""
+    try:
+        report = scan_transcript(out_dir, case_dir)
+        path = write_transcript_report(out_dir, report)
+        result.logs["transcript_scan"] = str(path)
+        result.transcript_scan = summarize_transcript_scan(report, report_path=str(path))
+        result.needs_review = bool(report.get("needs_review"))
+    except Exception as exc:  # noqa: BLE001
+        result.transcript_scan = {"verdict": "error", "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _archive_trial(

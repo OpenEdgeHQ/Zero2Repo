@@ -195,9 +195,15 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
 
 ### Network policy and upstream denylist
 
-* During **solve**, GitHub hostnames are blocked via container `/etc/hosts`
-  (`--add-host …:0.0.0.0`). Model API calls and PyPI/npm remain reachable.
-  Disable with `--no-block-github`.
+* During **solve**, code-hosting hostnames are blocked via container
+  `/etc/hosts` (`--add-host …:0.0.0.0`): GitHub and its download hosts,
+  GitLab, Gitee, Bitbucket, Sourcegraph, Codeberg, sourcehut, and well-known
+  GitHub mirrors/proxies (`CODE_HOST_BLOCK_HOSTS` in `denylist.py`). Model API
+  calls, web search and package registries (PyPI, npm, Go proxy, crates.io)
+  remain reachable, because ordinary dependency installs need them; source
+  archives fetched from a registry are reported by the transcript scan below.
+  `summary.json` records `blocked_hosts`. Disable with `--no-block-github`
+  (alias `--no-block-code-hosts`).
 * Each case ships `source/denylist.json` (install/import bans for the
   upstream product). It is tracked with the case. The file never enters the
   solve container: the `:agent` image carries only name hashes plus the
@@ -284,6 +290,38 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
     still caught by the import scan and the judge-time ban. Setup code from
     `/app` running under pip is excused here and caught by the `/app` import
     scan.
+* Post-trial transcript scan (`transcript_scan.py`). After every trial the
+  agent's session files (`container_logs/usage/**/*.jsonl`, or the agent logs
+  when there are none) are read for tool calls that try to obtain the upstream
+  code at run time. Banned names come only from the case's `denylist.json`
+  (`install_ban`, `import_ban`) and `manifest.json` (`sensitive_terms`,
+  minus terms whose every word the public PRD/Contract already uses), and are
+  matched as whole components (URL path segment, package spec or archive name
+  without version, path segment), never as substrings. Rules:
+  * `code_host_fetch`: clone/curl/wget/`gh`/VCS install/inline-script URL
+    call/WebFetch to a code host or mirror (high with a banned name, else
+    medium);
+  * `registry_source_download`: an archive URL on a registry or mirror host,
+    or `pip download`, `npm pack <pkg>`, `go mod download <mod>`,
+    `apt-get source`, `gem fetch`, ... (high with a banned name, else medium);
+  * `banned_name_fetch` (high): install/download/fetch of a banned name;
+  * `banned_name_lookup` (medium): `pip show`/`npm view` of a banned name, a
+    probed path outside `/app` (`ls`, `find -name`, Read tool), or an import
+    of a banned root in `python -c`/`node -e`/interpreter heredocs;
+  * `banned_name_in_output` (medium): a command that looked harmless printed
+    "Cloning into / Saving to / Downloading / Collecting" a banned name;
+  * `mention` (low, not flagged): a name in a web-search query or elsewhere
+    in a command.
+  Ordinary dependency installs, files the agent writes (heredocs to `cat`,
+  Write/Edit tools) and its own `/app` paths are not flagged. Any high or
+  medium hit sets `needs_review=true` on the trial; reward is never changed.
+  Each hit records file, line, snippet, the tool result excerpt and whether
+  the result shows a network failure. The full report is
+  `<trial>/transcript_scan.json`; `summary.json` carries `needs_review`,
+  `transcript_scan` (verdict, counts, flagged hits) and the aggregate
+  `needs_review_trials`; the reward matrix marks the cell `*REVIEW`. Offline:
+  `python -m cbrun.transcript_scan <trial-or-run-dir>... [--cases-root DIR]
+  [--write] [--json FILE] [--show-low]` (exit 1 when any trial needs review).
 * `--enforce-denylist` is on by default. Missing file or empty ban lists
   fail before any container starts. `--no-enforce-denylist` skips the scan
   and `summary.json` records `denylist_enforced=false` so a skipped scan is

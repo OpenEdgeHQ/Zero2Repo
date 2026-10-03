@@ -132,9 +132,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--block-github",
+        "--block-code-hosts",
+        dest="block_github",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Block GitHub hostnames in solve container (default: on).",
+        help="Block GitHub, other code hosts and GitHub mirrors in the solve "
+        "container via /etc/hosts (default: on). Package registries stay reachable.",
     )
     return parser.parse_args(argv)
 
@@ -301,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"  FAILED: {result.error}", file=sys.stderr)
             _print_token_usage(result.token_usage)
+            if result.needs_review:
+                counts = (result.transcript_scan or {}).get("counts") or {}
+                print(
+                    f"  NEEDS REVIEW: transcript scan flagged high={counts.get('high', 0)} "
+                    f"medium={counts.get('medium', 0)}; see {result.logs.get('transcript_scan')}",
+                    file=sys.stderr,
+                )
             results.append(result)
             write_summary(results, args.out)
 
