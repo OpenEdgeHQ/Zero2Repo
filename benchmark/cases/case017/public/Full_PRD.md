@@ -22,7 +22,7 @@ This document specifies **user- and integrator-observable behavior only**. Exact
 | **buffer** | The flat, 8-byte-aligned byte sequence that **is** the bitmap. Emitting the buffer does not convert a separate in-memory object graph. Opening the buffer does not build a second representation. |
 | **borrow** | An open mode: the caller keeps the buffer. The bitmap never writes it and never frees it. The buffer must outlive the bitmap. The first set leaves the caller’s memory byte-identical to what was opened. |
 | **own** | An open mode: the bitmap takes the buffer. Before the caller mutates it, the opened bitmap’s storage is that allocation, not a second buffer. Releasing the bitmap frees whatever storage it then holds. Whether a mutation replaces that allocation is the implementer’s choice. The buffer must be a writable allocation from the same allocator the caller passes in. The transfer is unconditional: success and the failure paths in FP-04 both take responsibility for that allocation. |
-| **format version** | An integer stamped into every buffer. This product’s current format version is **1**. Opening refuses any other version. |
+| **format version** | An integer field stamped into every buffer, at the same position in every buffer. This product writes format version **1** and, when opening, refuses any other version. The field’s width and position are the implementer’s choice. |
 | **compact** | The optional rewrite that produces the smallest buffer that still holds the same set, for long-term storage. Equal sets become byte-identical. The result stays an ordinary mutable bitmap. |
 | **cleanup** | The operation that reclaims space left after in-place intersection, in-place difference, or remove have emptied prefixes, without changing membership. |
 | **materializing intersection / union** | Entries that return a **new** bitmap equal to the intersection or union of two bitmaps, leaving both operands unchanged. |
@@ -120,7 +120,7 @@ Every feature point below is real roaring-bitmap behavior over 64-bit values who
 **Boundary / error behavior:**
 
 - Set of a value already present does not change cardinality and reports that it was not newly added.
-- Remove of a value that was never set reports false and does not change cardinality, including when no present value shares its prefix.
+- Remove of a value that was never set reports false and does not change cardinality.
 - Whether remove shortens the emitted buffer or matches FP-05’s compact canonical bytes is the implementer’s choice. Membership after remove is what this feature promises.
 - Set on a borrowed bitmap never writes the caller’s buffer (FP-04). Remove on a borrowed bitmap is not specified until after a set, or after compact in FP-05.
 
@@ -156,7 +156,7 @@ This feature point is the product’s defining surface. Reads after open must wo
 **Normal behavior:**
 
 - Emitting the borrowed view is valid until the bitmap is mutated or released. The owning copy is the same bytes as the view at the moment it is taken, and remains valid after the source bitmap is released. An empty bitmap still emits a buffer of positive length (FP-01).
-- Every emitted buffer of a valid bitmap — fresh, populated, compacted, cleaned up, or produced by any entry of this product — is at least **64** bytes long and has even length, and starts at an 8-byte-aligned address. Its **first two bytes** are the little-endian encoding of the unsigned 16-bit integer **1** (the format version). Byte 0 is 1 and byte 1 is 0.
+- Every emitted buffer of a valid bitmap — fresh, populated, compacted, cleaned up, or produced by any entry of this product — has even length, starts at an 8-byte-aligned address, and carries format version **1** in its format-version field.
 - Opening a buffer that this product emitted, in borrow or own mode or with the copying open, yields a bitmap with the same membership, cardinality, minimum, maximum, and iterator sequence as the source. The opened bitmap’s in-use bytes match the source’s in-use bytes. Opening the borrowed view of a live bitmap (without taking an owning copy first) is allowed in borrow mode and does not write through that view on reads.
 - Borrow: reads (membership, cardinality, emptiness, minimum, maximum, iteration, emitting again, fused counts) do not write the caller’s buffer. The open and those reads allocate nothing through the allocator passed to the open and touch no new memory in proportion to the buffer’s size, however large the buffer is: until the first set, the view the bitmap emits is the caller’s buffer itself, at the same address and of the same length. The first **set** leaves the caller’s buffer byte-identical to what was opened, including when the set would have fitted without growing, and including a set under a prefix the buffer does not yet hold. After that set the bitmap holds the new value; a second open of that same caller buffer still reports the original set, not the values added afterwards.
 - Own: before the caller sets a value, an own-open of a well-formed buffer does not build a second buffer — the opened bitmap’s emitted view is the supplied allocation. The open and reads before that set allocate nothing through the allocator. After a set, membership and cardinality follow that set, and release frees whatever the bitmap then owns so the allocator’s outstanding total returns to the total from before the open. The caller must not free the original allocation. Whether any particular value, including a value under a prefix the buffer already holds, fits without replacing the allocation is the implementer’s choice.
@@ -165,8 +165,8 @@ This feature point is the product’s defining surface. Reads after open must wo
 
 **Boundary / error behavior:**
 
-- A buffer whose length is **not a multiple of 2**, or whose length is **strictly less than 64 bytes**, is not a bitmap. Opening it — borrow, own, or the copying open — yields a **fresh empty bitmap**, not an unsupported-format-version failure, whatever bytes it contains. That fresh bitmap behaves exactly like one from the constructor (FP-01), and the caller’s bytes are left unchanged.
-- A buffer that is at least 64 bytes and even-length, but whose first two bytes are **not** the little-endian encoding of 1, is refused with an **unsupported-format-version failure** on every open path, whatever the rest of the buffer holds. Nothing is delivered as a bitmap that reports the payload’s values, and the caller’s bytes are left unchanged.
+- A buffer whose length is **odd**, or that is **shorter than the minimum length** of a buffer that can be a bitmap, is not a bitmap. That minimum is the implementer’s choice; it is at least 8 bytes and never more than the length of a buffer this product emits. Opening such a buffer — borrow, own, or the copying open — yields a **fresh empty bitmap**, not an unsupported-format-version failure, whatever bytes it contains. That fresh bitmap behaves exactly like one from the constructor (FP-01), and the caller’s bytes are left unchanged.
+- A buffer that is even-length and at least that minimum, but whose format-version field does **not** hold 1, is refused with an **unsupported-format-version failure** on every open path, whatever the rest of the buffer holds. Nothing is delivered as a bitmap that reports the payload’s values, and the caller’s bytes are left unchanged.
 - Own mode takes the allocation on every path: a successful open, an unsupported-format-version failure, and the empty-bitmap path for a too-small or odd-length buffer. The caller does not free the allocation after passing it as own. Borrow mode never frees the caller’s buffer on any path.
 - Buffers are otherwise trusted. This feature does not promise a distinct corrupt-payload diagnostic.
 
@@ -201,8 +201,7 @@ This feature point is the product’s defining surface. Reads after open must wo
 **Normal behavior:**
 
 - Intersection of A and B is the set of values present in both. Union of A and B is the set of values present in either. Neither operand is mutated. Cardinality, membership, minimum, maximum, and the iterator of the result match that set. Both are the same set either operand order.
-- Intersection of two bitmaps that share no values is empty. Intersection of a bitmap with itself (two references to bitmaps holding the same values, including the same bitmap passed as both operands) equals that set. Intersection of a non-empty bitmap with an empty bitmap is empty, either operand order.
-- Union of a bitmap with an empty bitmap equals the non-empty side, either operand order. Union of a bitmap with itself (including the same bitmap passed as both operands) equals that set.
+- Either operand may be empty, and the same bitmap may be passed as both operands; the result is still the intersection or union of the two sets.
 - N-ary union of an empty list is an empty bitmap. N-ary union of a one-element list is an independent copy of that one bitmap. N-ary union of many bitmaps equals folding two-operand union across those inputs, whatever the order of the list, however the inputs’ prefixes overlap, and when some inputs are empty or have had every value removed.
 - Every result is a new bitmap, independent of every operand and of every other result: mutating the result never changes an operand, and mutating an operand never changes the result. The result is a usable bitmap: it can be compacted (FP-05), emitted and opened (FP-04), and mutated with set and remove (FP-02). A result opens from its emitted buffer with the same values, byte-identical on the in-use region.
 
@@ -221,7 +220,7 @@ This feature point is the product’s defining surface. Reads after open must wo
 
 - After in-place intersection, the left bitmap’s membership is exactly the intersection of the original left set and the right set. After in-place union, it is the union. After in-place difference, it is the values that were in the left and not in the right. The right bitmap is unchanged. This holds whatever the mix of dense runs and scattered values in either operand, within one prefix or across many.
 - In-place intersection of a bitmap with itself (left and right the same bitmap, or left and a clone of left) leaves the set unchanged. In-place difference of a bitmap with itself empties it. In-place union of a bitmap with a **distinct** clone of itself leaves the set unchanged.
-- In-place intersection, union, and difference against an empty bitmap follow the same identities as FP-06: A ∩ ∅ = ∅, ∅ ∩ A = ∅, A \ ∅ = A, ∅ \ A = ∅, A ∪ ∅ = A, ∅ ∪ A = A.
+- Either operand may be empty; the result still follows the same set rules.
 - In-place intersection and in-place difference do not by themselves shorten the emitted buffer when they empty prefixes: membership and cardinality update immediately, but the emitted length stays the same until cleanup.
 - Cleanup reclaims the room of every emptied prefix other than the lowest one, whatever emptied it (in-place intersection, in-place difference, or remove) and however many such prefixes there are: whenever such a prefix is still empty at cleanup time, cleanup makes the emitted buffer strictly shorter. The lowest prefix is never reclaimed: emptying only the prefix of values below 2^16 does not by itself make cleanup shorten the buffer, including on a bitmap that was compacted before it was emptied. Cleanup does not change membership, and its emitted buffer opens with the same set. A second cleanup on an already-cleaned bitmap leaves the emitted length unchanged.
 - Cleanup of a bitmap that is entirely empty, whether fresh or emptied by in-place difference or intersection, stays empty and valid. Cleanup never drops the ability to set new values afterwards, however many prefixes it reclaimed: later sets report newly added, the set then holds exactly the surviving values plus the new ones, and the emitted buffer opens with that set.
@@ -243,9 +242,7 @@ This feature point is the product’s defining surface. Reads after open must wo
 
 - For any two bitmaps A and B, the fused intersection count equals the cardinality of the materializing intersection of A and B, and equals the cardinality of A after in-place intersection with B (measured on a clone). The fused union count equals the cardinality of the materializing union. The fused difference count equals the cardinality of A after in-place difference with B (measured on a clone). Counts are exact whatever the mix of dense runs and scattered values in either operand, within one prefix or across many.
 - Neither operand’s membership, cardinality, or emitted buffer changes, and a borrowed operand’s caller buffer is not written.
-- Against the empty bitmap: fused intersection is 0 either order; fused union is the non-empty side’s cardinality either order; fused difference is the left cardinality (so A \ ∅ is |A| and ∅ \ A is 0). Fused union of two empty bitmaps is 0.
-- Against itself: fused intersection equals cardinality; fused union equals cardinality; fused difference is 0.
-- Disjoint operands (no shared values, whether because prefixes miss entirely or because shared prefixes have no overlapping values): fused intersection is 0; fused union is the sum of the two cardinalities; fused difference is the left cardinality.
+- Either operand may be empty, and the same bitmap may be passed as both operands.
 - A bitmap whose values were all removed in place (cardinality already 0, cleanup not yet run) counts as the empty set in either operand position.
 
 **Boundary / error behavior:**
@@ -262,7 +259,7 @@ This feature point is the product’s defining surface. Reads after open must wo
 **Normal behavior:**
 
 - The result’s membership is the unique values in the list, and nothing else. Duplicates in the list are ignored: a list that repeats a value, however many times, still counts it once. Cardinality equals the number of distinct values. Minimum is the first distinct value; maximum is the last. The iterator and the allocated-array entry (FP-03) match the sorted unique list.
-- The result matches a bitmap built by setting each list element in turn on a fresh bitmap, whatever the list holds: values at the extremes of the 64-bit range, dense runs within one prefix, values each under a different prefix, and any mix of these, with or without duplicates.
+- The result matches a bitmap built by setting each list element in turn on a fresh bitmap, whatever non-decreasing list it is given, with or without duplicates.
 - An empty list yields an empty bitmap, the same as FP-01’s constructor, still usable for later sets.
 - The result is an ordinary owned bitmap: its emitted buffer follows FP-04 and opens with the same in-use bytes and the same membership, and releasing it (and anything opened from a copy of its buffer) returns the allocator to its total from before the call.
 

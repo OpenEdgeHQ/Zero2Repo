@@ -37,6 +37,7 @@ unpublished numeric floors are not pinned.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from F01_helpers import angle_diff_deg, hypot3, independent_wmm
 from F02_helpers import (
@@ -77,7 +78,6 @@ from F03_helpers import (
     runtime_tracker_ned,
     runtime_wmm_site,
     still_level_acc,
-    with_leading_standstill_flags,
 )
 
 MAG_VAR_WEAK = (0.0, 0.0, 0.0)
@@ -917,6 +917,55 @@ def test_local_pos_bootstrap_keeps_tracker_height_with_baro():
 # ---------------------------------------------------------------------------
 
 
+def _one_interval_flag_runs(runner, lat, lon, h, base, t_flag, kw, *, gyr, zupt=False, zaru=False):
+    """Standstill flags inside one filter-update interval, located by n_predict.
+
+    An unflagged twin is run first. Its public ``n_predict`` counter marks the
+    filter-update epochs; the burst is every IMU epoch strictly between the
+    first two consecutive filter-update epochs after *t_flag* that enclose at
+    least two epochs. ``one`` flags only the first epoch of that burst,
+    ``dense`` flags all of them. When every IMU epoch is a filter-update epoch
+    no such interval exists, the burst is a single epoch, and dense equals one.
+    Returns the last snapshots of (none, one, dense) and the burst size.
+    """
+    tail = extend_epochs(list(base), duration_s=0.6, gyr=gyr)
+    none_run = runner(aiding_site(lat, lon, h, tail, **kw))
+    after = [sn for sn in none_run.snaps if sn.t_us > t_flag]
+    preds = [sn.n_predict for sn in after]
+    assert after and all(p >= 0 for p in preds), "n_predict diagnostic was not readable"
+    search_end = t_flag + 300_000
+    burst: list[int] = []
+    for i in range(1, len(after)):
+        if after[i].t_us > search_end:
+            break
+        if preds[i] > preds[i - 1]:
+            j = i + 1
+            while j < len(after) and preds[j] == preds[i]:
+                j += 1
+            if j - (i + 1) >= 2:
+                burst = [after[k].t_us for k in range(i + 1, j)]
+                break
+    if not burst:
+        burst = [after[0].t_us]
+    on = set(burst)
+    one_eps = [
+        replace(e, zupt=bool(zupt and e.t_us == burst[0]), zaru=bool(zaru and e.t_us == burst[0]))
+        for e in tail
+    ]
+    dense_eps = [
+        replace(e, zupt=bool(zupt and e.t_us in on), zaru=bool(zaru and e.t_us in on))
+        for e in tail
+    ]
+    one_run = runner(aiding_site(lat, lon, h, one_eps, **kw))
+    dense_run = runner(aiding_site(lat, lon, h, dense_eps, **kw))
+    pred_none = {sn.t_us: sn.n_predict for sn in after}
+    pred_dense = {sn.t_us: sn.n_predict for sn in dense_run.snaps if sn.t_us in on}
+    assert all(pred_dense.get(t) == pred_none[t] for t in burst), (
+        "standstill flags changed which epochs were filter-update epochs"
+    )
+    return none_run.last(), one_run.last(), dense_run.last(), len(burst)
+
+
 def test_explicit_zupt_holds_velocity_near_zero():
     lat, lon, h = runtime_wmm_site()
     origin = ecef_from_llh_deg(lat, lon, h)
@@ -929,10 +978,6 @@ def test_explicit_zupt_holds_velocity_near_zero():
     t_flag = base[-1].t_us
     flagged = extend_epochs(list(base), duration_s=2.0, zupt=True)
     clear = extend_epochs(list(base), duration_s=2.0)
-    burst = extend_epochs(list(base), duration_s=0.04, zupt=True)
-    once = with_leading_standstill_flags(
-        list(burst), after_t_us=t_flag, count=1, zupt=True
-    )
     kw = dict(origin_ecef=origin, auto_zupt_disable=True)
     for kind, runner in (("c", c_aiding_run), ("py", py_aiding_run)):
         z = runner(aiding_site(lat, lon, h, flagged, **kw)).last()
@@ -943,13 +988,19 @@ def test_explicit_zupt_holds_velocity_near_zero():
         print(f"{kind}: |v| ZUPT={zs} none={ns}", flush=True)
         assert zs < 0.6, f"{kind}: explicit ZUPT did not hold velocity near zero"
         assert ns > zs + 1.0, f"{kind}: no-flag arm was held like explicit ZUPT"
-        dense = runner(aiding_site(lat, lon, h, burst, **kw)).last()
-        one = runner(aiding_site(lat, lon, h, once, **kw)).last()
+        none, one, dense, n_burst = _one_interval_flag_runs(
+            runner, lat, lon, h, base, t_flag, kw, gyr=(0.0, 0.0, 0.0), zupt=True
+        )
+        require_ready_solution(none, f"{kind} ZUPT unflagged twin")
         require_ready_solution(dense, f"{kind} ZUPT dense flags")
         require_ready_solution(one, f"{kind} ZUPT one flag")
+        hs_n = horiz_speed(none.vel_ned)
         hs_d, hs_1 = horiz_speed(dense.vel_ned), horiz_speed(one.vel_ned)
-        print(f"{kind}: |v| dense-flags={hs_d} one-flag={hs_1}", flush=True)
-        assert hs_1 + 0.5 < ns, (
+        print(
+            f"{kind}: |v| none={hs_n} dense-flags={hs_d} one-flag={hs_1} burst={n_burst}",
+            flush=True,
+        )
+        assert hs_1 + 0.5 < hs_n, (
             f"{kind}: a single explicit ZUPT in the interval did not fuse"
         )
         assert abs(hs_d - hs_1) < 0.4, (
@@ -966,10 +1017,6 @@ def test_explicit_zaru_measures_still_body_gyro_bias():
     t_flag = base[-1].t_us
     flagged = extend_epochs(list(base), duration_s=2.5, gyr=bias, zaru=True)
     clear = extend_epochs(list(base), duration_s=2.5, gyr=bias)
-    burst = extend_epochs(list(base), duration_s=0.04, gyr=bias, zaru=True)
-    once = with_leading_standstill_flags(
-        list(burst), after_t_us=t_flag, count=1, zaru=True
-    )
     kw = dict(origin_ecef=origin, auto_zupt_disable=True)
     for kind, runner in (("c", c_aiding_run), ("py", py_aiding_run)):
         z = runner(aiding_site(lat, lon, h, flagged, **kw)).last()
@@ -984,18 +1031,23 @@ def test_explicit_zaru_measures_still_body_gyro_bias():
             flush=True,
         )
         assert err_z + 0.005 < err_c, f"{kind}: explicit ZARU did not pull gyro bias"
-        dense = runner(aiding_site(lat, lon, h, burst, **kw)).last()
-        one = runner(aiding_site(lat, lon, h, once, **kw)).last()
+        none, one, dense, n_burst = _one_interval_flag_runs(
+            runner, lat, lon, h, base, t_flag, kw, gyr=bias, zaru=True
+        )
+        require_ready_solution(none, f"{kind} ZARU unflagged twin")
         require_ready_solution(dense, f"{kind} ZARU dense flags")
         require_ready_solution(one, f"{kind} ZARU one flag")
+        assert none.bias_gyr is not None
         assert dense.bias_gyr is not None and one.bias_gyr is not None
+        err_n = abs(none.bias_gyr[2] - bias[2])
         err_d = abs(dense.bias_gyr[2] - bias[2])
         err_1 = abs(one.bias_gyr[2] - bias[2])
         print(
-            f"{kind}: gyr bias dense={dense.bias_gyr[2]} one={one.bias_gyr[2]}",
+            f"{kind}: gyr bias none={none.bias_gyr[2]} dense={dense.bias_gyr[2]} "
+            f"one={one.bias_gyr[2]} burst={n_burst}",
             flush=True,
         )
-        assert err_1 + 0.003 < err_c, (
+        assert err_1 + 0.003 < err_n, (
             f"{kind}: a single explicit ZARU in the interval did not fuse"
         )
         assert abs(err_d - err_1) < 0.004, (
@@ -1032,27 +1084,49 @@ def test_auto_detector_stationary_after_dwell_not_on_turntable():
 
 
 def test_auto_zupt_fuses_zero_velocity_without_explicit_flag():
+    # Accurate GNSS cruising at constant speed from the first epoch, with a
+    # still IMU (constant velocity looks like stillness to the IMU); the filter
+    # bootstraps on it, then the GNSS stops. While GNSS velocity is recent the
+    # speed gate holds the detector off; once it has aged out (the PRD bounds
+    # "recent" at 3 s) the still IMU alone is stillness and the detector fuses
+    # zero velocity. The end of a long still segment is read, so an early
+    # pre-bootstrap ZUPT cannot pass.
     lat, lon, h = runtime_wmm_site()
     origin = ecef_from_llh_deg(lat, lon, h)
-    base = gnss_stream(
+    cruise_mps = 3.2
+    first = gnss_stream(origin, duration_s=0.01)
+    cruise = extend_gnss_constant_vel(
+        list(first),
         origin,
-        duration_s=HAPPY_DURATION_S,
-        gnss_vel=(3.2, 0.0, 0.0),
+        (cruise_mps, 0.0, 0.0),
+        duration_s=HAPPY_DURATION_S + 2.0,
         gnss_vel_std=GNSS_VEL_STD,
     )
-    auto_on = extend_epochs(list(base), duration_s=2.0)
-    auto_off = extend_epochs(list(base), duration_s=2.0)
+    t_gnss_end = cruise[-1].t_us
+    epochs = extend_epochs(list(cruise), duration_s=7.0)
     for kind, runner in (("c", c_aiding_run), ("py", py_aiding_run)):
-        on = runner(
-            aiding_site(lat, lon, h, auto_on, origin_ecef=origin, auto_zupt_disable=False)
-        ).last()
-        off = runner(
-            aiding_site(lat, lon, h, auto_off, origin_ecef=origin, auto_zupt_disable=True)
-        ).last()
+        on_run = runner(
+            aiding_site(lat, lon, h, epochs, origin_ecef=origin, auto_zupt_disable=False)
+        )
+        off_run = runner(
+            aiding_site(lat, lon, h, epochs, origin_ecef=origin, auto_zupt_disable=True)
+        )
+        cruising = on_run.at_or_after(t_gnss_end)
+        on, off = on_run.last(), off_run.last()
+        require_ready_solution(cruising, f"{kind} auto on, end of GNSS")
         require_ready_solution(on, f"{kind} auto on")
         require_ready_solution(off, f"{kind} auto off")
+        hs_cruise = horiz_speed(cruising.vel_ned)
         hs_on, hs_off = horiz_speed(on.vel_ned), horiz_speed(off.vel_ned)
-        print(f"{kind}: |v| auto-on={hs_on} auto-off={hs_off}", flush=True)
+        print(
+            f"{kind}: |v| end-of-GNSS={hs_cruise} segment-end auto-on={hs_on} "
+            f"auto-off={hs_off}",
+            flush=True,
+        )
+        assert hs_cruise > 2.0, (
+            f"{kind}: filter did not follow accurate GNSS cruising speed while the "
+            f"speed gate should hold the detector off"
+        )
         assert hs_on < 1.0, f"{kind}: auto ZUPT did not hold velocity near zero"
         assert hs_off > hs_on + 1.0, f"{kind}: auto-off arm was held like automatic ZUPT"
 

@@ -59,7 +59,7 @@ The `headers` attribute of `Request`, `InformationalResponse`, `Response`, and `
 `LocalProtocolError` and `RemoteProtocolError` both carry:
 
 - `error_status_hint` — attribute, exactly of type `int`: the suggested status (PRD FP-05).
-- `str(error)` — the message: free text, the implementer’s choice. Where the PRD requires a message to convey a quantity (FP-05, short body), the quantity appears in it as a decimal number.
+- `str(error)` — the message: free text, the implementer’s choice.
 
 Feeding bytes after the receive side was closed (PRD FP-02) raises an exception that is an instance of neither `LocalProtocolError` nor `RemoteProtocolError`; its class is otherwise the implementer’s choice.
 

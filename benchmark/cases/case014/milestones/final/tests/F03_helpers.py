@@ -131,9 +131,9 @@ static void print_snap(const ins_t *f, long long t_us)
     } else {
         printf(" biasgyr=-");
     }
-    printf(" n_invalid=%u n_downweighted=%u n_fuse_fail=%u n_auto_zupt=%u stationary=%d\n",
+    printf(" n_invalid=%u n_downweighted=%u n_fuse_fail=%u n_auto_zupt=%u n_predict=%u stationary=%d\n",
            d->n_invalid_input, d->n_downweighted, d->n_fuse_fail, d->n_auto_zupt,
-           ins_auto_zupt_active(f) ? 1 : 0);
+           d->n_predict, ins_auto_zupt_active(f) ? 1 : 0);
 }
 
 int main(void)
@@ -365,6 +365,7 @@ def emit(nav, t_us):
     n_dw = _cnt(diag, "n_downweighted")
     n_ff = _cnt(diag, "n_fuse_fail")
     n_az = _cnt(diag, "n_auto_zupt")
+    n_pr = _cnt(diag, "n_predict")
     stationary = 1 if nav.auto_zupt_active() else 0
     line = (
         "SNAP t_us=%d ready=%d pos=%d vel=%d rpy=%d ned=%d bacc=%d bgyr=%d"
@@ -378,8 +379,8 @@ def emit(nav, t_us):
     line += " attstd=" + (fmt(rpy_std is not None, rpy_std) if rpy_std is not None else "-")
     line += " biasacc=" + (fmt(bacc_ok, tuple(bacc)) if bacc_ok else "-")
     line += " biasgyr=" + (fmt(bgyr_ok, tuple(bgyr)) if bgyr_ok else "-")
-    line += " n_invalid=%d n_downweighted=%d n_fuse_fail=%d n_auto_zupt=%d stationary=%d" % (
-        n_invalid, n_dw, n_ff, n_az, stationary
+    line += " n_invalid=%d n_downweighted=%d n_fuse_fail=%d n_auto_zupt=%d n_predict=%d stationary=%d" % (
+        n_invalid, n_dw, n_ff, n_az, n_pr, stationary
     )
     print(line)
 
@@ -556,6 +557,7 @@ class AidingSnapshot:
     n_fuse_fail: int
     n_auto_zupt: int
     stationary: bool
+    n_predict: int = -1
 
 
 @dataclass
@@ -878,6 +880,7 @@ def parse_aiding_snapshot(line: str) -> AidingSnapshot:
     n_dw = _parse_int(fields, "n_downweighted")
     n_ff = _parse_int(fields, "n_fuse_fail")
     n_az = _parse_int(fields, "n_auto_zupt")
+    n_pr = _parse_int(fields, "n_predict") if "n_predict" in fields else -1
     stationary = _parse_flag(fields, "stationary")
     if n_invalid < 0 or n_dw < 0 or n_ff < 0 or n_az < 0:
         note_product_issue("F03", f"diagnostic counters missing or negative: {line}")
@@ -908,6 +911,7 @@ def parse_aiding_snapshot(line: str) -> AidingSnapshot:
         n_fuse_fail=n_ff,
         n_auto_zupt=n_az,
         stationary=stationary,
+        n_predict=n_pr,
     )
 
 

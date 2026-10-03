@@ -674,7 +674,7 @@ def arrange_replaced_in_range_token(
 
 
 # Failure kinds, read from the stated exception classes (and, for the
-# timestamp kinds, the kind label the Contract states).
+# timestamp kinds, the `reason` attribute the Contract states).
 FAILURE_KINDS = (
     "signature",
     "time-signature",
@@ -683,39 +683,42 @@ FAILURE_KINDS = (
     "expired",
     "payload",
 )
-MISSING_WORD = "missing"
-MALFORMED_WORD = "malformed"
+MISSING_REASON = "missing"
+MALFORMED_REASON = "malformed"
+_NO_REASON_ATTR = object()
 
 
 def failure_kind(exc: BaseException) -> str:
     """Classify a refusal by its stated exception class.
 
     The three non-expired ``BadTimeSignature`` kinds are told apart by
-    the kind label the Contract states in the message: a missing-timestamp
-    message contains `missing`, a malformed-timestamp message contains
-    `malformed`, and other refusals neither (case-insensitive
-    label, no fixed wording). Raises if the failure is none of the stated
-    failure classes.
+    the ``reason`` attribute the Contract states: ``"missing"`` for a
+    missing timestamp, ``"malformed"`` for a malformed timestamp, ``None``
+    for a time-signature failure. Message text is not consulted. Raises
+    if the failure is none of the stated failure classes.
     """
     import signtoken
 
     if isinstance(exc, signtoken.SignatureExpired):
         kind = "expired"
     elif isinstance(exc, signtoken.BadTimeSignature):
-        text = str(exc).lower()
-        says_missing = MISSING_WORD in text
-        says_malformed = MALFORMED_WORD in text
-        if says_missing and says_malformed:
+        reason = getattr(exc, "reason", _NO_REASON_ATTR)
+        if reason is _NO_REASON_ATTR:
             raise AssertionError(
-                "timestamp refusal message says both missing and malformed; "
-                f"message={str(exc)!r}"
+                "BadTimeSignature refusal has no `reason` attribute; "
+                f"type={type(exc).__name__} message={str(exc)!r}"
             )
-        if says_missing:
+        if reason == MISSING_REASON:
             kind = "missing-timestamp"
-        elif says_malformed:
+        elif reason == MALFORMED_REASON:
             kind = "malformed-timestamp"
-        else:
+        elif reason is None:
             kind = "time-signature"
+        else:
+            raise AssertionError(
+                "BadTimeSignature `reason` is not 'missing', 'malformed' or "
+                f"None; got {reason!r}"
+            )
     elif isinstance(exc, signtoken.BadSignature):
         kind = "signature"
     elif isinstance(exc, signtoken.BadPayload):

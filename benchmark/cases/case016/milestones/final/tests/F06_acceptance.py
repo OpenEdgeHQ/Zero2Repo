@@ -132,6 +132,7 @@ from F06_helpers import (
     stats_session_score,
     stats_values,
     window_named,
+    scored_prose,
     zero_label_prose,
 )
 
@@ -383,7 +384,7 @@ def test_namespaced_form_covers_every_subcommand(isolated_ws):
     _help_has_list(_ask(ws, "help", NAMED))
     healthy = _ask(ws, "doctor", NAMED)
     require_four_healthy_checks(healthy, "full")
-    measured = zero_label_prose()
+    measured = scored_prose()
     path = _plant(ws, fresh_word() + ".md", measured.text)
     checked = _ask(ws, f"check {path}", NAMED)
     summary = parse_check_summary(checked)
@@ -677,7 +678,7 @@ def _rel(ws, path):
 
 def test_check_over_cap_names_kilobytes_and_no_score(isolated_ws):
     ws = isolated_ws
-    prose = zero_label_prose()
+    prose = scored_prose()
 
     def plain_pair(suffix):
         under = _plant(ws, fresh_word() + suffix, prose.text)
@@ -725,7 +726,7 @@ def test_check_over_cap_names_kilobytes_and_no_score(isolated_ws):
 
 def test_check_python_missing_names_no_score(isolated_ws):
     ws = isolated_ws
-    path = _plant(ws, fresh_word() + ".md", zero_label_prose().text)
+    path = _plant(ws, fresh_word() + ".md", scored_prose().text)
     before = path.read_bytes()
     missing_py = _ask(ws, f"check {path}", env_updates=node_kept_without_interpreters())
     _no_score(missing_py, path)
@@ -737,7 +738,7 @@ def test_check_python_missing_names_no_score(isolated_ws):
 
 def test_check_names_the_file_only_for_no_output_and_stated_failure(isolated_ws):
     ws = isolated_ws
-    path = _plant(ws, fresh_word() + ".md", zero_label_prose().text)
+    path = _plant(ws, fresh_word() + ".md", scored_prose().text)
     before = path.read_bytes()
     mark = fresh_word()
     failure = fresh_word()
@@ -1141,9 +1142,7 @@ def test_show_flagged_bit_only_when_the_row_has_labels(isolated_ws):
     flagged_path = _plant(ws, fresh_word() + ".md", flagged.text)
     under_path = _plant(ws, fresh_word() + ".md", under.text)
     quiet_path = _plant(ws, fresh_word() + ".md", quiet.text)
-    exact = write_docx(ws, fresh_word() + ".docx", window_body(262144))
-    longer = write_docx(ws, fresh_word() + ".docx", window_body(262145))
-    for path in (flagged_path, under_path, quiet_path, exact, longer):
+    for path in (flagged_path, under_path, quiet_path):
         _save(ws, path, session)
     shown = _ask(ws, "show", session_id=session)
     flagged_row = require_scored_row_shows(show_row(shown, flagged_path.name), flagged)
@@ -1156,6 +1155,16 @@ def test_show_flagged_bit_only_when_the_row_has_labels(isolated_ws):
     assert all(label in under.labels for label in under_row.labels), under_row.labels
     quiet_row = require_scored_row_shows(show_row(shown, quiet_path.name), quiet)
     assert quiet_row.clause is None and quiet_row.labels == (), quiet_row
+
+
+def test_show_names_the_window_only_when_truncated(isolated_ws):
+    ws = isolated_ws
+    session = runtime_token("s")
+    exact = write_docx(ws, fresh_word() + ".docx", window_body(262144))
+    longer = write_docx(ws, fresh_word() + ".docx", window_body(262145))
+    for path in (exact, longer):
+        _save(ws, path, session)
+    shown = _ask(ws, "show", session_id=session)
     exact_body = show_row(shown, exact.name)
     longer_body = show_row(shown, longer.name)
     assert not parse_scored_row(exact_body).truncated
@@ -1909,7 +1918,7 @@ def test_shipped_command_file_forwards_arguments(isolated_ws):
 
 def test_commands_open_no_socket(isolated_ws):
     ws = isolated_ws
-    path = _plant(ws, fresh_word() + ".md", zero_label_prose().text)
+    path = _plant(ws, fresh_word() + ".md", scored_prose().text)
     transcript = _write_jsonl(
         Path(ws.path),
         "net.jsonl",

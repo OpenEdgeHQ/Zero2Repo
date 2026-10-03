@@ -41,7 +41,8 @@ from F04_helpers import (
     unpublished_residue_f04,
     unpublished_short_even_f04,
     unpublished_u64_f04,
-    unpublished_version_bytes_f04,
+    unpublished_version_value_f04,
+    format_version_offset,
     file_write_syscalls_in_trace,
     run_traced_arch_network,
     run_traced_file_writes,
@@ -134,29 +135,39 @@ def _assert_version_modes(report: dict, prefix: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_empty_emit_is_even_at_least_64_version_one_zero_and_aligned():
+def test_empty_emit_is_even_aligned_and_carries_version_one():
+    voff = format_version_offset()
     source = wrap_f04_probe(
-        r"""
+        fill_u64(
+            r"""
+    const voff: usize = __VOFF__;
     var bm = try klyvmap.Bitmap.init(allocator);
     const view = bm.toBuffer();
     const copy = try bm.toBufferCopy(allocator);
     const vh = try headerOf(view);
     const ch = try headerOf(copy);
     const same = std.mem.eql(u8, view, copy);
+    if (view.len <= voff or copy.len <= voff) return error.ShortEmit;
+    const vv = view[voff];
+    const cv = copy[voff];
     bm.deinit();
     allocator.free(copy);
     try positiveControl(track, vh.len);
     try emitJson(init, init.gpa,
-        "{{\"same\":{s},\"vlen\":{d},\"vb0\":{d},\"vb1\":{d},\"vres\":{d},\"clen\":{d},\"cb0\":{d},\"cb1\":{d},\"cres\":{d}}}",
-        .{ jsonBool(same), vh.len, vh.b0, vh.b1, vh.res, ch.len, ch.b0, ch.b1, ch.res },
+        "{{\"same\":{s},\"vlen\":{d},\"vver\":{d},\"vres\":{d},\"clen\":{d},\"cver\":{d},\"cres\":{d}}}",
+        .{ jsonBool(same), vh.len, vv, vh.res, ch.len, cv, ch.res },
     );
-"""
+""",
+            voff=voff,
+        )
     )
     report = run_bitmap_probe(source)
     require_true_fields(report, "same")
-    require_emit_shape(report, length="vlen", b0="vb0", b1="vb1", residue="vres")
-    require_emit_shape(report, length="clen", b0="cb0", b1="cb1", residue="cres")
+    require_emit_shape(report, length="vlen", residue="vres")
+    require_emit_shape(report, length="clen", residue="cres")
     assert require_int_field(report, "vlen") == require_int_field(report, "clen")
+    assert require_int_field(report, "vver") == 1, "view does not carry format version 1"
+    assert require_int_field(report, "cver") == 1, "owning copy does not carry format version 1"
 
 
 def test_open_empty_emit_three_modes_matches_in_use_bytes_and_stays_empty():
@@ -822,22 +833,22 @@ def _emit_template_zig(values: list[int]) -> str:
 
 def test_own_open_every_version_mismatch_frees_without_caller_free_and_yields_no_bitmap():
     values = unpublished_population_f04(unpublished_count_f04())
-    second = 3
-    other = unpublished_version_bytes_f04(second)
+    voff = format_version_offset()
+    other = unpublished_version_value_f04()
     source = wrap_f04_probe(
         _emit_template_zig(values)
         + fill_u64(
             r"""
-    const patches = [_][2]u8{ .{2, template[1]}, .{0, template[1]}, .{1, __SECOND__}, .{0, 1}, .{__B0__, __B1__} };
+    const voff: usize = __VOFF__;
+    const patches = [_]u8{ 2, 0, 3, 255, __OTHER__ };
     var raw: [1024]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{");
-    for (patches, 0..) |pair, n| {
+    for (patches, 0..) |value, n| {
         var patched = try init.gpa.dupe(u8, template);
         defer init.gpa.free(patched);
-        if (patched.len < 2) return error.ShortHeader;
-        patched[0] = pair[0];
-        patched[1] = pair[1];
+        if (patched.len <= voff) return error.ShortHeader;
+        patched[voff] = value;
         const modes = try versionModes(track, patched);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -851,9 +862,8 @@ def test_own_open_every_version_mismatch_frees_without_caller_free_and_yields_no
     try app(&raw, &i, "}");
     try writeStdout(init, raw[0..i]);
 """,
-            second=second,
-            b0=other[0],
-            b1=other[1],
+            voff=voff,
+            other=other,
         )
     )
     report = run_bitmap_probe(source)
@@ -871,23 +881,15 @@ def test_own_open_too_small_or_odd_yields_empty_and_frees_without_caller_free():
             r"""
     const newv: u64 = __NEWV__;
     const banned: u64 = __BANNED__;
-    const lens = [_]usize{ 8, 62, 65, 8, 62, template.len + 1 };
+    const lens = [_]usize{ 2, 6, 65, 4, template.len - 1, template.len + 1 };
     var raw: [2048]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{");
     for (lens, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        if (nlen <= template.len) {
-            @memcpy(buf, template[0..nlen]);
-        } else {
-            @memcpy(buf[0..template.len], template);
-            buf[template.len] = 0x5a;
-        }
-        if (n < 3 and buf.len > 1) {
-            buf[0] = 1;
-            buf[1] = 0;
-        }
+        copyPrefix(buf, template);
+        if (nlen > template.len) buf[template.len] = 0x5a;
         const modes = try freshModes(track, init.gpa, buf, newv, banned, true);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -911,18 +913,21 @@ def test_own_open_too_small_or_odd_yields_empty_and_frees_without_caller_free():
 def test_borrow_open_does_not_free_caller_buffer_on_version_mismatch_or_too_small():
     values = unpublished_population_f04(unpublished_count_f04())
     newv = unpublished_u64_f04(forbidden=set(values))
+    voff = format_version_offset()
     source = wrap_f04_probe(
         _emit_template_zig(values)
         + fill_u64(
             r"""
     const newv: u64 = __NEWV__;
+    const voff: usize = __VOFF__;
     var bad = try init.gpa.dupe(u8, template);
     defer init.gpa.free(bad);
-    bad[0] = 2;
+    if (bad.len <= voff) return error.ShortHeader;
+    bad[voff] = 2;
     const versioned = try versionModes(track, bad);
-    const short_buf = try init.gpa.alloc(u8, 8);
+    const short_buf = try init.gpa.alloc(u8, 4);
     defer init.gpa.free(short_buf);
-    fillVersion(short_buf, 1, 0);
+    copyPrefix(short_buf, template);
     const shortened = try freshModes(track, init.gpa, short_buf, newv, 0, false);
     try emitJson(init, init.gpa,
         "{{\"v_borrow_yield\":{s},\"v_borrow_caller_same\":{s},\"v_borrow_held\":{s},\"s_borrow_yield\":{s},\"s_borrow_fresh\":{s},\"s_borrow_caller_same\":{s},\"s_borrow_held\":{s}}}",
@@ -934,6 +939,7 @@ def test_borrow_open_does_not_free_caller_buffer_on_version_mismatch_or_too_smal
     );
 """,
             newv=newv,
+            voff=voff,
         )
     )
     report = run_bitmap_probe(source)
@@ -970,11 +976,7 @@ def _fresh_lengths_probe(lengths: list[int], values: list[int] | None, newv: int
     for (lens, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        if (template.len >= nlen and nlen != 0) {
-            @memcpy(buf, template[0..nlen]);
-        } else if (nlen != 0) {
-            fillVersion(buf, 1, 0);
-        }
+        copyPrefix(buf, template);
         const modes = try freshModes(track, init.gpa, buf, newv, banned, __BANNED_FLAG__);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1004,14 +1006,18 @@ def test_short_or_odd_buffers_open_as_fresh_empty_in_borrow_own_and_copy():
         fill_u64(
             r"""
     const newv: u64 = __NEWV__;
-    const lens = [_]usize{ 0, 8, 62, 65 };
+    var fresh_src = try klyvmap.Bitmap.init(allocator);
+    const template = try init.gpa.dupe(u8, fresh_src.toBuffer());
+    defer init.gpa.free(template);
+    fresh_src.deinit();
+    const lens = [_]usize{ 0, 2, 6, 65 };
     var raw: [4096]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{");
     for (lens, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        if (nlen > 1) fillVersion(buf, 1, 0);
+        copyPrefix(buf, template);
         const modes = try freshModes(track, init.gpa, buf, newv, 0, false);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1052,26 +1058,23 @@ def test_short_or_odd_buffers_open_as_fresh_empty_in_borrow_own_and_copy():
 def test_prefix_of_real_emit_and_emit_plus_one_byte_open_as_empty():
     values = unpublished_population_f04(unpublished_count_f04())
     newv = unpublished_u64_f04(forbidden=set(values))
-    source = _fresh_lengths_probe([8, 62], values, newv, values[0], True)
-    # The helper copies a prefix when template is long enough. Add the odd
-    # tail in a dedicated probe together with those prefixes.
+    # Tiny even prefixes (below the PRD's 8-byte floor), an odd-length
+    # truncation, and the whole emit plus one byte.
     source = wrap_f04_probe(
         _emit_template_zig(values)
         + fill_u64(
             r"""
     const newv: u64 = __NEWV__;
     const banned: u64 = __BANNED__;
-    const specs = [_]usize{ 8, 62, template.len + 1 };
+    const specs = [_]usize{ 2, 6, template.len - 1, template.len + 1 };
     var raw: [2048]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{");
     for (specs, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        if (nlen <= template.len) @memcpy(buf, template[0..nlen]) else {
-            @memcpy(buf[0..template.len], template);
-            buf[template.len] = 0x5a;
-        }
+        copyPrefix(buf, template);
+        if (nlen > template.len) buf[template.len] = 0x5a;
         const modes = try freshModes(track, init.gpa, buf, newv, banned, true);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1092,24 +1095,24 @@ def test_prefix_of_real_emit_and_emit_plus_one_byte_open_as_empty():
         )
     )
     report = run_bitmap_probe(source)
-    for n in range(3):
+    for n in range(4):
         _assert_fresh_modes(report, f"a{n}_")
 
 
-def test_short_or_odd_whose_first_bytes_are_not_version_one_still_open_as_empty():
+def test_short_or_odd_buffers_holding_no_version_one_still_open_as_empty():
     newv = unpublished_u64_f04()
     source = wrap_f04_probe(
         fill_u64(
             r"""
     const newv: u64 = __NEWV__;
-    const lens = [_]usize{ 8, 62, 65 };
+    const lens = [_]usize{ 2, 6, 65 };
     var raw: [4096]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{");
     for (lens, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        fillVersion(buf, 2, 0);
+        @memset(buf, 2);
         const modes = try freshModes(track, init.gpa, buf, newv, 0, false);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1141,6 +1144,10 @@ def test_unpublished_short_even_and_odd_lengths_open_as_empty_not_version_failur
         fill_u64(
             r"""
     const newv: u64 = __NEWV__;
+    var fresh_src = try klyvmap.Bitmap.init(allocator);
+    const template = try init.gpa.dupe(u8, fresh_src.toBuffer());
+    defer init.gpa.free(template);
+    fresh_src.deinit();
     const lens = [_]usize{ __EVEN__, __ODD__ };
     var raw: [2048]u8 = undefined;
     var i: usize = 0;
@@ -1148,7 +1155,7 @@ def test_unpublished_short_even_and_odd_lengths_open_as_empty_not_version_failur
     for (lens, 0..) |nlen, n| {
         const buf = try init.gpa.alloc(u8, nlen);
         defer init.gpa.free(buf);
-        fillVersion(buf, 1, 0);
+        copyPrefix(buf, template);
         const modes = try freshModes(track, init.gpa, buf, newv, 0, false);
         if (n != 0) try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1174,30 +1181,49 @@ def test_unpublished_short_even_and_odd_lengths_open_as_empty_not_version_failur
         _assert_fresh_modes(report, f"a{n}_")
 
 
-def _version_patch_probe(patches: list[tuple[int, int]], values: list[int]) -> str:
-    body = _emit_template_zig(values)
-    literals = ", ".join(f".{{ {b0}, {b1} }}" for b0, b1 in patches)
-    # Keep byte 1 of the real template for the "only byte 0 changes" cases
-    # by using 255 as a sentinel that means "leave byte 1".
+def _version_patch_probe(patches: list[int], values: list[int], voff: int, *, compact: bool = False) -> str:
+    """Open the emit of *values* with its format-version byte set to each patch.
+
+    *voff* is the version position derived from the product's own emits
+    (:func:`format_version_offset`); the field's width and place are the
+    implementer's choice, so only that byte is changed.
+    """
+    literals = ", ".join(str(int(v)) for v in patches)
+    if compact:
+        body = fill_u64(
+            r"""
+    const originals = [_]u64{ __VALS__ };
+    var built = try klyvmap.Bitmap.init(allocator);
+    for (originals) |v| _ = try built.set(v);
+    try built.compact();
+    const template = try init.gpa.dupe(u8, built.toBuffer());
+    defer init.gpa.free(template);
+    built.deinit();
+""",
+            vals=zig_u64_list(values),
+        )
+    else:
+        body = _emit_template_zig(values)
     return wrap_f04_probe(
         body
         + f"""
-    const patches = [_][2]i16{{ {literals} }};
+    const patches = [_]u8{{ {literals} }};
+    const voff: usize = {voff};
     const ordered_one: u64 = {values[0]};
+    if (template.len <= voff) return error.ShortHeader;
     var control = try openMode(track, template, false);
     if (!control.yielded) return error.ControlFailed;
-    const control_has = control.bm.contains(ordered_one);
+    const control_has = control.bm.contains(ordered_one) and control.bm.getCardinality() == {len(values)};
     releaseOpened(track, &control);
     callerFree(track, &control);
     var raw: [2048]u8 = undefined;
     var i: usize = 0;
     try app(&raw, &i, "{{");
     try appFmt(&raw, &i, init.gpa, "\\"control_has\\":{{s}}", .{{jsonBool(control_has)}});
-    for (patches, 0..) |pair, n| {{
+    for (patches, 0..) |value, n| {{
         var patched = try init.gpa.dupe(u8, template);
         defer init.gpa.free(patched);
-        patched[0] = @intCast(pair[0]);
-        if (pair[1] >= 0) patched[1] = @intCast(pair[1]);
+        patched[voff] = value;
         const modes = try versionModes(track, patched);
         try app(&raw, &i, ",");
         try appFmt(&raw, &i, init.gpa,
@@ -1214,59 +1240,110 @@ def _version_patch_probe(patches: list[tuple[int, int]], values: list[int]) -> s
     )
 
 
-def test_first_byte_2_or_0_is_version_failure_on_all_three_opens():
+def test_version_field_holding_2_or_0_is_version_failure_on_all_three_opens():
     values = unpublished_population_f04(unpublished_count_f04())
-    source = _version_patch_probe([(2, -1), (0, -1)], values)
+    source = _version_patch_probe([2, 0], values, format_version_offset())
     report = run_bitmap_probe(source)
     require_true_fields(report, "control_has")
     for n in range(2):
         _assert_version_modes(report, f"p{n}_")
 
 
-def test_second_byte_not_zero_is_the_same_version_failure():
+def test_version_mismatch_on_a_large_compacted_buffer_is_the_same_failure():
     values = unpublished_population_f04(unpublished_count_f04())
-    source = _version_patch_probe([(1, 3)], values)
-    report = run_bitmap_probe(source)
+    seen = set(values)
+    while len(values) < 600:
+        value = unpublished_u64_f04(forbidden=seen)
+        seen.add(value)
+        values.append(value)
+    source = _version_patch_probe([3, 255], values, format_version_offset(), compact=True)
+    report = run_bitmap_probe(source, timeout=LARGE_PROBE_TIMEOUT)
     require_true_fields(report, "control_has")
-    _assert_version_modes(report, "p0_")
+    for n in range(2):
+        _assert_version_modes(report, f"p{n}_")
 
 
-def test_bytes_zero_then_one_are_not_little_endian_version_one():
+def test_restoring_version_one_opens_the_original_set_again():
+    # The refusal comes from the version field itself: the same buffer with
+    # the field put back to 1 opens with the original set and bytes.
     values = unpublished_population_f04(unpublished_count_f04())
-    source = _version_patch_probe([(0, 1)], values)
+    voff = format_version_offset()
+    source = wrap_f04_probe(
+        _emit_template_zig(values)
+        + fill_u64(
+            r"""
+    const ordered = [_]u64{ __ORDERED__ };
+    const voff: usize = __VOFF__;
+    if (template.len <= voff) return error.ShortHeader;
+    var patched = try init.gpa.dupe(u8, template);
+    defer init.gpa.free(patched);
+    patched[voff] = 2;
+    const refused = try versionModes(track, patched);
+    patched[voff] = 1;
+    const restored_same = std.mem.eql(u8, patched, template);
+    var again = try openMode(track, patched, false);
+    if (!again.yielded) return error.RestoredOpenFailed;
+    var all = again.bm.getCardinality() == ordered.len;
+    for (ordered) |v| {
+        if (!again.bm.contains(v)) all = false;
+    }
+    const bytes_same = std.mem.eql(u8, again.bm.toBuffer(), template);
+    releaseOpened(track, &again);
+    callerFree(track, &again);
+    try emitJson(init, init.gpa,
+        "{{\"borrow_yield\":{s},\"own_yield\":{s},\"copy_yield\":{s},\"own_baseline\":{s},\"borrow_caller_same\":{s},\"borrow_held\":{s},\"restored_same\":{s},\"all\":{s},\"bytes_same\":{s}}}",
+        .{
+            jsonBool(refused.borrow_yield), jsonBool(refused.own_yield), jsonBool(refused.copy_yield),
+            jsonBool(refused.own_baseline), jsonBool(refused.borrow_caller_same), jsonBool(refused.borrow_held),
+            jsonBool(restored_same), jsonBool(all), jsonBool(bytes_same),
+        },
+    );
+""",
+            ordered=zig_u64_list(sorted(values)),
+            voff=voff,
+        )
+    )
     report = run_bitmap_probe(source)
-    require_true_fields(report, "control_has")
-    _assert_version_modes(report, "p0_")
+    _assert_version_modes(report, "")
+    require_true_fields(report, "restored_same", "all", "bytes_same")
 
 
-def test_unpublished_version_word_is_version_failure_on_all_three_opens():
+def test_unpublished_version_value_is_version_failure_on_all_three_opens():
     values = unpublished_population_f04(unpublished_count_f04())
-    pair = unpublished_version_bytes_f04(3)
-    source = _version_patch_probe([pair], values)
+    source = _version_patch_probe([unpublished_version_value_f04()], values, format_version_offset())
     report = run_bitmap_probe(source)
     require_true_fields(report, "control_has")
     _assert_version_modes(report, "p0_")
 
 
 def test_non_emit_even_buffer_bad_version_refused_on_all_three_opens():
-    # 64 even bytes filled here, not copied from an emit and then patched.
-    # Header 2,0 is not little-endian 1. Same refusal as a patched emit:
-    # no bitmap on borrow, own, or the copying open; own back to the
-    # pre-open total; borrow neither writes nor frees the caller's buffer.
+    # A buffer filled here, as long as an empty bitmap's emit (so not too
+    # short), not copied from an emit and then patched. Its version field
+    # holds 2. Same refusal as a patched emit: no bitmap on borrow, own, or
+    # the copying open; own back to the pre-open total; borrow neither
+    # writes nor frees the caller's buffer.
     filler = unpublished_body_byte_f04()
+    voff = format_version_offset()
     source = wrap_f04_probe(
         fill_u64(
             r"""
     const filler: u8 = __FILLER__;
-    const buf = try init.gpa.alloc(u8, 64);
+    const voff: usize = __VOFF__;
+    var fresh_src = try klyvmap.Bitmap.init(allocator);
+    const emit_len = fresh_src.toBuffer().len;
+    fresh_src.deinit();
+    if (emit_len <= voff) return error.ShortHeader;
+    const buf = try init.gpa.alloc(u8, emit_len);
     defer init.gpa.free(buf);
     @memset(buf, filler);
-    buf[0] = 2;
-    buf[1] = 0;
+    buf[voff] = 2;
     const modes = try versionModes(track, buf);
-    const shaped = buf.len >= 64 and buf.len % 2 == 0;
-    const not_version = !(buf[0] == 1 and buf[1] == 0);
-    const body = buf[2] == filler and buf[63] == filler;
+    const shaped = buf.len > 0 and buf.len % 2 == 0;
+    const not_version = buf[voff] != 1;
+    var body = true;
+    for (buf, 0..) |b, k| {
+        if (k != voff and b != filler) body = false;
+    }
     try emitJson(init, init.gpa,
         "{{\"shaped\":{s},\"not_version\":{s},\"body\":{s},\"borrow_yield\":{s},\"own_yield\":{s},\"copy_yield\":{s},\"own_baseline\":{s},\"borrow_caller_same\":{s},\"borrow_held\":{s}}}",
         .{
@@ -1277,6 +1354,7 @@ def test_non_emit_even_buffer_bad_version_refused_on_all_three_opens():
     );
 """,
             filler=filler,
+            voff=voff,
         )
     )
     report = run_bitmap_probe(source)
@@ -1475,7 +1553,7 @@ def test_compact_after_borrow_open_owns_distinct_storage_and_does_not_write_call
     try opened.compact();
     const caller_same = std.mem.eql(u8, copy, snap);
     const view = opened.toBuffer();
-    const owns = view.len >= 64 and track.live >= before_compact + view.len;
+    const owns = view.len > 0 and track.live >= before_compact + view.len;
     const result_snap = try init.gpa.dupe(u8, view);
     defer init.gpa.free(result_snap);
     const card_before = opened.getCardinality();
@@ -1957,7 +2035,7 @@ def test_one_prefix_opens_in_every_mode_at_every_population_while_filled_and_emp
             defer alloc.free(copy);
             const snap = try gpa.dupe(u8, copy);
             defer gpa.free(snap);
-            var ok = copy.len >= 64 and copy.len % 2 == 0 and copy[0] == 1 and copy[1] == 0;
+            var ok = copy.len > 0 and copy.len % 2 == 0;
             {
                 var o = klyvmap.Bitmap.fromBuffer(alloc, copy, .borrow) catch return false;
                 defer o.deinit();

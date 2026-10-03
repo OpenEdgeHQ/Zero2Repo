@@ -118,8 +118,8 @@ def stderr_path_index(text: str, path: str) -> int:
 
 
 # Interface Contract, batch summary: one stderr line ending in
-# ``<failed> of <attempted> failed`` when at least one member did not succeed.
-_BATCH_SUMMARY = re.compile(r"(?<![0-9])(\d+) of (\d+) failed\s*$")
+# ``batch failed: <failed>/<attempted>`` when at least one member did not succeed.
+_BATCH_SUMMARY = re.compile(r"batch failed: (\d+)/(\d+)\s*$")
 
 
 def batch_summaries(text: str) -> list[tuple[int, int]]:
@@ -144,7 +144,7 @@ def require_batch_summary(
     print(f"[F07] {what} batch summary={found!r}", flush=True)
     assert found == [(failed, attempted)], (
         f"{what}: when at least one batch member does not succeed, standard "
-        "error carries one summary line `<failed> of <attempted> failed` with "
+        "error carries one summary line `batch failed: <failed>/<attempted>` with "
         f"failed={failed} attempted={attempted}; found={found!r} "
         f"stderr={result.stderr_text!r}"
     )

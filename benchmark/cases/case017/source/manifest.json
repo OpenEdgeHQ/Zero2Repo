@@ -48,7 +48,9 @@
     "zroar_test",
     "zroar_test.zig",
     "zroar_track_stats",
-    "ZroarBufferDiffers"
+    "ZroarBufferDiffers",
+    "sroar",
+    "dgraph-io/sroar"
   ],
   "init_metadata": {
     "suggested_neutral_name": "klyvmap",

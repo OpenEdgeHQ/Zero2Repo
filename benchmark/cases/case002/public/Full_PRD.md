@@ -83,8 +83,8 @@ Feature points below group these entries by capability. They do not invent addit
 - Whitespace (including empty lines) before a binding is skipped. A blank line is never a binding.
 - A line whose first non-whitespace character is `#` is a comment and contributes nothing.
 - A binding line has, in order: an optional `export` directive, a name, optional spaces or tabs, then optionally an equals sign followed by optional spaces or tabs and a value, then an optional comment, then the end of the line.
-- **`export` directive:** the word `export` followed by at least one space or tab, at the start of the line (after leading whitespace). It is not part of the name and does not change how the rest of the line is read. A name that merely begins with the letters `export` and is not followed by a space or tab is an ordinary name.
-- **Names** are unquoted or single-quoted. An unquoted name is a run of one or more characters other than `=`, `#`, and whitespace; every other character (punctuation, brackets, dollar signs, colons, braces, quotes, non-ASCII letters) is part of it. A single-quoted name is one or more characters other than a single quote between two single quotes; the quotes are not part of the name.
+- **`export` directive:** the word `export` followed by at least one space or tab, at the start of the line (after leading whitespace). It is not part of the name and does not change how the rest of the line is read.
+- **Names** are unquoted or single-quoted. An unquoted name is a run of one or more characters other than `=`, `#`, and whitespace; every other character is part of it. A single-quoted name is one or more characters other than a single quote between two single quotes; the quotes are not part of the name.
 - **No value versus empty string:** a name with no equals sign is a binding with **no value**. A name followed by an equals sign and then only spaces or tabs up to the end of the line has the **empty string** as its value. No value, empty string, and absence of the name are three distinct outcomes.
 - **Unquoted values** run from the first character after the equals sign and the spaces or tabs after it, to the end of the line. Within that text, everything from the first `#` that is preceded by whitespace (space or tab) is a comment and is removed; then trailing whitespace is removed. Interior whitespace, including tabs, is kept. A `#` not preceded by whitespace is value text.
 - **Quoted values** start with a single or double quote right after the equals sign (and optional spaces or tabs) and end at the next quote of the same kind that is not preceded by a backslash. Everything between the quotes is kept, including leading, interior and trailing whitespace, `#`, and real line breaks, so a quoted value may span several lines. Text that looks like a binding inside a still-open quoted value is value text. After the closing quote only spaces or tabs, an optional comment, and the end of the line may follow.
@@ -110,15 +110,14 @@ Feature points below group these entries by capability. They do not invent addit
 **Normal behavior:**
 
 - Location walks from a starting directory toward the filesystem root, one parent at a time, and returns the first path that is a regular file or (on Unix) a FIFO whose base name is the requested name (default `.env`). A nearer match wins over a farther one. A directory with that name is not a match.
-- In ordinary script execution (the main program is a script file, the session is not an interactive interpreter, no debugger is attached, and the process is not a frozen packaged executable), the starting directory is the directory that contains the calling code’s file, not the process working directory. A file that exists only in the working directory, or its ancestors, and not in the calling file’s directory or its ancestors, is not found in this mode.
+- In ordinary script execution (the main program is a script file, the session is not an interactive interpreter, no debugger is attached, and the process is not a frozen packaged executable), the starting directory is the directory that contains the file of the nearest calling code whose file exists on disk, not the process working directory. Calling code whose file does not exist on disk is passed over in favor of the next caller up the call chain.
 - When the caller asks to start from the working directory, when the session is an interactive interpreter (including a session whose main program has no script file path), when a debugger is attached, or when the process is a frozen packaged executable, the starting directory is the current working directory.
 - When a matching file exists, the result is the path to that file. When none exists after walking to the root, the result is empty text (no path), unless the caller asked to fail if not found, in which case the operation does not succeed and no path is delivered. A match is returned in both modes.
-- A custom file name is searched under that name only; a file named `.env` does not satisfy it, and a file with the custom name does not satisfy a default search.
+- A custom file name is searched under that name only.
 
 **Boundary / error behavior:**
 
 - When the start is the working directory and that directory no longer exists, location does not succeed.
-- When the calling code was imported from a zip archive, location still completes; it does not fail because the zipped file has no ordinary filesystem directory, and a file beside the archive on disk remains findable from an outer script that imported the zipped code.
 
 ---
 
@@ -133,7 +132,7 @@ Feature points below group these entries by capability. They do not invent addit
 - By default, load does **not** override: a name already present in the process environment keeps its value, and names not yet present are still written. When the caller asks to override, the source’s values replace present names.
 - When the caller names an encoding, a file or FIFO source is decoded with that encoding.
 - Load reports **success** when the source produced at least one recognized name, even if every name was left unchanged because override was off, and even if the only names had no value. Load reports **failure** when the source produced no recognized names (no source found, missing path, empty source, comments only) or when loading is disabled. Neither outcome aborts the caller.
-- When the caller asks for extra reporting and no source was selected (a given path that is not an existing file with no stream, or location that found nothing), load emits a diagnostic that the configuration file was not found, naming that path. Without extra reporting it emits no diagnostic for that case; an existing file, even an empty one, never produces that diagnostic.
+- When the caller asks for extra reporting and no source was selected (a given path that is not an existing file with no stream, or location that found nothing), load emits a diagnostic that the configuration file was not found, naming that path. Without extra reporting it emits no diagnostic for that case.
 - When expansion is left on (the default), the strings written are the expanded strings of FP-05. Turning expansion off leaves dollar-brace text literal.
 
 **Disable switch:**

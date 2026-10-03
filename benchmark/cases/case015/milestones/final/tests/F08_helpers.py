@@ -126,46 +126,6 @@ def require_newline_oriented_records(text: str) -> None:
     print(f"[F08] newline-oriented records={len(newline)}", flush=True)
 
 
-def require_one_versus_several_progress_runs(
-    one: RunResult,
-    several: RunResult,
-) -> None:
-    """Effort 1 writes exactly one 100% indication; effort 9 writes two or more.
-
-    Unconditional. Not leftover-token nonempty-ness, not leftover-token
-    set difference, not a leftover letter-group count, not a trailing
-    leftover integer, not leftover-newline consecutive-distinct, and not
-    a monotonic leftover decimal. Type errors raise.
-    """
-    if not isinstance(one, RunResult):
-        raise HarnessError(
-            f"require_one_versus_several_progress_runs expected RunResult "
-            f"one, got {type(one)!r}"
-        )
-    if not isinstance(several, RunResult):
-        raise HarnessError(
-            f"require_one_versus_several_progress_runs expected RunResult "
-            f"several, got {type(several)!r}"
-        )
-    one_n = completion_indication_count(one.stderr_text)
-    several_n = completion_indication_count(several.stderr_text)
-    assert one_n == 1, (
-        "Vorbis compress with --progress at effort 1 must write exactly "
-        "one completion indication (a progress update whose text carries "
-        f"the literal 100%); count={one_n}"
-    )
-    assert several_n >= 2, (
-        "Vorbis compress with --progress at effort 9 of the same input "
-        "must write two or more completion indications; "
-        f"effort1={one_n} effort9={several_n}"
-    )
-    print(
-        f"[F08] one-vs-several completion indications effort1={one_n} "
-        f"effort9={several_n}",
-        flush=True,
-    )
-
-
 def _record_has_name(record: str, name: str) -> bool:
     if not isinstance(record, str):
         raise HarnessError(

@@ -3,9 +3,8 @@
 
 These helpers drive the public ``dump`` / ``pages`` verbs and read
 standard output in the forms the Interface Contract states: the dump
-``level <stage>`` field and ``Ogg Opus mode`` line, and one ``pages`` line
-per page beginning ``page <index>`` and ending in ``reframes`` or
-``REFRAME MISMATCH``.
+``stage: <stage>`` and ``codec: <codec>`` lines, and one ``pages`` line
+per page beginning ``page <index>`` and ending in ``ok`` or ``mismatch``.
 """
 
 from __future__ import annotations
@@ -101,15 +100,14 @@ def require_every_page_reconstructs(data: bytes) -> None:
             )
 
 
-_PAGE_LINE = re.compile(r"^ *page (\d+)(?![0-9]).*?(reframes|REFRAME MISMATCH)\s*$")
+_PAGE_LINE = re.compile(r"^ *page (\d+)(?![0-9]).*?(?<![A-Za-z0-9_-])(ok|mismatch)\s*$")
 _PAGE_START = re.compile(r"^ *page \d+(?![0-9])")
 
 
 def page_statuses(text: str) -> list[tuple[int, str]]:
     """``(index, status)`` of every page line of ``pages`` stdout, in order.
 
-    Status is ``"ok"`` for ``reframes`` and ``"mismatch"`` for
-    ``REFRAME MISMATCH``. A line that starts like a page line but does not
+    Status is ``"ok"`` for ``ok`` and ``"mismatch"`` for ``mismatch``. A line that starts like a page line but does not
     end in a stated status asserts.
     """
     if not isinstance(text, str):
@@ -121,9 +119,9 @@ def page_statuses(text: str) -> list[tuple[int, str]]:
         m = _PAGE_LINE.match(line)
         assert m, (
             "a pages line does not end in the reconstruction status "
-            f"`reframes` or `REFRAME MISMATCH`: {line!r}"
+            f"`ok` or `mismatch`: {line!r}"
         )
-        out.append((int(m.group(1)), "ok" if m.group(2) == "reframes" else "mismatch"))
+        out.append((int(m.group(1)), m.group(2)))
     return out
 
 

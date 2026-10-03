@@ -18,5 +18,5 @@ Load the lint rules from this repository's TypeScript sources into the host lint
 - **Platforms:** linux, darwin, windows
 - **Required on:** linux
 - **Use:** the rules load from this repository's TypeScript sources (not from a separately published registry package) into the host linter.
-- **Setup:** Node.js 24 and pnpm 10.33.0, the package manager the repository declares in its `packageManager` field, installing from the committed lockfile. Runtime and development dependencies are the linter, its plugin-host package, a TypeScript runner, and a no-emit typechecker. No extra system libraries beyond a normal JavaScript toolchain; no GPU or accelerator.
-- **Build:** No native compile step. The package exports TypeScript source directly. Typechecking is no-emit. A copy script mirrors production sources (production sources only) into a bundled installer snapshot.
+- **Setup:** Node.js 24 and pnpm 10.33.0, the package manager the repository declares in its `packageManager` field, installing from the committed lockfile. No extra system libraries beyond a normal JavaScript toolchain; no GPU or accelerator.
+- **Build:** No native compile step. The package exports TypeScript source directly.

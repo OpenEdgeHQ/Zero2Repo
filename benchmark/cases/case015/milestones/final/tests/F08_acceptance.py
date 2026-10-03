@@ -36,7 +36,6 @@ from F08_helpers import (
     require_names_visible_on_newline_records,
     require_newline_oriented_records,
     require_ok_written,
-    require_one_versus_several_progress_runs,
     require_written_dest,
 )
 from _harness import workspace
@@ -320,11 +319,11 @@ def test_batch_progress_jobs_one_names_on_distinct_lines():
 
 
 # ---------------------------------------------------------------------------
-# H. Vorbis --progress: effort 1 one run, effort 9 more than one
+# H. Vorbis --progress completes at both effort ends
 # ---------------------------------------------------------------------------
 
 
-def test_vorbis_effort1_one_progress_run_effort9_several():
+def test_vorbis_progress_completes_at_effort1_and_effort9():
     with workspace() as ws:
         src = vorbis_with_runtime_comment(ws)
         dest1 = unique_name("e1")
@@ -335,8 +334,9 @@ def test_vorbis_effort1_one_progress_run_effort9_several():
         require_ok_written(arm9, ws, src, dest9)
         require_archive_roundtrip(ws, src, dest1, what="effort 1 --progress")
         require_archive_roundtrip(ws, src, dest9, what="effort 9 --progress")
-        require_one_versus_several_progress_runs(arm1, arm9)
-        print("[F08] H effort 1 one progress run, effort 9 several", flush=True)
+        require_completion_indication(arm1)
+        require_completion_indication(arm9)
+        print("[F08] H effort 1 and effort 9 progress complete", flush=True)
 
 
 # ---------------------------------------------------------------------------

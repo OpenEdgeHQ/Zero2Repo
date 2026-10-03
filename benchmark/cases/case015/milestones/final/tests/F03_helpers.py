@@ -505,29 +505,40 @@ def states_decimal(text: str, value: int) -> bool:
     return re.search(rf"(?<![0-9A-Za-z.]){value}(?![0-9])", text) is not None
 
 
-# Contract `dump`: a line consisting of ``Ogg Opus mode`` marks an archive made
-# from Ogg Opus; a ``level <stage>`` field carries the stored encoding stage.
-_OPUS_MODE_LINE = re.compile(r"^\s*Ogg Opus mode\s*$", re.MULTILINE)
-_STORED_STAGE = re.compile(r"(?<![A-Za-z0-9_-])level (\d+)(?![0-9])")
+# Contract `dump`: a ``codec: <codec>`` line names the codec the archive was
+# made from (``opus`` or ``vorbis``); a ``stage: <stage>`` line carries the
+# stored encoding stage. Leading whitespace is allowed on both.
+_CODEC_LINE = re.compile(r"^\s*codec: (\S+)\s*$", re.MULTILINE)
+_STORED_STAGE = re.compile(r"^\s*stage: (\d+)\s*$", re.MULTILINE)
+
+
+def dump_codec(text: str) -> str:
+    """The ``<codec>`` of dump stdout's single ``codec: <codec>`` line."""
+    if not isinstance(text, str):
+        raise HarnessError(f"dump_codec expected str, got {type(text)!r}")
+    found = [m.group(1) for m in _CODEC_LINE.finditer(text)]
+    assert len(found) == 1 and found[0] in ("opus", "vorbis"), (
+        "dump standard output does not carry exactly one line "
+        f"`codec: opus` or `codec: vorbis`; found={found!r} stdout={text!r}"
+    )
+    return found[0]
 
 
 def dump_marks_opus(text: str) -> bool:
-    """True when dump stdout carries the Contract's ``Ogg Opus mode`` line."""
-    if not isinstance(text, str):
-        raise HarnessError(f"dump_marks_opus expected str, got {type(text)!r}")
-    return _OPUS_MODE_LINE.search(text) is not None
+    """True when dump stdout's codec line is ``codec: opus``."""
+    return dump_codec(text) == "opus"
 
 
 def dump_stored_stage(text: str) -> int:
-    """The decimal ``<stage>`` of dump stdout's ``level <stage>`` field."""
+    """The decimal ``<stage>`` of dump stdout's ``stage: <stage>`` line."""
     if not isinstance(text, str):
         raise HarnessError(f"dump_stored_stage expected str, got {type(text)!r}")
-    found = {int(m.group(1)) for m in _STORED_STAGE.finditer(text)}
+    found = [int(m.group(1)) for m in _STORED_STAGE.finditer(text)]
     assert len(found) == 1, (
-        "dump standard output does not carry exactly one stored-stage field "
-        f"`level <stage>`; found={sorted(found)!r} stdout={text!r}"
+        "dump standard output does not carry exactly one stored-stage line "
+        f"`stage: <stage>`; found={found!r} stdout={text!r}"
     )
-    return found.pop()
+    return found[0]
 
 
 def run_product_long(
@@ -582,6 +593,7 @@ __all__ = (
     "LONG_TIMEOUT",
     "OPUS_MAX_PACKET",
     "OPUS_TAGS_MAX",
+    "dump_codec",
     "dump_marks_opus",
     "dump_stdout",
     "dump_stored_stage",
@@ -723,8 +735,8 @@ def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> None:
     """Compress/expand the contrast inputs at *effort*, dump, read the codec.
 
     Each input must round-trip byte-for-byte. Every Opus dump carries the
-    Contract's ``Ogg Opus mode`` line and no Vorbis dump carries it (PRD
-    FP-09: the report depends only on the codec).
+    Contract's ``codec: opus`` line and every Vorbis dump ``codec: vorbis``
+    (PRD FP-09: the report depends only on the codec).
     """
     opus_paths, vorbis_paths = place_codec_mode_contrast(ws)
     texts: dict[str, str] = {}
@@ -745,12 +757,12 @@ def require_codec_mode_field(ws: Workspace, effort: str, *, what: str) -> None:
     for src in opus_paths:
         assert marks[src], (
             f"{what}: dump of an archive made from Ogg Opus ({src!r}) does not "
-            "carry the `Ogg Opus mode` line; stdout="
+            "carry the `codec: opus` line; stdout="
             f"{texts[src]!r}"
         )
     for src in vorbis_paths:
         assert not marks[src], (
-            f"{what}: dump of an archive made from Ogg Vorbis ({src!r}) carries "
-            "the `Ogg Opus mode` line; stdout="
+            f"{what}: dump of an archive made from Ogg Vorbis ({src!r}) does not "
+            "carry the `codec: vorbis` line; stdout="
             f"{texts[src]!r}"
         )

@@ -8,13 +8,14 @@ from F01_helpers import (
     PRODUCT_NAME,
     REQUIRED_HELP_NAMES,
     SIMD_ENV,
+    SIMD_NATIVE,
+    SIMD_PORTABLE,
     cli_tokens,
     derived_batch_archive,
     files_identical,
     invalid_simd_token,
     jobs_trailing_value,
     malformed_memcap_runtime,
-    mixer_kernel_names,
     place_non_ogg,
     place_opus,
     place_placeholder,
@@ -38,6 +39,7 @@ from F01_helpers import (
     unknown_long_option,
     unknown_short_option,
     unknown_verb,
+    version_dispatch,
 )
 from _harness import stored_copy, workspace
 
@@ -120,7 +122,7 @@ def test_help_and_version_stdout_differ():
         )
         print(
             "[F01] help names usage including default effort -9; "
-            "version names version, host, dedicated compiled-in field, kernels; "
+            "version names version, host, dedicated compiled-in field, code path; "
             f"compiled_in_payloads={len(payloads)}",
             flush=True,
         )
@@ -138,7 +140,7 @@ def test_version_names_the_product():
         )
 
 
-def test_version_identity_names_version_host_opus_and_kernels():
+def test_version_identity_names_version_host_opus_and_dispatch():
     with workspace() as ws:
         help_run = run_product(ws, ["--help"])
         version_run = run_product(ws, ["--version"])
@@ -148,24 +150,20 @@ def test_version_identity_names_version_host_opus_and_kernels():
         version_text = require_stdout_text(version_run)
         require_version_identity(version_text, help_text)
         tokens = cli_tokens(version_text)
-        kernels = mixer_kernel_names(version_text)
+        dispatched = version_dispatch(version_text)
         payloads = require_compiled_in_identity_field(version_text, help_text)
         assert PRODUCT_NAME in tokens, (
             f"version stdout does not name the product as a whole token; "
             f"tokens={sorted(tokens)}"
         )
-        assert kernels, (
-            f"version stdout does not name a mixer kernel; "
-            f"tokens={sorted(tokens)}"
-        )
         print(
-            f"[F01] version identity named; kernels={sorted(kernels)} "
+            f"[F01] version identity named; dispatch={dispatched} "
             f"compiled_in_payloads={len(payloads)}",
             flush=True,
         )
 
 
-def test_version_scalar_override_is_not_usage_error():
+def test_version_portable_override_is_not_usage_error():
     with workspace() as ws:
         unset = run_product(ws, ["-v"])
         require_ok(unset)
@@ -173,22 +171,18 @@ def test_version_scalar_override_is_not_usage_error():
         assert unset.returncode == 0, (
             f"unset SIMD version exited {unset.returncode}; stderr={unset.stderr!r}"
         )
-        scalar = run_product(ws, ["-v"], env_updates={SIMD_ENV: "scalar"})
-        require_ok(scalar)
-        text = require_stdout_text(scalar)
-        assert scalar.returncode == 0, (
-            f"ORP_SIMD=scalar on version exited {scalar.returncode}; "
-            f"stderr={scalar.stderr!r}"
-        )
-        assert scalar.returncode != 2, (
-            f"ORP_SIMD=scalar on version was a usage error; "
-            f"stderr={scalar.stderr!r}"
+        portable = run_product(ws, ["-v"], env_updates={SIMD_ENV: SIMD_PORTABLE})
+        require_ok(portable)
+        text = require_stdout_text(portable)
+        assert portable.returncode == 0, (
+            f"ORP_SIMD={SIMD_PORTABLE} on version exited {portable.returncode}; "
+            f"stderr={portable.stderr!r}"
         )
         assert text, (
-            f"ORP_SIMD=scalar on version wrote no identity; "
-            f"stderr={scalar.stderr!r}"
+            f"ORP_SIMD={SIMD_PORTABLE} on version wrote no identity; "
+            f"stderr={portable.stderr!r}"
         )
-        print("[F01] ORP_SIMD=scalar on version is not a usage error", flush=True)
+        print(f"[F01] ORP_SIMD={SIMD_PORTABLE} on version is not a usage error", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -558,11 +552,11 @@ def test_well_formed_memcap_zero_is_not_usage_error_on_compress():
 
 def test_invalid_simd_token_on_version_is_usage_error():
     with workspace() as ws:
-        good = run_product(ws, ["-v"], env_updates={SIMD_ENV: "scalar"})
+        good = run_product(ws, ["-v"], env_updates={SIMD_ENV: SIMD_PORTABLE})
         require_ok(good)
         require_stdout_text(good)
         assert good.returncode == 0, (
-            f"ORP_SIMD=scalar baseline exited {good.returncode}; "
+            f"ORP_SIMD={SIMD_PORTABLE} baseline exited {good.returncode}; "
             f"stderr={good.stderr!r}"
         )
 
@@ -580,28 +574,21 @@ def test_invalid_simd_token_on_version_is_usage_error():
         print(f"[F01] ORP_SIMD={bad!r} on version exit=2", flush=True)
 
 
-def test_mixer_kernels_report_identity_archives_and_unbuilt_usage_error():
+def test_code_path_override_reports_dispatch_and_keeps_archives_identical():
     with workspace() as ws:
         unset = run_product(ws, ["-v"])
         require_ok(unset)
-        unset_text = require_stdout_text(unset)
-        reported = mixer_kernel_names(unset_text)
-        assert reported, (
-            f"version stdout does not name which mixer kernel was built or "
-            f"dispatched; tokens={sorted(cli_tokens(unset_text))}"
-        )
-        print(f"[F01] version-reported kernels={sorted(reported)}", flush=True)
+        default_path = version_dispatch(require_stdout_text(unset))
+        print(f"[F01] default dispatch={default_path}", flush=True)
 
         accepted: list[str] = []
         refused: list[str] = []
-        for name in ("scalar", "sse2", "avx2"):
+        for name in (SIMD_PORTABLE, SIMD_NATIVE):
             result = run_product(ws, ["-v"], env_updates={SIMD_ENV: name})
             if result.returncode == 0:
-                named_text = require_stdout_text(result)
-                named = mixer_kernel_names(named_text)
-                assert named, (
-                    f"version with {name} did not name a mixer kernel; "
-                    f"tokens={sorted(cli_tokens(named_text))}"
+                dispatched = version_dispatch(require_stdout_text(result))
+                assert dispatched == name, (
+                    f"ORP_SIMD={name} on version reports dispatch {dispatched!r}"
                 )
                 accepted.append(name)
             elif result.returncode == 2:
@@ -609,20 +596,18 @@ def test_mixer_kernels_report_identity_archives_and_unbuilt_usage_error():
                 refused.append(name)
             else:
                 raise AssertionError(
-                    f"named mixer kernel {name!r} exited {result.returncode}; "
+                    f"ORP_SIMD={name} exited {result.returncode}; "
                     f"stderr={result.stderr!r}"
                 )
-        assert "scalar" in accepted, (
-            f"portable mixer kernel was not accepted; accepted={accepted} "
+        assert SIMD_PORTABLE in accepted, (
+            f"forcing the portable path was not accepted; accepted={accepted} "
             f"refused={refused}"
         )
-        assert set(accepted) | set(refused) == {"scalar", "sse2", "avx2"}
-
-        for name in ("sse2", "avx2"):
-            if name not in reported:
-                result = run_product(ws, ["-v"], env_updates={SIMD_ENV: name})
-                require_usage(result)
-                print(f"[F01] unreported kernel {name!r} is usage error", flush=True)
+        if default_path == SIMD_NATIVE:
+            assert SIMD_NATIVE in accepted, (
+                "default dispatch is a CPU-specific path, yet forcing a "
+                "CPU-specific path was a usage error"
+            )
 
         from F03_helpers import place_opus_classified
 
@@ -630,37 +615,37 @@ def test_mixer_kernels_report_identity_archives_and_unbuilt_usage_error():
             ("vorbis", place_vorbis(ws, "a")),
             ("opus", place_opus_classified(ws, "hybrid")),
         )
+        arms: list[str | None] = [None, *accepted]
         runs = [(codec, src, effort) for codec, src in sources for effort in ((), ("-1",))]
         for codec, src, effort in runs:
             src_bytes = ws.read_bytes(src)
             archives: list[bytes] = []
-            for name in accepted:
-                dest = unique_name(f"k-{name}")
-                recovered = unique_name(f"o-{name}")
-                enc = run_product(
-                    ws, [*effort, "e", src, dest], env_updates={SIMD_ENV: name}
-                )
+            for name in arms:
+                label = name or "unset"
+                env = {SIMD_ENV: name} if name else None
+                dest = unique_name(f"k-{label}")
+                recovered = unique_name(f"o-{label}")
+                enc = run_product(ws, [*effort, "e", src, dest], env_updates=env)
                 require_ok(enc)
-                assert ws.path_is_file(dest), f"{name} compress did not write {dest}"
+                assert ws.path_is_file(dest), f"{label} compress did not write {dest}"
                 dest_bytes = ws.read_bytes(dest)
                 assert not stored_copy(dest_bytes, src_bytes), (
-                    f"{name} compress destination bytes carry the source verbatim"
+                    f"{label} compress destination bytes carry the source verbatim"
                 )
                 archives.append(dest_bytes)
                 dec = run_product(ws, ["d", dest, recovered])
                 require_ok(dec)
                 assert files_identical(ws.resolve(src), ws.resolve(recovered)), (
-                    f"expand after {name} kernel did not restore the source bytes"
+                    f"expand after the {label} path did not restore the source bytes"
                 )
-            assert archives, "no archive was produced under an accepted mixer kernel"
             first = archives[0]
-            for other, name in zip(archives[1:], accepted[1:]):
+            for other, name in zip(archives[1:], arms[1:]):
                 assert other == first, (
-                    f"archive under {name} differs from {accepted[0]} "
-                    f"(valid kernels must be bit-identical; {codec} effort {effort!r})"
+                    f"archive under ORP_SIMD={name} differs from the default "
+                    f"(every path must be bit-identical; {codec} effort {effort!r})"
                 )
         print(
-            f"[F01] mixer accepted={accepted} refused={refused} "
+            f"[F01] code path accepted={accepted} refused={refused} "
             f"archives={len(archives)}",
             flush=True,
         )

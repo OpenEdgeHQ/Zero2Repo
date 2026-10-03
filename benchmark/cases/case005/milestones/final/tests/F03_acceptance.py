@@ -1596,15 +1596,15 @@ def test_trailers_to_http10_peer_refused_even_if_caller_asked_chunked():
 # ---------------------------------------------------------------------------
 
 
-def test_chunk_size_longer_than_20_hex_digits_is_remote_error():
+def test_chunk_size_longer_than_32_hex_digits_is_remote_error():
     neighbor = chunked_post_server()
     neighbor_hello_chunk(neighbor)
 
     server = chunked_post_server()
-    feed_ok(server, b"1" * 21 + b"\r\n")
+    feed_ok(server, b"1" * 33 + b"\r\n")
     result = pull_next(server)
     print(
-        f"21-digit size exc={type(result.exception).__name__ if result.exception else None}",
+        f"33-digit size exc={type(result.exception).__name__ if result.exception else None}",
         flush=True,
     )
     require_remote_refusal(result)
@@ -1614,8 +1614,8 @@ def test_chunk_size_longer_than_20_hex_digits_is_remote_error():
 def test_runtime_overlong_chunk_size_is_remote_error():
     neighbor = chunked_post_server()
     neighbor_hello_chunk(neighbor)
-    n = 22 + (runtime_int() % 5)
-    assert n > 20 and n != 21
+    n = 34 + (runtime_int() % 5)
+    assert n > 32 and n != 33
     server = chunked_post_server()
     feed_ok(server, b"2" * n + b"\r\n")
     result = pull_next(server)
