@@ -43,7 +43,7 @@ oggrepack -v | --version
 | variable | value | meaning |
 | --- | --- | --- |
 | `ORP_MEMCAP` | `<mib>`: decimal digits | memory-cap override in MiB; `0` disables the cap |
-| `ORP_SIMD` | one of `scalar`, `sse2`, `avx2` | mixer-kernel request |
+| `ORP_SIMD` | `portable` or `native` | code-path override: `portable` forces the portable path, `native` forces a CPU-specific path |
 
 There is no configuration file.
 
@@ -71,15 +71,15 @@ For statuses `1`, `2`, and `3` standard error is non-empty and carries the diagn
 
 ```
 oggrepack <release>[ <free text>]
-Build host <host-triple>[.]
-Ogg Opus mode: <opus-component>
-SIMD: <built-kernels> built, <dispatched-kernel> dispatched
+host: <host-triple>
+opus: <opus-component>
+dispatch: <path>
 ```
 
 - `<release>`: a release identifier containing at least one digit; dotted form not required.
 - `<host-triple>`: the configure host triple of the build, `<cpu>-<vendor>-<os>`.
-- The `Ogg Opus mode:` line is present when Ogg Opus encode and decode are compiled in and absent otherwise; `<opus-component>` is free non-empty text.
-- `<built-kernels>`: comma-separated kernel names; `<dispatched-kernel>`: one kernel name. Kernel names are `scalar`, `sse2`, `avx2`.
+- The `opus:` line is present when Ogg Opus encode and decode are compiled in and absent otherwise; `<opus-component>` is free non-empty text.
+- `<path>`: `portable` or `native`, naming the code path this invocation dispatched.
 
 ## Archive file
 
@@ -87,19 +87,14 @@ An archive is a binary file whose layout is the implementer's choice except for 
 
 ## `dump`
 
-On success `dump` exits `0` and writes on standard output a line containing the field
+On success `dump` exits `0` and writes on standard output these two lines (leading whitespace allowed, any order):
 
 ```
-level <stage>
+stage: <stage>
+codec: <codec>
 ```
 
-where `<stage>` is the decimal encoding stage stored in the archive. A dump of an archive made from Ogg Opus also contains a line consisting of
-
-```
-Ogg Opus mode
-```
-
-(leading whitespace allowed); a dump of an archive made from Ogg Vorbis contains no such line. Other lines and fields are free.
+where `<stage>` is the decimal encoding stage stored in the archive and `<codec>` is `opus` for an archive made from Ogg Opus and `vorbis` for an archive made from Ogg Vorbis. Other lines are free and contain no line of either form.
 
 ## `pages`
 
@@ -110,7 +105,7 @@ On success `pages` exits `0` and writes on standard output one line per Ogg page
 ```
 
 - `<indent>`: zero or more spaces; `<index>`: decimal page index counting from 0.
-- `<status>`, last on the line: `reframes` when the page reconstructs as FP-09 defines, `REFRAME MISMATCH` when it does not.
+- `<status>`, last on the line: `ok` when the page reconstructs as FP-09 defines, `mismatch` when it does not.
 
 Other lines are free and contain no line of the page form.
 
@@ -121,7 +116,7 @@ In batch, the first occurrence of a member's input path on standard error is in 
 When at least one batch member does not succeed, standard error carries one line ending in
 
 ```
-<failed> of <attempted> failed
+batch failed: <failed>/<attempted>
 ```
 
 where `<failed>` is the decimal count of members that did not succeed and `<attempted>` the decimal count of input paths. A batch in which every member succeeds writes no such line.

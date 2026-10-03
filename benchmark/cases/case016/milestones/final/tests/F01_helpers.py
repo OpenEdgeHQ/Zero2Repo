@@ -1131,24 +1131,28 @@ def neutral_words(n: int, token: str = "bridge") -> str:
 def pad_human(n_words: int) -> str:
     """Varied factual sentences so length is not a memorized blob.
 
-    Every sentence is indexed in several tokens so six-word spans do not
-    repeat (degenerate repetition is a score-moving family). Lengths stay
-    uneven so the pad is not a rhythm-class carrier.
+    Every run of five or more consecutive words holds a token tagged by
+    its sentence index (letters only, so a letter-only word splitter sees
+    the same tokens), so no span of several words recurs anywhere in the
+    pad and it carries no degenerate repetition (71). Lengths stay uneven
+    and do not zigzag sentence by sentence, so the pad is not a rhythm-class
+    carrier.
     """
     templates = (
         "Tally{i} notes mason{i} measured pier{i}.",
-        "On day{i} the mason at kiln{i} pointed chamber{i} with lime after the spring flood receded along the east wall.",
         "Beam{i} still sits true beside mark{i}.",
-        "A clerk at desk{i} listed every stone from quay{i} beside lock{i} after winter storms stripped the moss from the inner face.",
+        "On day{i} the mason at kiln{i} pointed chamber{i} with lime after flood{i} receded along wall{i} on the east side{i}.",
+        "A clerk at desk{i} listed every stone from quay{i} beside lock{i} after storm{i} stripped moss from face{i} of the inner pier{i}.",
         "Oak post{i} holds the walkway.",
-        "Lime coat{i} remains on the inner face of chamber{i} near gate{i} where the gates meet the sill.",
-        "Barges at berth{i} waited below ridge{i} until lock{i} opened at dawn for the survey.",
+        "Barges at berth{i} waited below ridge{i} until lock{i} opened at dawn for the survey{i}.",
+        "Lime coat{i} remains on the inner face{i} of chamber{i} near gate{i} where the gates meet sill{i} today.",
     )
     sentences: list[str] = []
     words: list[str] = []
     i = 1
     while len(words) < n_words:
-        sentence = templates[(i - 1) % len(templates)].format(i=i)
+        tag = "".join("abcdefghij"[int(d)] for d in str(i))
+        sentence = templates[(i - 1) % len(templates)].format(i=tag)
         sentences.append(sentence)
         words.extend(re.findall(r"[\w'-]+", sentence))
         i += 1

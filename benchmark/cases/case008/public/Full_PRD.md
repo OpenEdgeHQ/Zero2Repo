@@ -51,7 +51,7 @@ Feature points below group these entries by capability. They do not invent addit
 - **Hardware:** CPU-only. No GPU or accelerator is required or claimed.
 - **Input encoding:** Public string inputs are ASCII or valid UTF-8. The caller is responsible for UTF-8 validity.
 - **Default length cap:** The maximum 32-bit unsigned integer until the caller lowers it. The cap is inclusive: a length equal to the cap is accepted, a greater length is rejected. For URLs it applies to both the raw input and the **normalized** href (percent-encoding expansion counts). The same cap applies to filesystem-path conversion and to URL Search Params construction and reset (measured on the query string after a leading `?` is dropped). Individual search-parameter append/set calls are not length-capped.
-- **Standalone IDNA input bound:** Standalone ToASCII accepts inputs of at most 16384 bytes; a longer input fails and yields no usable domain, whatever its content. Standalone ToUnicode never fails; an input longer than 16384 bytes is returned unchanged.
+- **Standalone IDNA input bound:** Standalone ToASCII and ToUnicode share one fixed input bound in bytes. Its value is the implementer's choice, at least 1024 and less than 20000. Standalone ToASCII accepts inputs up to the bound; a longer input fails and yields no usable domain, whatever its content. Standalone ToUnicode never fails; an input longer than the bound is returned unchanged.
 - **URLPattern regular expressions:** Hrefparse does not ship a regular-expression engine. The caller supplies an engine that can compile a pattern (with or without case folding), search (yielding capture groups), and match (yes or no). That is a security boundary: the C++ standard library’s regular expressions are not treated as a safe default for untrusted patterns.
 - **Two in-memory layouts:** Callers may request a compact form backed by one serialized string, or a form that stores components as separate strings. Both expose the same parse, inspect, and mutate outcomes described here. Choosing a layout is not a separate feature point.
 
@@ -83,8 +83,7 @@ Every feature point below is implemented in the compiled Hrefparse library file;
 - Relative inputs resolve against a successfully parsed base per the URL Standard, including `.` and `..` segment handling. A relative input with no base fails.
 - Scheme and host of special-scheme URLs are ASCII-case-insensitive and serialize lowercased.
 - Hosts go through the WHATWG host parser. For special schemes the host is percent-decoded, converted with the Standard’s domain-to-ASCII (UTS #46 ToASCII with Unicode Normalization Form C, Punycode `xn--` labels for non-ASCII labels, mapping of Unicode look-alike punctuation), and checked for forbidden domain code points. A host that the Standard reads as an IPv4 address (decimal, octal with a `0` prefix, or hexadecimal with a `0x` prefix parts) serializes as dotted decimal; IPv6 hosts serialize in brackets in the Standard’s compressed form. Non-special schemes use the Standard’s opaque-host parser.
-- In a `file:` URL, a first path segment that is a normalized Windows drive letter (exactly one ASCII letter followed by `:`) is never removed by `..`; a longer first segment that merely starts with letter-colon is an ordinary segment.
-- A scheme that is not special never receives `file:` drive-letter treatment.
+- Windows drive letters are handled as the URL Standard specifies for `file:` URLs; no other scheme receives drive-letter treatment.
 - Filesystem-path conversion returns the href obtained by parsing `file://` and then setting the given path as the pathname with the URL Standard’s pathname setter.
 - The “can this parse” entry returns yes if and only if parse of the same input (and base, when given) would succeed — including when the length cap rejects a normalized href that is longer than the input. It does not require the caller to keep the URL object.
 - Standalone ToASCII follows the Standard’s domain-to-ASCII with beStrict false: an all-ASCII input within the IDNA input bound succeeds and yields the input ASCII-lowercased, with no further validation; forbidden host code points are a host-parser failure, not a standalone ToASCII failure. An input with non-ASCII code points is processed with UTS #46 (UseSTD3ASCIIRules false, Transitional_Processing false, VerifyDnsLength false) and yields an ASCII domain with Punycode labels, or fails when a label is invalid. Host parsing of a special-scheme URL yields the same ASCII domain as standalone ToASCII of the same host.
@@ -93,7 +92,7 @@ Every feature point below is implemented in the compiled Hrefparse library file;
 
 **Boundary / error behavior:**
 
-- Inputs that the URL Standard’s basic URL parser rejects fail: among them the empty string, any relative or fragment-only input with no base, a special-scheme host that contains a forbidden domain code point after percent-decoding and IDNA conversion, and a host whose percent-decoding or IDNA conversion fails.
+- Every input that the URL Standard’s basic URL parser rejects (with the given base, or with no base) fails.
 - When the length cap would be exceeded, parse fails, filesystem-path conversion yields an empty string, and no URL is produced. Raising the cap back to the default restores acceptance of ordinary-length URLs.
 - Standalone ToASCII of an input longer than the IDNA input bound fails and yields no usable domain.
 - A failed parse does not yield a usable URL. The caller can tell success from failure before reading href or any component.
@@ -120,7 +119,7 @@ Every feature point below is implemented in the compiled Hrefparse library file;
 
 **Boundary / error behavior:**
 
-- Every write that the Standard’s setter algorithm rejects or ignores is refused, including writes on a URL that cannot have the component (opaque path, no host, `file` scheme for credentials and port), protocol changes the protocol setter forbids, and values the component’s parser (host parser, opaque-host parser, port parser) rejects. A refused host or hostname write never inserts an authority.
+- Every write that the Standard’s setter algorithm rejects or ignores is refused, as is every value the component’s parser rejects. A refused host or hostname write never inserts an authority.
 - Host and hostname writes use the host parser of the URL’s scheme: the WHATWG host parser for special schemes and the opaque-host parser, which does not validate percent-sequences, for non-special schemes.
 - Setting port to the empty string removes the port.
 - When a write would make the serialized href exceed the length cap, the URL is left unchanged. Host, hostname, protocol, username, password, port, pathname, and href writes that overrun are refused. Search and hash writes that overrun also leave search, hash, and href unchanged (there is no separate success report; the URL simply does not change). Percent-encoding expansion counts toward the cap.

@@ -830,6 +830,16 @@ def zero_label_prose() -> Measured:
 
 
 
+def scored_prose() -> Measured:
+    """Ordinary scored prose for tests that only need a readable file.
+
+    Unlike :func:`zero_label_prose` it does not require that no pattern
+    fired, so a test about another reply does not hinge on that.
+    """
+    return measure_text(pad_human(80))
+
+
+
 def high_confidence_prose() -> Measured:
     measured = measure_text(pad_human(320))
     if measured.confidence != "high":

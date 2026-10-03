@@ -5,13 +5,11 @@ Helpers classify construct / send / pull / mark-failed / start outcomes.
 They never return a sentinel to mean the observation could not be
 classified. A missing suggested-status integer raises; it is not
 rewritten as 400. A failed incomplete-event-limit bind raises; it is
-not rewritten as the default limit. A short-body probe that cannot
-collect integers raises; it does not return an empty set.
+not rewritten as the default limit.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from _harness import (
@@ -196,51 +194,6 @@ def feed_empty(conn: Any) -> None:
             "cannot treat a crash as a receive-side close"
         )
     print("feed_empty ok", flush=True)
-
-
-def short_body_quantities(exc: BaseException, *, strip: bytes = b"") -> frozenset[int]:
-    """Whole decimal numbers in the short-body error message.
-
-    The Interface Contract states the carrier: ``str(error)``, in which a
-    quantity the PRD requires appears as a decimal number. Wording is free;
-    only the numbers are read. An unreadable message raises.
-    """
-    if not isinstance(exc, BaseException):
-        raise HarnessError(
-            f"short_body_quantities expected an exception; got {type(exc)!r}"
-        )
-    try:
-        report = str(exc)
-    except Exception as probe_exc:
-        raise HarnessError(
-            f"cannot read short-body exception message: {probe_exc}"
-        ) from probe_exc
-    found = frozenset(
-        int(m.group(0)) for m in re.finditer(r"(?<![0-9])[0-9]+(?![0-9])", report)
-    )
-    print(f"short_body_quantities={sorted(found)} message={report!r}", flush=True)
-    return found
-
-
-def require_short_body_pair(
-    exc: BaseException,
-    received: int,
-    expected: int,
-    *,
-    payload: bytes,
-) -> frozenset[int]:
-    """Require the short-body message conveys both *received* and *expected*."""
-    nums = short_body_quantities(exc)
-    if received not in nums or expected not in nums:
-        raise AssertionError(
-            f"short-body message numbers {sorted(nums)} do not include both "
-            f"received={received} and declared={expected}"
-        )
-    print(
-        f"require_short_body_pair received={received} expected={expected}",
-        flush=True,
-    )
-    return nums
 
 
 def fixed_gibberish_block() -> bytes:

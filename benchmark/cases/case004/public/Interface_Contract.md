@@ -131,10 +131,9 @@ Every refusal by `unsign`, `loads`, `load`, and `loads_unsafe` raises an instanc
 | --- | --- | --- | --- |
 | `BadData` | `Exception` | — | base of all failure classes |
 | `BadSignature` | `BadData` | `payload`: the token’s unverified payload section as `bytes`, or `None` when the token has none | signature mismatch; on timestamped helpers, the plain signature mismatch (an instance that is not a `BadTimeSignature`) |
-| `BadTimeSignature` | `BadSignature` | `payload`: as above (without the time field); `date_signed`: the decoded signing time as a `datetime.datetime` with `tzinfo` UTC, or `None` when there is none | time-signature failure, missing timestamp, malformed timestamp |
-| `SignatureExpired` | `BadTimeSignature` | `payload`, `date_signed` (always a datetime) | expired token |
+| `BadTimeSignature` | `BadSignature` | `payload`: as above (without the time field); `date_signed`: the decoded signing time as a `datetime.datetime` with `tzinfo` UTC, or `None` when there is none; `reason`: the string `"missing"` for a missing timestamp, the string `"malformed"` for a malformed timestamp, `None` otherwise | time-signature failure, missing timestamp, malformed timestamp |
+| `SignatureExpired` | `BadTimeSignature` | `payload`, `date_signed` (always a datetime), `reason` (`None`) | expired token |
 | `BadPayload` | `BadData` | `original_error`: the exception raised while decoding or deserializing the payload | payload-decode failure |
 
-- Kind labels in the message of a non-expired `BadTimeSignature` (`str()`, compared case-insensitively): a missing-timestamp failure’s message contains the word `missing`; a malformed-timestamp failure’s message contains the word `malformed`; a time-signature failure’s message contains neither word.
-- Apart from those labels, failure messages are free text, the implementer’s choice.
+- Failure messages (`str()`) are free text, the implementer’s choice.
 - For the serializers, `payload` is the payload section as it appears in the token (for URL-safe helpers, still in its encoded form), as `bytes`.

@@ -143,6 +143,7 @@ Latitude and longitude in degrees, `year` a decimal year. Returns: declination i
 | `yaw_delay_ms` | `int` | age of the yaw sample, ms |
 | `baro` | `ins_meas_baro_t` | static pressure |
 | `speed` | `ins_meas_speed_t` | scalar ground speed |
+| `speed_delay_ms` | `int` | age of the scalar-speed sample, ms |
 | `zero_velocity_update` | `bool` | explicit ZUPT flag |
 | `zero_rotation_update` | `bool` | explicit ZARU flag |
 
@@ -334,7 +335,7 @@ nav.gnss_leverarm(lever_b)
 nav.local_pos(pos_ned, var_ned, delay_ms=0)
 nav.mag(field_b, var)
 nav.yaw(yaw_rad, stddev_rad, delay_ms=0)
-nav.speed(speed_mps, stddev_mps=0.0)
+nav.speed(speed_mps, stddev_mps=0.0, delay_ms=0)
 nav.baro(pressure_pa)
 nav.zupt(flag)
 nav.zaru(flag)

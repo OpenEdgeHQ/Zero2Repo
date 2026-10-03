@@ -21,7 +21,7 @@ The security checklist in the project README (HTTPS, secret storage, replay deni
 | **HMAC-based helper (HOTP)** | A helper whose codes are indexed by a counter the caller supplies. Specified in FP-02. |
 | **Time-based helper (TOTP)** | A helper whose codes are indexed by the current time, divided into fixed-length steps. Specified in FP-03. |
 | **Digit count** | How many characters each code contains. The product default is 6. Construction refuses a count greater than 10. An otpauth URI may carry only 6, 7, or 8. |
-| **Digest** | The hash function used inside HMAC. The product default is SHA1. SHA256 and SHA512 are also supported. MD5 and SHAKE-128 are refused. |
+| **Digest** | The hash function used inside HMAC. The product default is SHA1. SHA256 and SHA512 are also supported. A digest whose output is shorter than 18 bytes, or whose output length is chosen by the caller rather than fixed, is refused. |
 | **Starting counter** | For an HMAC-based helper, the counter value that relative count zero maps to. The product default is 0. The code for relative count N is the code for counter (starting counter + N). |
 | **Time-step length** | For a time-based helper, how many seconds a code remains the current code. The product default is 30. |
 | **Time-step number** | The instant's Unix time in whole seconds (any fraction of a second discarded toward zero), divided by the time-step length, with the quotient truncated toward zero (not floored). The Unix time of a timezone-aware datetime is taken in UTC; that of a timezone-naive datetime is taken in the host local timezone. |
@@ -118,20 +118,20 @@ Every code Otpkit emits or accepts is computed from the shared secret and the co
 
 - Asking for the code at a relative count whose counter (starting counter + N) is negative does not succeed: the caller observes a failure and no code is returned. This is distinguishable from checking a wrong candidate, which returns a negative result and does not abort the caller.
 - Constructing a helper with a digit count greater than 10 does not succeed.
-- Constructing a helper with digest MD5 or digest SHAKE-128 does not succeed. SHA1, SHA256, and SHA512 are accepted.
+- Constructing a helper with a digest whose output is shorter than 18 bytes, or whose output length is chosen by the caller rather than fixed, does not succeed. SHA1, SHA256, and SHA512 are accepted.
 - Checking a code that belongs to a different counter fails. The helper does not advance or store a counter of its own; the caller always supplies the counter to check against, and the process clock plays no part.
 
 ---
 
 ### FP-03: Time-based one-time passwords (TOTP)
 
-**Public entry:** Otpkit’s time-based helper, constructed with a shared secret in base32. The caller may also supply a digit count, a digest, an account name, an issuer, and a time-step length. This helper emits and checks codes indexed by time. **This feature point uses the same construction rules as FP-02** for the secret, digit count (default 6, greater than 10 refused) and digest (default SHA1; SHA256 and SHA512 accepted; MD5 and SHAKE-128 refused). Codes remain text strings of the configured width. The obligations below are the clock, the time-step, the acceptance window, and RFC 6238.
+**Public entry:** Otpkit’s time-based helper, constructed with a shared secret in base32. The caller may also supply a digit count, a digest, an account name, an issuer, and a time-step length. This helper emits and checks codes indexed by time. **This feature point uses the same construction rules as FP-02** for the secret, digit count (default 6, greater than 10 refused) and digest (default SHA1; SHA256 and SHA512 accepted; a digest with output shorter than 18 bytes or of caller-chosen length refused). Codes remain text strings of the configured width. The obligations below are the clock, the time-step, the acceptance window, and RFC 6238.
 
 **Normal behavior:**
 
 - The code for an instant is the RFC 6238 TOTP value with T0 = 0: the FP-02 HOTP value, under the configured digest and digit count, for the counter equal to the instant's time-step number (see Terminology: whole seconds, then division by the time-step length, each truncated toward zero). The account name and the issuer do not change the codes; an explicit time-step length of 30, digit count of 6 or SHA1 digest produces the same codes as the defaults.
 - The helper accepts either a Unix timestamp (integer or real number) or a datetime as the instant to use. A timezone-aware datetime is read as UTC. A timezone-naive datetime is read in the host local timezone. A Unix timestamp, an aware datetime and a naive local datetime that denote the same absolute instant yield the same code; an aware and a naive datetime with the same civil fields denote different instants whenever the host timezone is not UTC.
-- The current clock is the host wall clock, read at the moment of each current-clock generation or check; a value read earlier (for example at import or construction) is not reused, and no other time source is consulted.
+- The current clock is the host wall clock, read at the moment of each current-clock generation or check; a value read earlier is not reused, and no other time source is consulted.
 - Asking for the code at the current clock yields the same string as asking for the code at that same current instant supplied explicitly.
 - A time-step length other than 30 changes which instants share a code: all instants with the same time-step number share one code.
 - The caller may ask for the code at a given instant plus a whole-step offset k (0 when not given): that is the code for time-step number (step of the instant) + k.
@@ -141,9 +141,9 @@ Every code Otpkit emits or accepts is computed from the shared secret and the co
 
 **Boundary / error behavior:**
 
-- A code is produced only for a non-negative time-step number (after any offset). Instants whose time-step number is 0 by the truncation rule, including instants less than one full step before the epoch, yield the code for step 0. An instant (plus offset) whose time-step number is negative does not succeed: no code is returned.
+- A code is produced only for a non-negative time-step number (after any offset), with the time-step number computed by the truncation rule in Terminology. An instant (plus offset) whose time-step number is negative does not succeed: no code is returned.
 - Asking a matching-time-step check to use a negative acceptance window does not succeed: the caller observes a failure and no time-step number is returned. A window of 0 or a positive window is accepted.
-- Digit count above 10, digest MD5, and digest SHAKE-128 are refused at construction, as in FP-02.
+- A digit count above 10 and a digest that FP-02 refuses are refused at construction, as in FP-02.
 - A wrong code, a code from outside the acceptance window, or a code from a different secret fails the check. Failure of a check is a negative result, not an aborted caller, except for the negative-window case above.
 
 ---
@@ -155,7 +155,7 @@ Every code Otpkit emits or accepts is computed from the shared secret and the co
 **Normal behavior:**
 
 - The URI is `otpauth://` + type + `/` + label + `?` + query. A time-based helper produces type totp. An HMAC-based helper produces type hotp.
-- **Label.** Without an issuer, the label is the encoded account name. With an issuer, the label is the encoded issuer, a literal (unencoded) colon, and the encoded account name. In the label each part is percent-encoded with every character escaped except ASCII letters, digits, `-`, `.`, `_`, `~` and `/`; so a colon, a space, `@` or `!` inside the issuer or the account name is always escaped (a space is `%20`).
+- **Label.** Without an issuer, the label is the encoded account name. With an issuer, the label is the encoded issuer, a literal (unencoded) colon, and the encoded account name. In the label each part is percent-encoded with every character escaped except ASCII letters, digits, `-`, `.`, `_`, `~` and `/`.
 - **Query.** The query is `key=value` pairs joined by `&`, in exactly this order: `secret` (the secret text exactly as supplied at construction, or as read from the parsed URI, without changing its case or padding); `issuer` when an issuer is present; `counter` for an HMAC-based helper — always, written as a decimal integer, including 0; `algorithm` only when the digest is not SHA1, spelled in uppercase (SHA256, SHA512); `digits` only when the digit count is not 6; `period` (time-based helper only) only when the time-step length is not 30; then each extra field in the order the caller supplied them. Every key and value is percent-encoded with every character escaped except ASCII letters, digits, `-`, `.`, `_` and `~`; a space is written `%20`, never a plus sign.
 - **State and overrides.** The account name, issuer, starting counter, digit count, digest and time-step length come from the helper as constructed. A build-time account name or issuer that is supplied and non-empty replaces the stored one for that build only; an omitted or empty one leaves the stored value. A build-time starting counter, when supplied (including 0), is the counter written for that build. When no account name was ever supplied, the account name is the placeholder Secret. When no issuer is stored or supplied, the URI has no issuer anywhere.
 - **Extra fields.** An extra query field whose value is text is written as described above. An image field's value must be an https URL with both a host and a path.

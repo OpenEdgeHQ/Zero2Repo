@@ -1189,7 +1189,7 @@ def test_intersection_emits_buffer_that_reopens_with_same_values_and_inuse_bytes
     require_emit_shape(report, length="len", b0="b0", b1="b1", residue="res")
 
 
-def test_intersection_emit_is_version_one_even_length_at_least_64_and_aligned():
+def test_intersection_emit_is_even_length_and_aligned():
     report = _emit_report()
     require_emit_shape(report, length="len", b0="b0", b1="b1", residue="res")
     require_probe_true(report, "seq", "opened")

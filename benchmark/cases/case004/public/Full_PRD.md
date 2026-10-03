@@ -140,7 +140,7 @@ A timestamped signer still satisfies every FP-01 obligation, and a timestamped s
 
 **Normal behavior:**
 
-- The token carries a time field between the payload and the signature, separated by the separator; the signature covers the payload and the time field. The time field records the signing time in whole seconds since the Unix epoch, read from the system clock when the token is signed. A signing time is a whole number of seconds that fits in an unsigned 64-bit integer. Signing does not convert the clock reading to a calendar date, so it succeeds even when the clock reports an instant past the last date the language’s standard date-time type can represent. The payload may contain the separator; the time field is the part between the last two separators.
+- The token carries a time field between the payload and the signature, separated by the separator; the signature covers the payload and the time field. The time field records the signing time in whole seconds since the Unix epoch, read from the system clock when the token is signed. Signing does not convert the clock reading to a calendar date, so it succeeds even when the clock reports an instant past the last date the language’s standard date-time type can represent. The payload may contain the separator; the time field is the part between the last two separators.
 - With no maximum age, recovery yields the original value (bytes for the signer, the object for the serializer) regardless of age. Asking for the signing time yields the value and a timezone-aware UTC datetime equal to the recorded signing second; any equivalently configured helper reads the same signing time from the token.
 - With a maximum age of N seconds, the age is the current system-clock time in whole seconds minus the recorded signing second. The token is **expired** when the age is greater than N or less than zero; otherwise it is accepted. The age is checked only after the signature verifies.
 - An expired failure carries the payload and the signing time. A validity check given a maximum age reports failure on an expired token and success otherwise; unsafe load given a maximum age returns (false, object) for an expired token.
@@ -149,11 +149,11 @@ A timestamped signer still satisfies every FP-01 obligation, and a timestamped s
 **Boundary / error behavior:**
 
 - **Missing timestamp:** the signature verifies but the signed part contains no separator, so there is no time field. It carries no signing time.
-- **Malformed timestamp:** the signature verifies but the time field does not decode to a signing time as the product writes it (including a value that does not fit in an unsigned 64-bit integer). It carries no signing time.
+- **Malformed timestamp:** the signature verifies but the time field does not decode to a signing time as the product writes it. It carries no signing time.
 - **Time-signature failure:** the signature does not verify and the signed part contains a separator. It is a signature mismatch that carries the payload (the part before the time field) and, when the time field decodes to a representable time, that signing time. When the time field decodes to a time that the language’s standard date-time type cannot represent as a UTC calendar date and time, the refusal is a malformed timestamp instead.
 - A token whose signature does not verify and whose signed part has no separator is a plain signature mismatch, not a missing timestamp.
 - Expired, missing-timestamp, malformed-timestamp, time-signature and plain signature-mismatch refusals are different kinds. Expiry is never a successful load.
-- The message of a missing-timestamp refusal says that the timestamp is missing; the message of a malformed-timestamp refusal says that the timestamp is malformed; the message of any other refusal says neither.
+- A missing-timestamp refusal and a malformed-timestamp refusal each identify their own kind on the failure; a time-signature, expired or plain signature-mismatch refusal identifies neither.
 
 ---
 
@@ -167,7 +167,7 @@ The URL-safe helper still satisfies the serializer behavior of FP-02 (object rou
 
 - Dump returns text. Every character of a token is an ASCII letter, digit, underscore, hyphen, or period.
 - The default dump/load object writes JSON with no whitespace outside strings.
-- The serialized payload is compressed with a lossless general-purpose format that substantially shrinks highly repetitive data (a long run of one repeated character compresses to a small fraction of its size), when the compressed form is at least two bytes shorter than the serialized payload; otherwise it is left uncompressed. The payload section is the URL-safe base64 encoding of the (possibly compressed) payload, and a compressed payload section is marked by a leading separator. Both forms load, on the same helper and on any equivalently configured helper.
+- The serialized payload is compressed with a lossless general-purpose format that substantially shrinks highly repetitive data. Compression is used only when it makes the payload strictly shorter, and a payload that it shrinks substantially is always compressed; otherwise the payload is left uncompressed. The payload section is the URL-safe base64 encoding of the (possibly compressed) payload, and a compressed payload section is marked by a leading separator. Both forms load, on the same helper and on any equivalently configured helper.
 - The URL-safe timestamped helper dumps and loads the same objects, still as URL-safe text, and applies FP-03’s time field, maximum age and signing time to compressed and uncompressed tokens alike.
 
 **Boundary / error behavior:**

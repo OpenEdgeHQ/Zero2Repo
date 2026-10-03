@@ -203,9 +203,15 @@ def dense_and_sparse_f04(*, dense_blocks: int, sparse_count: int) -> tuple[int, 
     raise HarnessError("could not draw an unpublished dense run")
 
 
+# Even lengths below the PRD's floor for the shortest buffer that can be a
+# bitmap (at least 8 bytes): every one of them is "too short", whatever
+# minimum the implementation chose.
+TINY_EVEN_LENGTHS = (2, 4, 6)
+
+
 def unpublished_short_even_f04() -> int:
-    """An even length strictly below 64 that is not 0, 8, or 62."""
-    choices = [n for n in range(2, 64, 2) if n not in (0, 8, 62)]
+    """A tiny even length (below 8) that is not 0, 2, or 6."""
+    choices = [n for n in TINY_EVEN_LENGTHS if n not in (0, 2, 6)]
     if not choices:
         raise HarnessError("no unpublished short even length")
     return secrets.choice(choices)
@@ -232,42 +238,31 @@ def unpublished_body_byte_f04() -> int:
     return secrets.randbelow(254) + 2
 
 
-def unpublished_version_bytes_f04(avoid_second: int) -> tuple[int, int]:
-    """A little-endian version word that is not 1 and not a named pair.
-
-    Named pairs are (2, 0), (0, 0), (0, 1), and (1, *avoid_second*).
-    """
-    if avoid_second == 0 or not 0 <= avoid_second <= 255:
-        raise HarnessError(f"avoid_second {avoid_second} is not a non-zero byte")
-    banned = {(2, 0), (0, 0), (0, 1), (1, 0), (1, avoid_second)}
-    for _ in range(64):
-        word = secrets.randbelow(1 << 16)
-        pair = (word & 0xFF, (word >> 8) & 0xFF)
-        if word == 1 or pair in banned:
-            continue
-        return pair
-    raise HarnessError("could not draw an unpublished version word")
+def unpublished_version_value_f04() -> int:
+    """A version byte that is not 1 and not one of the named 0, 2, 3, or 255."""
+    return 4 + secrets.randbelow(251)
 
 
 def require_emit_shape(
     report: Mapping[str, Any],
     *,
     length: str,
-    b0: str,
-    b1: str,
+    b0: str | None = None,
+    b1: str | None = None,
     residue: str,
 ) -> int:
-    """Length ≥ 64, even, positive, first bytes 1 then 0, address mod 8 is 0.
+    """Positive even length, address mod 8 is 0.
 
-    A missing field or a non-integer raises. It is not treated as length 0.
+    *b0* / *b1* are accepted for older probes and ignored: where the format
+    version sits is the implementer's choice, and the version-1 stamp is
+    checked against the position derived from the implementation's own
+    emits (:func:`format_version_offset`). A missing field or a non-integer
+    raises. It is not treated as length 0.
     """
+    del b0, b1
     n = require_positive_buffer_length(require_int_field(report, length))
-    if n < 64 or n % 2 != 0:
-        raise AssertionError(f"emitted length {n} is not an even length ≥ 64")
-    if require_int_field(report, b0) != 1 or require_int_field(report, b1) != 0:
-        raise AssertionError(
-            f"emitted header bytes are {report.get(b0)!r}, {report.get(b1)!r}, not 1 then 0"
-        )
+    if n % 2 != 0:
+        raise AssertionError(f"emitted length {n} is not even")
     if require_int_field(report, residue) != 0:
         raise AssertionError(
             f"emitted buffer address mod 8 is {report.get(residue)!r}, not 0"
@@ -292,8 +287,8 @@ def require_fresh_empty(report: Mapping[str, Any], *, prefix: str = "") -> None:
 
     *prefix* selects ``empty`` / ``cardinality`` / ``contains0`` / ``min`` /
     ``max``. ``{prefix}set_visible`` must be true: the fresh bitmap accepted
-    a value. ``{prefix}legal_emit`` must be true: its later emit is an even
-    length ≥ 64 whose first bytes are 1 then 0.
+    a value. ``{prefix}legal_emit`` must be true: its later emit has a
+    positive even length and an 8-byte-aligned address.
     """
     require_empty_snapshot(report, prefix=prefix)
     require_true_fields(report, f"{prefix}set_visible", f"{prefix}legal_emit")
@@ -462,21 +457,24 @@ def observe_declared_release_and_format_word() -> tuple[str, int]:
 
     The declared release is the top-level ``.version`` string of
     ``build.zig.zon`` at the repository root (the Contract's stated form).
-    The format word is the little-endian unsigned 16-bit integer in the
-    first two bytes of an emitted buffer. A compile or probe failure raises.
+    The format word is the byte of a fresh emit at the format-version
+    position derived from the implementation's own emits. A compile or
+    probe failure raises.
     """
     from F01_helpers import _fail_if_nonzero, product_run_argv, workspace
 
     release = _declared_release(repo_root())
+    voff = format_version_offset()
     source = wrap_f04_probe(
         r"""
     var bm = try klyvmap.Bitmap.init(allocator);
     defer bm.deinit();
     const view = bm.toBuffer();
-    if (view.len < 2) return error.ShortEmit;
-    const format_word: u16 = @as(u16, view[0]) | (@as(u16, view[1]) << 8);
+    const voff: usize = __VOFF__;
+    if (view.len <= voff) return error.ShortEmit;
+    const format_word: u16 = view[voff];
     try emitJson(init, init.gpa, "{{\"format_word\":{d}}}", .{format_word});
-"""
+""".replace("__VOFF__", str(voff))
     )
     with workspace() as ws:
         probe = ws.path / f".f04-release-{secrets.token_hex(4)}.zig"
@@ -663,9 +661,8 @@ fn headerOf(buf: []const u8) !struct { len: usize, b0: u8, b1: u8, res: usize } 
 }
 
 fn shapeOk(buf: []const u8) bool {
-    if (buf.len < 64 or buf.len % 2 != 0) return false;
-    if (@intFromPtr(buf.ptr) % 8 != 0) return false;
-    return buf[0] == 1 and buf[1] == 0;
+    if (buf.len == 0 or buf.len % 2 != 0) return false;
+    return @intFromPtr(buf.ptr) % 8 == 0;
 }
 
 fn emptySnap(bm: *const klyvmap.Bitmap) bool {
@@ -757,10 +754,10 @@ fn callerFree(track: *Window, opened: *Opened) void {
     }
 }
 
-fn fillVersion(buf: []u8, b0: u8, b1: u8) void {
+fn copyPrefix(buf: []u8, template: []const u8) void {
     @memset(buf, 0);
-    if (buf.len > 0) buf[0] = b0;
-    if (buf.len > 1) buf[1] = b1;
+    const n = @min(buf.len, template.len);
+    if (n != 0) @memcpy(buf[0..n], template[0..n]);
 }
 
 fn app(buf: []u8, i: *usize, s: []const u8) !void {
@@ -856,7 +853,7 @@ fn freshModes(track: *Window, gpa: std.mem.Allocator, src: []const u8, newv: u64
     result.copy_yield = copied.yielded;
     if (copied.yielded) {
         const view = copied.bm.toBuffer();
-        result.copy_owns = view.len >= 64 and track.live >= before_copy + view.len;
+        result.copy_owns = view.len > 0 and track.live >= before_copy + view.len;
         const was_empty = emptySnap(&copied.bm);
         const banned_absent = !have_banned or !copied.bm.contains(banned);
         _ = try copied.bm.set(newv);
@@ -960,6 +957,220 @@ def wrap_f04_probe(body: str) -> str:
         + "}\n"
     )
     return src
+
+
+# ---------------------------------------------------------------------------
+# Where the format version sits (derived, not assumed)
+# ---------------------------------------------------------------------------
+#
+# The PRD fixes that every buffer carries a format-version field holding 1,
+# at the same position in every buffer, and that opening a large-enough
+# buffer whose field does not hold 1 is refused. Width and position are the
+# implementer's choice. The tests therefore read the position off the
+# implementation's own emits: candidates are byte positions that hold 1 in
+# every emitted buffer of a varied corpus; the version position is the first
+# candidate where changing that byte to 2 is refused on every open path while
+# the unchanged buffer opens. A candidate whose change makes a probe exit
+# abnormally is not the version field (beyond the version check, a buffer
+# is trusted input).
+
+_VERSION_OFFSET_CACHE: list[int] = []
+_VERSION_CANDIDATE_LIMIT = 16
+
+_CORPUS_ZIG = r"""
+    const sparse = [_]u64{ __SPARSE__ };
+    const sorted = [_]u64{ __SORTED__ };
+    const dense_base: u64 = __DENSE__;
+    var bufs: [16][]u8 = undefined;
+    var nb: usize = 0;
+    defer {
+        for (bufs[0..nb]) |b| init.gpa.free(b);
+    }
+    {
+        var bm = try klyvmap.Bitmap.init(allocator);
+        defer bm.deinit();
+        bufs[nb] = try init.gpa.dupe(u8, bm.toBuffer());
+        nb += 1;
+        try bm.compact();
+        bufs[nb] = try init.gpa.dupe(u8, bm.toBuffer());
+        nb += 1;
+        _ = try bm.set(0);
+        bufs[nb] = try init.gpa.dupe(u8, bm.toBuffer());
+        nb += 1;
+    }
+    var sp = try klyvmap.Bitmap.init(allocator);
+    defer sp.deinit();
+    for (sparse) |v| _ = try sp.set(v);
+    bufs[nb] = try init.gpa.dupe(u8, sp.toBuffer());
+    nb += 1;
+    var dn = try klyvmap.Bitmap.init(allocator);
+    defer dn.deinit();
+    var k: u64 = 0;
+    while (k < 5000) : (k += 1) _ = try dn.set(dense_base + k);
+    bufs[nb] = try init.gpa.dupe(u8, dn.toBuffer());
+    nb += 1;
+    {
+        var u = try klyvmap.Bitmap.Or(allocator, &sp, &dn);
+        defer u.deinit();
+        bufs[nb] = try init.gpa.dupe(u8, u.toBuffer());
+        nb += 1;
+        try u.compact();
+        bufs[nb] = try init.gpa.dupe(u8, u.toBuffer());
+        nb += 1;
+    }
+    {
+        var x = try klyvmap.Bitmap.And(allocator, &sp, &dn);
+        defer x.deinit();
+        bufs[nb] = try init.gpa.dupe(u8, x.toBuffer());
+        nb += 1;
+    }
+    {
+        const ptrs = [_]*const klyvmap.Bitmap{ &sp, &dn };
+        var f = try klyvmap.Bitmap.fastOr(allocator, &ptrs);
+        defer f.deinit();
+        bufs[nb] = try init.gpa.dupe(u8, f.toBuffer());
+        nb += 1;
+    }
+    {
+        var c = try sp.clone();
+        defer c.deinit();
+        for (sparse[0 .. sparse.len / 2]) |v| _ = c.remove(v);
+        c.cleanup();
+        bufs[nb] = try init.gpa.dupe(u8, c.toBuffer());
+        nb += 1;
+        c.andNotInPlace(&sp);
+        c.cleanup();
+        bufs[nb] = try init.gpa.dupe(u8, c.toBuffer());
+        nb += 1;
+    }
+    {
+        var s = try klyvmap.Bitmap.fromSortedList(allocator, &sorted);
+        defer s.deinit();
+        bufs[nb] = try init.gpa.dupe(u8, s.toBuffer());
+        nb += 1;
+    }
+    {
+        var o = try klyvmap.Bitmap.fromBufferCopy(allocator, sp.toBuffer());
+        defer o.deinit();
+        _ = try o.set(dense_base);
+        bufs[nb] = try init.gpa.dupe(u8, o.toBuffer());
+        nb += 1;
+    }
+    var minlen: usize = std.math.maxInt(usize);
+    for (bufs[0..nb]) |b| minlen = @min(minlen, b.len);
+    var raw: [4096]u8 = undefined;
+    var i: usize = 0;
+    try appFmt(&raw, &i, init.gpa, "{{\"n\":{d},\"minlen\":{d},\"cands\":[", .{ nb, minlen });
+    var found: usize = 0;
+    var off: usize = 0;
+    while (off < minlen and found < 256) : (off += 1) {
+        var all_one = true;
+        for (bufs[0..nb]) |b| {
+            if (b[off] != 1) all_one = false;
+        }
+        if (!all_one) continue;
+        if (found != 0) try app(&raw, &i, ",");
+        try appFmt(&raw, &i, init.gpa, "{d}", .{off});
+        found += 1;
+    }
+    try app(&raw, &i, "]}");
+    try writeStdout(init, raw[0..i]);
+"""
+
+_CANDIDATE_ZIG = r"""
+    const vals = [_]u64{ __VALS__ };
+    const voff: usize = __VOFF__;
+    var built = try klyvmap.Bitmap.init(allocator);
+    for (vals) |v| _ = try built.set(v);
+    const full = try init.gpa.dupe(u8, built.toBuffer());
+    defer init.gpa.free(full);
+    built.deinit();
+    var fresh = try klyvmap.Bitmap.init(allocator);
+    const empty = try init.gpa.dupe(u8, fresh.toBuffer());
+    defer init.gpa.free(empty);
+    fresh.deinit();
+    if (voff >= full.len or voff >= empty.len) return error.OffsetOutside;
+    var control = try openMode(track, full, false);
+    if (!control.yielded) return error.ControlFailed;
+    const control_has = control.bm.contains(vals[0]) and control.bm.getCardinality() == vals.len;
+    releaseOpened(track, &control);
+    callerFree(track, &control);
+    const pf = try init.gpa.dupe(u8, full);
+    defer init.gpa.free(pf);
+    pf[voff] = 2;
+    const pe = try init.gpa.dupe(u8, empty);
+    defer init.gpa.free(pe);
+    pe[voff] = 2;
+    const mf = try versionModes(track, pf);
+    const me = try versionModes(track, pe);
+    try emitJson(init, init.gpa,
+        "{{\"control_has\":{s},\"f_borrow\":{s},\"f_own\":{s},\"f_copy\":{s},\"e_borrow\":{s},\"e_own\":{s},\"e_copy\":{s}}}",
+        .{
+            jsonBool(control_has), jsonBool(mf.borrow_yield), jsonBool(mf.own_yield), jsonBool(mf.copy_yield),
+            jsonBool(me.borrow_yield), jsonBool(me.own_yield), jsonBool(me.copy_yield),
+        },
+    );
+"""
+
+
+def _zig_u64s(values: Sequence[int]) -> str:
+    return ", ".join(str(v) for v in values)
+
+
+def format_version_offset() -> int:
+    """Byte position of the format-version field, read off the product's own emits.
+
+    Raises ``AssertionError`` when no position holds 1 in every emitted
+    buffer, or when no such position acts as the format version (changing
+    it is not refused on every open path). The result is cached for the
+    session: the implementation under test does not change between tests.
+    """
+    if _VERSION_OFFSET_CACHE:
+        return _VERSION_OFFSET_CACHE[0]
+    from F01_helpers import run_bitmap_probe
+
+    sparse: list[int] = [U64_MAX, 1 << 40]
+    while len(sparse) < 48:
+        value = unpublished_u64_f04(forbidden=set(sparse))
+        sparse.append(value)
+    dense_base = 0
+    while dense_base == 0 or any(dense_base <= v < dense_base + 5000 for v in sparse):
+        dense_base = (1 + secrets.randbelow((1 << 47) - 2)) << 16
+    corpus = wrap_f04_probe(
+        _CORPUS_ZIG.replace("__SPARSE__", _zig_u64s(sparse))
+        .replace("__SORTED__", _zig_u64s(sorted(set(sparse))))
+        .replace("__DENSE__", str(dense_base))
+    )
+    report = run_bitmap_probe(corpus)
+    cands = report.get("cands")
+    if not isinstance(cands, list) or not all(isinstance(c, int) for c in cands):
+        raise HarnessError(f"corpus probe returned no candidate list: {report!r}")
+    if not cands:
+        raise AssertionError(
+            "no byte position holds 1 in every emitted buffer: no format-version "
+            "field holding 1 is stamped into every buffer"
+        )
+    vals = sparse[2:12]
+    tried: list[str] = []
+    for off in cands[:_VERSION_CANDIDATE_LIMIT]:
+        probe = wrap_f04_probe(
+            _CANDIDATE_ZIG.replace("__VALS__", _zig_u64s(vals)).replace("__VOFF__", str(off))
+        )
+        try:
+            rep = run_bitmap_probe(probe)
+        except HarnessError as exc:
+            tried.append(f"{off}: probe exited abnormally ({str(exc).splitlines()[0]})")
+            continue
+        yields = [require_bool_field(rep, k) for k in ("f_borrow", "f_own", "f_copy", "e_borrow", "e_own", "e_copy")]
+        if require_bool_field(rep, "control_has") is True and not any(yields):
+            _VERSION_OFFSET_CACHE.append(off)
+            return off
+        tried.append(f"{off}: control={rep.get('control_has')!r} yields={yields}")
+    raise AssertionError(
+        "no byte position that holds 1 in every emitted buffer acts as the format "
+        "version (changing it to 2 is not refused on every open path): "
+        + "; ".join(tried)
+    )
 
 
 # Linux open(2) intent bits. A read-only open is not a file write.

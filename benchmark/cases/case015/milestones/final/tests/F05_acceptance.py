@@ -314,7 +314,7 @@ def test_codebook_lookup_type_2_is_refused():
         assert result.stderr
 
 
-def test_sparse_empty_codebook_is_refused():
+def test_sparse_empty_codebook_is_refused_or_reproduced_exactly():
     with workspace() as ws:
         src = vorbis_with_runtime_comment(ws)
         host = ws.read_bytes(src)
@@ -324,9 +324,14 @@ def test_sparse_empty_codebook_is_refused():
         prove_sparse_empty_book(mutated, slot)
         bad = unique_name("sparse") + ".ogg"
         ws.write(bad, mutated)
-        result = refuse_compress(ws, bad, unique_name("sparse-arc"))
-        assert result.returncode == 1
-        assert result.stderr
+        arc = unique_name("sparse-arc")
+        result = run_product(ws, ["e", bad, arc])
+        print(f"[F05] sparse-empty-book compress exit={result.returncode}", flush=True)
+        if result.returncode == 0:
+            # An accepted compress promises an exact expand (PRD FP-05).
+            roundtrip(ws, bad, dest=unique_name("sparse-arc2"))
+        else:
+            refuse_compress(ws, bad, unique_name("sparse-arc3"))
 
 
 # ---------------------------------------------------------------------------

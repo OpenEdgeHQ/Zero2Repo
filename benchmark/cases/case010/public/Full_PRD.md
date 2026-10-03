@@ -6,8 +6,6 @@
 
 The product advertises easy-to-use access to many packaged corpora and lexical resources such as WordNet, together with a suite of text processing libraries for **classification**, **tokenization**, **stemming**, **tagging**, **parsing**, and **semantic reasoning**. This document specifies the **core processing path a first-time integrator actually runs**: split text into tokens, reduce words to stems, assign part-of-speech tags, group tagged tokens into shallow chunks, parse a sentence against a caller-supplied grammar and work with constituent trees, train a text classifier, and score outputs with the built-in evaluation metrics.
 
-A common first use is to take an English sentence, obtain its list of word and punctuation tokens, and then assign each token a part-of-speech tag.
-
 This document specifies **user- and integrator-observable behavior only**. Exact published symbol names, import paths, call signatures and output forms belong in the Interface Contract, not here. Every feature point below corresponds to behavior that exists in the finished LINGORA library. Feature points are ordered so foundational capabilities come first; a later feature point may depend on an earlier one, never the reverse.
 
 Packaged corpora, WordNet, graphical corpus browsers, chat demos, Twitter helpers, wrappers for external industrial taggers and parsers, and first-order semantic inference against external theorem provers are part of the wider suite. They are **not** feature points of this specification. When a specified path needs a packaged model (the Punkt sentence models, the averaged perceptron tagger), that prerequisite is stated on that path; a missing model makes that path fail.
@@ -101,8 +99,8 @@ The recommended sentence tokenizer, and the recommended word tokenizer when it i
   - The text is split at whitespace, and punctuation is then split off as follows.
   - A straight double quote at the start of the text, or after a space or an opening bracket, becomes the opening-quote token made of two backticks. Every other straight double quote becomes the closing-quote token made of two apostrophes. A straight double quote is never a token of its own.
   - Each of the characters `;`, `@`, `#`, `$`, `%`, `&`, `?`, `!` and each bracket is a token of its own. So is an ellipsis of three points.
-  - A comma or colon is split off unless a digit follows it, so a thousands separator stays inside its number.
-  - A point is split off only when it ends the text, optionally followed by closing quotes or brackets. A point inside a token, such as a decimal point, stays in the token.
+  - A comma or colon is split off unless a digit follows it.
+  - A point is split off only when it ends the text, optionally followed by closing quotes or brackets.
   - The clitics `'s`, `'m`, `'d`, `'ll`, `'re`, `'ve` and `n't` (in either letter case), and a bare apostrophe ending a word, are split from the word they follow and become tokens of their own.
   - The fused forms *cannot*, *d'ye*, *gimme*, *gonna*, *gotta*, *lemme*, *more'n*, *wanna*, *'tis* and *'twas* are split into their two parts (*can* + *not*, *gon* + *na*, and so on).
   - An apostrophe that does not begin one of those clitics stays inside its word.
@@ -112,8 +110,8 @@ The recommended sentence tokenizer, and the recommended word tokenizer when it i
   - Any run of two or more points is a token.
   - A double hyphen is a token.
 
-  Unless the caller says the input is one already-delimited line, it first splits the text into sentences with the recommended sentence tokenizer, then tokenizes each sentence and concatenates the tokens in order. A point that ends an inner sentence therefore becomes its own token and is never joined to the next sentence's first word.
-- **Whitespace tokenizer.** The tokens are the maximal runs of non-whitespace characters (whitespace is space, tab, newline and the other Unicode white-space characters). Punctuation attached to a word, and an amount written without internal space, stay inside their token.
+  Unless the caller says the input is one already-delimited line, it first splits the text into sentences with the recommended sentence tokenizer, then tokenizes each sentence and concatenates the tokens in order.
+- **Whitespace tokenizer.** The tokens are the maximal runs of non-whitespace characters (whitespace is space, tab, newline and the other Unicode white-space characters).
 - **Blank-line tokenizer.** A separator is a newline, then optional whitespace, then another newline, together with any whitespace around them. The segments are the pieces of text between separators, in order, with empty pieces dropped. Single newlines inside a segment are kept.
 - **Regular-expression tokenizer.**
   - In token mode (the default), the tokens are the successive non-overlapping matches of the caller's pattern, found left to right.
@@ -123,17 +121,17 @@ The recommended sentence tokenizer, and the recommended word tokenizer when it i
   - Words containing an internal apostrophe (contractions) stay one token.
   - Letters with diacritics are word characters, so accented words stay whole.
   - Emoticons, URLs, hashtags and @-handles are single tokens, and other punctuation marks are tokens of their own.
-  - With handle stripping on (off by default), every @-handle is removed before tokenizing, and the text on either side of it is tokenized as if a space stood there. An @-handle is an `@` that is not preceded by a letter, digit or one of `_ ! @ # $ % & *`, followed by 1 to 15 ASCII letters, digits or underscores.
+  - With handle stripping on (off by default), every @-handle is removed before tokenizing, and the text on either side of it is tokenized as if a space stood there. An @-handle is an `@` that does not continue a preceding word, followed by a user name of 1 to 15 ASCII letters, digits or underscores.
   - With length reduction on (off by default), every run of three or more consecutive occurrences of the same character is shortened to exactly three occurrences before tokenizing.
   - With case preservation off (it is on by default), tokens are lowercased, except emoticons.
 - **Spans.** A tokenizer that reports spans returns one pair of character offsets per token, in token order. Slicing the input at each pair gives the corresponding token. Each pair starts at or after the end of the previous one.
 - **Sentence tokenizer.** It implements the Punkt unsupervised sentence-boundary detection algorithm (Kiss and Strunk, 2006). It uses the packaged Punkt parameters for the requested language: abbreviation types, collocations, sentence starters and orthographic context. It returns the sentences of the text in their original order. Each sentence is the original text of that sentence, without the whitespace that separates it from the next one. A text that is a single sentence yields that one sentence.
-- **Command line.** The tokenize command reads standard input line by line. For each input line it writes one output line: that line's recommended-word-tokenizer tokens, with sentence splitting, joined by the delimiter. It never writes the untokenized line in place of the tokens and never skips a non-empty line.
+- **Command line.** The tokenize command reads standard input line by line. For each input line it writes one output line: that line's recommended-word-tokenizer tokens, with sentence splitting, joined by the delimiter.
 
 **Boundary / error behavior:**
 
 - An empty string, and a string made only of whitespace, yield an empty token list on every tokenizer that does not need a model.
-- When sentence splitting is requested and the Punkt models for the requested language are not installed, the recommended sentence tokenizer and the recommended word tokenizer do **not** succeed. The failure is distinguishable from a successful empty token list. The word/punctuation tokenizer on the same string still succeeds.
+- When sentence splitting is requested and the Punkt models for the requested language are not installed, the recommended sentence tokenizer and the recommended word tokenizer do **not** succeed. The failure is distinguishable from a successful empty token list.
 - The command-line tokenize command does **not** succeed when the Punkt models for the requested language are missing: it ends with a failure status and writes no token line.
 
 ---
@@ -142,7 +140,7 @@ The recommended sentence tokenizer, and the recommended word tokenizer when it i
 
 **Public entry:** LINGORA’s stemmer entries. The built-in stemmer families are exactly: **Porter** (English), **Lancaster** (English, Paice/Husk), **Snowball** (the languages listed below), a **regular-expression** stemmer that strips a caller-supplied pattern, **ISRI** (Arabic), **ARLSTem** and **ARLSTem2** (Arabic), **Cistem** (German), and **RSLP** (Portuguese). A WordNet lemmatizer also lives in this family; it requires the WordNet resource.
 
-The stemmer families specified here are Porter in its default mode, Lancaster, Snowball for the languages named below, ARLSTem, ARLSTem2, and the regular-expression stemmer. ISRI, Cistem, RSLP, and the WordNet lemmatizer exist; their stemming results are outside this specification. RSLP and the WordNet lemmatizer require packaged data; the specified families do not require WordNet.
+The stemmer families specified here are Porter in its default mode, Lancaster, Snowball for the languages named below, and the regular-expression stemmer. ISRI, ARLSTem, ARLSTem2, Cistem, RSLP, and the WordNet lemmatizer exist; their stemming results are outside this specification. RSLP and the WordNet lemmatizer require packaged data; the specified families do not require WordNet.
 
 The Snowball language names are exactly: arabic, danish, dutch, english, finnish, french, german, hungarian, italian, norwegian, porter, portuguese, romanian, russian, spanish, and swedish. Enabling Snowball stopword skipping requires the packaged stopwords list for that language.
 
@@ -154,7 +152,7 @@ Every stemmer treats its whole input string as one token. A string containing sp
 
 - **Porter, default mode.** The stemmer implements M. F. Porter's algorithm (“An algorithm for suffix stripping”, 1980) with these LINGORA extensions:
   - The word is lowercased first, unless the caller turns lowercasing off.
-  - The lowercased word is first looked up in this table of irregular forms. A hit returns the listed stem: *sky*, *skies* → *sky*; *dying* → *die*; *lying* → *lie*; *tying* → *tie*; *news* → *news*; *innings*, *inning* → *inning*; *outings*, *outing* → *outing*; *cannings*, *canning* → *canning*; *howe* → *howe*; *proceed* → *proceed*; *exceed* → *exceed*; *succeed* → *succeed*.
+  - The lowercased word is first looked up in a small built-in table of irregular forms, and a hit returns the table's stem. The table's entries are outside this specification.
   - A word of one or two characters is returned as it stands after the lowercasing step. It is never stemmed and never refused.
   - In Step 1a, a four-letter word ending in *-ies* becomes *-ie* rather than *-i*.
   - At the start of Step 1b, a word ending in *-ied* becomes *-ie* if it has four letters and *-i* otherwise. In that case the rest of Step 1b is skipped.
@@ -171,14 +169,13 @@ Every stemmer treats its whole input string as one token. A string containing sp
   - The language named *english* is the Porter2 (English) algorithm. The language named *porter* is Snowball's rendering of the original Porter algorithm, so the two can give different stems.
   - The word is lowercased first.
   - With stopword skipping on (off by default), a lowercased word that appears in that language's packaged stopwords list is returned unchanged (lowercased).
-- **ARLSTem and ARLSTem2.** They implement the two published Arabic light stemmers: ARLSTem (K. Abainia, S. Ouamour and H. Sayoud, “A Novel Robust Arabic Light Stemmer”, 2017) and its improved version ARLSTem2 (K. Abainia and H. Rebbani). These are distinct algorithms and can give different stems for the same word.
 - **Regular-expression stemmer.** It removes every match of the caller's pattern from the word and changes nothing else; no suffix rewriting is applied. A word the pattern does not match is returned unchanged.
 
 **Boundary / error behavior:**
 
-- Asking Snowball for a language that is not in the list above does not produce a usable stemmer. The failure names the requested language. A listed language on the same entry still succeeds.
-- When Snowball stopword skipping is requested and the packaged stopwords list for that language is not installed, constructing the stemmer does **not** succeed. A list installed only for another language does not satisfy it. The same language with skipping left off still succeeds.
-- The WordNet lemmatizer does not succeed when WordNet is not installed. It never returns a lemma, not even the unchanged word, on that path. Porter, Lancaster and Snowball do not require WordNet and still work.
+- Asking Snowball for a language that is not in the list above does not produce a usable stemmer. The failure names the requested language.
+- When Snowball stopword skipping is requested and the packaged stopwords list for that language is not installed, constructing the stemmer does **not** succeed. A list installed only for another language does not satisfy it.
+- The WordNet lemmatizer does not succeed when WordNet is not installed. Porter, Lancaster and Snowball do not require WordNet.
 
 ---
 
@@ -201,14 +198,14 @@ LINGORA’s **recommended** tagger for English and for Russian is a separately p
 - **Recommended Russian tagger.** It is the same algorithm reading the packaged Russian resource, and returns the model's Russian National Corpus tags.
 - **Universal tagset mapping.**
   - English tags are mapped with the packaged English Penn Treebank → universal table (the universal tagset of Petrov, Das and McDonald, 2012).
-  - Russian tags are mapped by the part before any `=` with this built-in table: A → ADJ, A-PRO → PRON, ADV → ADV, ADV-PRO → PRON, ANUM → ADJ, CONJ → CONJ, INTJ → X, NONLEX → `.`, NUM → NUM, PARENTH → PRT, PART → PRT, PR → ADP, PRAEDIC → PRT, PRAEDIC-PRO → PRON, S → NOUN, S-PRO → PRON, V → VERB. Any other tag maps to X.
+  - Russian tags are mapped by the part before any `=`: each Russian National Corpus part-of-speech category is mapped to the universal category of the same part of speech, so nouns and verbs map to the universal noun and verb categories. The exact table is the implementer's choice.
 
 **Boundary / error behavior:**
 
 - The recommended tagger accepts a **list of tokens**, not a raw string. Passing an untokenized string does not succeed, and the failure is distinguishable from a successful tagging.
 - The recommended tagger supports only English and Russian. Asking it to tag with any other language does not succeed.
-- When the averaged perceptron tagger resource for the requested language is not installed, the recommended tagger does not succeed. The resource of the other language does not satisfy it. Trainable taggers in the same process still succeed.
-- When the caller asks the recommended English tagger for the universal tagset and the packaged universal tagset tables are not installed, that mapping does **not** take place: the call either fails or returns tags that are not mapped. Tagging the same list without asking for the universal tagset still succeeds if the English resource is installed. Russian mapping does not need those tables.
+- When the averaged perceptron tagger resource for the requested language is not installed, the recommended tagger does not succeed. The resource of the other language does not satisfy it.
+- When the caller asks the recommended English tagger for the universal tagset and the packaged universal tagset tables are not installed, that mapping does **not** take place: the call either fails or returns tags that are not mapped. Russian mapping does not need those tables.
 
 ---
 
@@ -230,7 +227,7 @@ A separately packaged named-entity chunker exists. It requires its trained model
 
 - An empty tagged-token list yields a chunk structure with a sentence root and no children.
 - A chunk grammar that is not text and not a list of chunk-parser stages is refused. The operation does not succeed and does not return a chunk structure.
-- When the named-entity chunker resource is not installed, the named-entity path does not succeed, even when a tagger resource is installed. A chunk-grammar parse of a caller-supplied tagged sentence still succeeds.
+- When the named-entity chunker resource is not installed, the named-entity path does not succeed, even when a tagger resource is installed.
 
 ---
 
@@ -250,7 +247,7 @@ This feature point depends on tokens (FP-01) only as a list of terminals the cal
   - A quoted terminal is the text inside its quotes, and an unquoted symbol is a nonterminal.
   - A quoted empty string is a terminal that is the empty string. A production with nothing after its arrow is an empty production.
   - Production lines appended to a grammar text add their productions.
-- **Chart parser.** It returns every parse tree the grammar assigns to the token list: none for a token list the grammar does not derive, and several for an ambiguous one. Each tree's root is the start symbol, its leaves in order are the input tokens, and it has one internal node per production used. An empty token list against a grammar whose start symbol cannot derive the empty string yields no parse.
+- **Chart parser.** It returns every parse tree the grammar assigns to the token list: none for a token list the grammar does not derive, and several for an ambiguous one. Each tree's root is the start symbol, its leaves in order are the input tokens, and it has one internal node per production used.
 - **Shift-reduce parser.** It parses by a single left-to-right shift-reduce pass without backtracking: whenever the top of the stack matches the right-hand side of a production, it reduces; otherwise it shifts the next token. It returns the parse that pass completes, or none. On an unambiguous sentence that the pass completes, the tree is the same as the chart parser's.
 - **Generator.** It enumerates the sentences the grammar derives from the start symbol, each as a list of terminal tokens, expanding productions in their written order, up to an optional count and an optional depth bound. A quoted empty string contributes an empty-string token. An empty production contributes no token.
 - **Trees.**
@@ -283,7 +280,7 @@ This feature point does not require a downloaded corpus. The caller builds featu
   - The classifier lists exactly the labels seen in training.
 - **Decision tree.** It learns tests on feature values from the labeled featuresets; a feature absent from a featureset counts as having no value. It chooses at each node the feature whose test classifies the training examples reaching that node best. A leaf returns the majority training label of the examples that reach it. When a single feature's values separate the training labels, each training featureset is classified with its own training label.
 - A featureset that shares no feature with the training data still receives one of the trained labels, from either classifier. It is never refused, and it never receives a label that did not occur in training.
-- **Classifier accuracy.** It is the fraction of gold examples, position by position, for which the classifier's label for the example's featureset equals the gold label. It asks the classifier for each example. It is a fraction of positions, not a comparison of label sets or bags.
+- **Classifier accuracy.** It is the fraction of gold examples, position by position, for which the classifier's label for the example's featureset equals the gold label.
 
 **Boundary / error behavior:**
 
@@ -302,7 +299,7 @@ These metrics are pure functions of the arguments the caller supplies. They do n
 - **Edit distance.**
   - It is the minimum total cost of edits that turn the first string into the second.
   - Insertion and deletion of one character cost 1 each. Substitution of one character by a different one costs the caller's substitution cost, which defaults to 1.
-  - With transpositions on (off by default), the distance is the unrestricted Damerau–Levenshtein distance (Lowrance and Wagner, 1975). A transposition of two adjacent characters costs 1, and characters may also be inserted between, or deleted from between, the two transposed characters. It is not the restricted optimal-string-alignment distance.
+  - With transpositions on (off by default), the distance is the unrestricted Damerau–Levenshtein distance (Lowrance and Wagner, 1975). A transposition of two adjacent characters costs 1, and characters may also be inserted between, or deleted from between, the two transposed characters.
   - The distance of a string to itself is 0, and the distance is symmetric.
 - **Jaccard distance.** It is the size of the symmetric difference of the two sets divided by the size of their union.
 - **Accuracy.** For two lists of equal length, it is the fraction of positions at which they hold equal values.
@@ -314,7 +311,7 @@ These metrics are pure functions of the arguments the caller supplies. They do n
   - The precisions are combined as a geometric mean weighted by the caller's weights, one weight per order starting from unigrams. The default is equal weights on unigrams through 4-grams.
   - The result is multiplied by the brevity penalty, computed from the reference length closest to the candidate length (the shorter one when two are equally close).
   - Tokens are compared exactly as given.
-  - Without a smoothing function, the score is 0 when the candidate has no unigram match. When any other weighted order has no match (including an order longer than the candidate), the score is 0 or negligibly close to 0.
+  - Without a smoothing function, the score is 0 when the candidate has no unigram match. When any other weighted order has no match, the score is 0 or negligibly close to 0.
 
 **Boundary / error behavior:**
 

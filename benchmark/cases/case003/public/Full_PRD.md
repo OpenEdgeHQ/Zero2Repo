@@ -4,8 +4,6 @@
 
 **YMLCODEC** is a YAML parser and writer for JavaScript. It reads YAML text into ordinary JavaScript values and writes JavaScript values back as YAML text. It supports the YAML 1.2 specification as the default loading dialect and the YAML 1.1 type set when the caller asks for that dialect. The required behavior is the parse, type-resolution, and dump outcomes stated in the feature points below.
 
-A common first use is to parse a small mapping of plain scalars and get back a plain object whose numeric scalars are numbers, then write that object back to YAML.
-
 This document specifies **user- and integrator-observable behavior only**. Exact published symbol names and other Interface Contract details are out of scope here. Every feature point below corresponds to behavior that exists in the finished YMLCODEC library. Feature points are ordered so foundational capabilities come first; a later feature point may depend on an earlier one, never the reverse.
 
 ## Terminology
@@ -78,7 +76,7 @@ Feature points below group these entries by capability. They do not invent addit
 - Plain scalars are resolved by the active schema (FP-02); under the default Core schema a plain scalar written in Core integer or float notation is constructed as a number, not a string.
 - A single-document parse of a stream that contains exactly one document returns that document’s constructed value, whether the document is a scalar, a sequence, or a mapping.
 - A leading byte-order mark is ignored: it does not change the constructed value.
-- The multi-document parse returns one list element per document, in stream order. A document with no content (for example between two consecutive document-start markers) constructs null.
+- The multi-document parse returns one list element per document, in stream order. A document with no content constructs null.
 - The multi-document parse of a stream with zero documents (empty text, or text that is only whitespace and comments) returns an empty list.
 - An alias is the same constructed value as its anchor (same identity, not a separately constructed copy). A collection may contain an alias to itself under the default sequence and mapping tags; the constructed collection then contains itself.
 - Duplicate keys in one mapping are rejected by default. When JSON-parse compatibility is enabled, duplicates are accepted and the last occurrence of a key wins. The switch applies to every document of a multi-document parse.
@@ -90,8 +88,8 @@ Feature points below group these entries by capability. They do not invent addit
 
 - The single-document parse fails on a stream with zero documents (empty, or whitespace and comments only), and on a stream with more than one document. The multi-document parse succeeds on both. The caller can tell these two entries apart on such input.
 - An explicit tag that the active schema does not define is rejected and the parse fails. (Catch-all prefix tags in FP-06 are the way to accept unknown tags.) A tag handle that no `%TAG` directive of that document declares is also a failure.
-- An explicit tag on a node of a kind the tag does not construct (for example a scalar tag on a sequence) is rejected and the parse fails.
-- Input that is not a well-formed YAML 1.2 stream fails on both parse entries and yields no value. This covers, among other grammar violations: characters outside the YAML 1.2 printable set anywhere in the stream (including inside quoted scalars, and including unpaired UTF-16 surrogate code units); a plain scalar that would start with a reserved indicator character; quoted scalars left unterminated; an alias whose name has not been anchored earlier in the document; a `%YAML` directive whose major version is not 1; and flow collections whose closing bracket does not match the opening one.
+- An explicit tag on a node of a kind the tag does not construct is rejected and the parse fails.
+- Input that is not a well-formed YAML 1.2 stream fails on both parse entries and yields no value.
 - When a source-path label is supplied and a parse fails, the failure report includes that label, and the error position it carries includes the line of the error site, given as the number of line breaks that precede the error site (a carriage-return/line-feed pair counts as one break, the same way it folds in quoted scalars). This count is neither a byte offset nor a column.
 - A failed parse does not yield a usable document (and, for the multi-document entry, no prefix of the list). The caller can tell success from failure before reading any constructed value.
 
@@ -126,7 +124,7 @@ Notation in this feature point: patterns are written as regular expressions that
 - **Explicit `!!int` and `!!float`.** Under JSON and Core an explicit `!!int` accepts an optional sign on every integer form: `[-+]?0b[01]+`, `[-+]?0o[0-7]+`, `[-+]?0x[0-9a-fA-F]+`, `[-+]?[0-9]+`; an explicit `!!float` accepts the Core float notation (including a leading `+`, a leading dot, and the infinity / not-a-number spellings) under both. Under YAML 1.1 an explicit tag accepts exactly the YAML 1.1 notation above. An explicit `!!bool` or `!!null` accepts the active schema’s spellings.
 - **Numbers outside the JavaScript range.** An integer or float text whose value does not convert to a finite JavaScript number (it would overflow to an infinity) is not a number: implicitly it stays a string, and under an explicit `!!int` / `!!float` tag the parse fails. The infinity spellings are the only way to obtain an infinite value.
 - An explicit empty `!!str` is the empty string. An explicit empty `!!seq` is an empty array. An explicit empty `!!map` is an empty mapping (plain object under the default map). An explicit empty `!!null` is null on every typed schema.
-- An explicit tag whose text does not match that tag’s notation fails and does not yield a value. This includes an empty explicit `!!bool`, `!!int`, or `!!float`, and a collection tag (`!!seq`, `!!map`) on a non-empty scalar.
+- An explicit tag whose text does not match that tag’s notation fails and does not yield a value.
 
 **Boundary / error behavior:**
 
@@ -141,7 +139,7 @@ Notation in this feature point: patterns are written as regular expressions that
 
 **Normal behavior:**
 
-- Under the default plain-object map, each scalar key becomes a property name by JavaScript string conversion of the constructed key (a null key becomes the property name `null`, a number key its decimal string). String keys and values are kept as is.
+- Under the default plain-object map, each scalar key becomes a property name by JavaScript string conversion of the constructed key. String keys and values are kept as is.
 - A key whose string form is `__proto__` is always stored as an **own** data property of the result, with its constructed value. It never changes the result’s prototype, and nothing becomes inherited through it. This holds for the default map and the legacy map.
 - When the real-map tag replaces the default map, every mapping is a JavaScript `Map` whose keys are the constructed keys, unconverted: keys of different type or identity stay distinct even when their string forms are equal, and sequence or mapping keys are kept as constructed values. Under that schema, dump writes such keys back so that a dump-then-parse round trip restores them, and a plain object dumped under that schema parses back as a `Map` with the same string keys.
 - When the legacy-map tag replaces the default map, a key that is a sequence becomes a property name by JavaScript string conversion of the array (items joined by commas, a plain-object item rendered as the ordinary object string), and a key that is a mapping becomes the ordinary JavaScript object string. Scalar keys behave as under the default map.
@@ -166,7 +164,7 @@ Notation in this feature point: patterns are written as regular expressions that
 - **`!!omap`.** A `!!omap` sequence of single-key mappings constructs an array of those mappings, in order (plain objects; one-entry `Map`s when the real-map tag is attached). Keys must be unique across items. An empty `!!omap` is an empty array.
 - **`!!pairs`.** A `!!pairs` sequence of single-key mappings constructs an array of two-element `[key, value]` arrays, in order. Repeated keys are allowed. An empty `!!pairs` is an empty array. A complex key follows the active map’s key policy: rejected under the default map, kept as the constructed value under the real-map tag.
 - `!!omap` and `!!pairs` are load-only compatibility types: they are not identified on dump, so a dumped result is a plain sequence, not an `!!omap` / `!!pairs` node.
-- **Merge keys.** Under Core without the merge tag, `<<` is an ordinary key and nothing is merged. Under the YAML 1.1 schema, or under Core with the merge tag attached, a `<<` key whose value is a mapping (or a sequence of mappings) copies each pair of the source into the enclosing mapping, and no `<<` property appears. Several `<<` keys in one mapping all apply. A pair written explicitly in the enclosing mapping wins over a merged pair with the same key, wherever it is written. Within one sequence of sources, an earlier source wins over a later one for the same key. Merged pairs are added through the enclosing mapping’s own tag, so a merge into a mapping whose tag rejects the incoming pair fails (for example a `!!set`, whose items must have null values).
+- **Merge keys.** Under Core without the merge tag, `<<` is an ordinary key and nothing is merged. Under the YAML 1.1 schema, or under Core with the merge tag attached, a `<<` key whose value is a mapping (or a sequence of mappings) copies each pair of the source into the enclosing mapping, and no `<<` property appears. Several `<<` keys in one mapping all apply. A pair written explicitly in the enclosing mapping wins over a merged pair with the same key, wherever it is written. Within one sequence of sources, an earlier source wins over a later one for the same key. Merged pairs are added through the enclosing mapping’s own tag, so a merge into a mapping whose tag rejects the incoming pair fails.
 
 **Boundary / error behavior:**
 
@@ -184,15 +182,14 @@ Notation in this feature point: patterns are written as regular expressions that
 **Normal behavior:**
 
 - Dump writes YAML text that the selected schema (and, under the default dump schema, both the Core and the YAML 1.1 parse) reads back as the same value. The text ends with a newline unless it is empty.
-- **Quoting rule.** A string is written as a plain scalar only when all of the following hold; otherwise it is quoted:
+- **Quoting rule.** A string is written as a plain scalar when all of the following hold; otherwise it is quoted. An implementation may additionally quote a string whose first character YAML 1.1 reserves as an indicator of a type of its own.
   - Read back, the plain text resolves to a string: no implicit tag of the dump schema resolves it to another type. Under the default dump schema this means neither the YAML 1.1 schema nor the YAML 1.2 Core schema (FP-02) resolves it to null, a boolean, an integer, a float, a timestamp, or a merge key. Under an explicitly chosen schema, only that schema’s implicit tags count.
-  - It is a valid YAML 1.2 plain scalar in its context: it is not empty; it does not begin or end with whitespace and does not end with `:`; its first character is not one of `- ? : , [ ] { } # & * ! | > ' " % @ =` or the backtick (`` ` ``), except that `-`, `?`, or `:` may start it when the next character is neither whitespace nor a character that would end the scalar there; it contains no `: ` (colon then whitespace) and no ` #` (whitespace then `#`); and it is not a document marker (`---` or `...` alone or followed by whitespace).
-  - In flow context it also contains none of `, [ ] { }`, and no `:` followed by one of those characters.
+  - It is a valid YAML 1.2 plain scalar in its context (block or flow): written unquoted at that position, the YAML 1.2 grammar reads it back as one plain scalar with exactly that content.
   - It is a single line of printable characters no longer than the line width (see below).
 - When quotes are required, the default quote style is single quotes; the caller may choose double quotes. A string containing characters outside the YAML printable set is written double-quoted with escapes. A multi-line string is written in a block scalar style. A “quote every non-key string” switch quotes every string value while leaving keys unquoted unless the quoting rule requires quotes.
 - **Numbers.** An integer whose JavaScript decimal string uses exponential notation (magnitude at or above `1e21`) is written in a float form that parses back to the same number; smaller integers are written as decimal integers. Under the default dump schema, every finite number is written in a notation that the JSON, Core, and YAML 1.1 schemas all read back as the same number. Not-a-number, the infinities, negative zero, and small exponents are written in forms the selected schema reads back to the same value.
 - **References.** By default, a second occurrence of the same object (including a cycle) becomes an alias to an anchor placed on the first occurrence. A “do not reuse references” switch writes each occurrence in full with no anchors.
-- **Presentation defaults.** Indentation is two spaces per level; the caller may choose another width. The line width is 80 columns: a plain or folded scalar longer than the width is folded at spaces onto several lines (the width is counted from the scalar’s indentation, but never reduced below the smaller of the line width and 40 columns), and a scalar within the width stays on one line. Block style is used at every depth.
+- **Presentation defaults.** Indentation is two spaces per level; the caller may choose another width. The line width is 80 columns: a plain or folded scalar longer than the width is folded at spaces onto several lines (the width is counted from the scalar’s indentation), and a scalar within the width stays on one line. Block style is used at every depth.
 - Sequences under a mapping key are indented under that key by default; a “no extra sequence indent” switch aligns the dash with the key. A sequence nested directly in a sequence starts on its parent’s dash line by default (`- - <item>`); a switch puts the nested sequence on the next line.
 - A flow-style depth makes every node at that nesting depth and below use flow style; depth 0 writes the whole value in flow style. The default never switches to flow. Optional flow presentation switches pad inside brackets and braces with one space, drop the space after commas, drop the space after colons, and write flow keys double-quoted.
 - When a node has both an anchor and an explicit tag, the default order is the anchor then the tag; a switch reverses that order to the tag then the anchor.
@@ -201,8 +198,8 @@ Notation in this feature point: patterns are written as regular expressions that
 
 **Boundary / error behavior:**
 
-- Dump of a function or regular expression without the skip-unrepresentable switch fails and produces no YAML text. This includes a function used as a `Map` key under the real-map schema.
-- A value that no tag of the dump schema identifies (for example a `Map` under a schema without the real-map tag) fails.
+- Dump of a function or regular expression without the skip-unrepresentable switch fails and produces no YAML text.
+- A value that no tag of the dump schema identifies fails; the default plain-object map does not identify a `Map`.
 
 ---
 

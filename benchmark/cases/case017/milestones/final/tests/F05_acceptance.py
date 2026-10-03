@@ -909,7 +909,7 @@ def test_unpublished_companions_on_borrowed_canonical_compact_do_not_write_calle
 
 
 # ---------------------------------------------------------------------------
-# G. Emit after compact opens, and is still a version-1 buffer
+# G. Emit after compact opens, and is still a well-formed buffer
 # ---------------------------------------------------------------------------
 
 
@@ -949,7 +949,7 @@ def test_emit_after_compact_opens_with_same_cardinality_and_value_sequence():
     assert require_int_field(report, "card") == len(parts["kept"])
 
 
-def test_compacted_emit_is_version_one_even_length_at_least_64_and_aligned():
+def test_compacted_emit_is_even_length_and_aligned():
     parts = slack_parts()
     present, _ordered = _borrow_population()
     source = wrap_f05_tracking(
@@ -1061,7 +1061,7 @@ def test_compact_path_performs_no_file_or_network_io():
     _ = bm.remove(removed);
     try bm.compact();
     const view = bm.toBuffer();
-    if (view.len < 64) return error.ShortEmit;
+    if (view.len == 0) return error.ShortEmit;
     _ = view[0];
     bm.deinit();
     try emitJson(init, init.gpa, "{{\"ok\":true}}", .{});
@@ -1082,7 +1082,7 @@ def test_compact_path_performs_no_file_or_network_io():
     var borrowed = klyvmap.Bitmap.fromBuffer(allocator, caller, .borrow) catch return error.BorrowFailed;
     try borrowed.compact();
     const view = borrowed.toBuffer();
-    if (view.len < 64) return error.ShortEmit;
+    if (view.len == 0) return error.ShortEmit;
     _ = view[0];
     borrowed.deinit();
     allocator.free(caller);

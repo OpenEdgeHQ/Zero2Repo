@@ -7,6 +7,7 @@ import secrets
 
 from _harness import workspace
 from F01_helpers import (
+    SCAN_CAP,
     SHORT_FACTUAL,
     invisible_count_of,
     latin_homoglyph,
@@ -650,6 +651,22 @@ def test_thirty_two_thousand_space_run_finishes_within_8_seconds_with_and_withou
     print(f"[F03] space-run letter={letter!r} len={len(text)}", flush=True)
     assert letter in text
     assert cleaned.returncode == 0
+
+
+def test_long_unspaced_token_finishes_within_8_seconds_with_and_without_cleanup():
+    # One word longer than the scan window, with no space anywhere: still
+    # inside the plain-text cap, so the same 8-second budget holds.
+    unit = "".join(secrets.choice("bcdfghklmnprstvw") for _ in range(5)) + "a"
+    payload = (unit * (SCAN_CAP // len(unit) + 2))[: SCAN_CAP + 1]
+    assert len(payload.encode("utf-8")) <= 512 * 1024
+    flag = cleanup_switch()
+    plain = finish_within_8s(stdin=payload)
+    assert plain.returncode == 0
+    require_success_report(plain, input_chars=unicode_len(payload))
+    cleaned = finish_within_8s((flag,), stdin=payload)
+    text = require_scrubbed_stdout(cleaned)
+    print(f"[F03] long-token unit={unit!r} cleaned_len={len(text)}", flush=True)
+    assert text == payload
 
 
 # ===========================================================================

@@ -26,7 +26,7 @@ The public surfaces are a **command-line detector** and a companion **agent plug
 - `--help`, or its short alias `-h`, prints the usage message to standard output and exits 0. The usage message's first line is exactly `usage: detect.py [--clean] [--ci] [--] [FILE]`; every later line is free text, the implementer's choice.
 - Cleanup of document files prints extracted plain text, not a rebuilt archive. Redirecting that output onto the original path would replace the document with loose text.
 
-**Twenty supported formats.** Plain text: `.md`, `.mdx`, `.markdown`, `.txt`, `.text`, `.rst`, `.tex`, `.org`, `.adoc`. Zip-based documents: `.docx`, `.docm`, `.pptx`, `.pptm`, `.xlsx`, `.xlsm`, `.odt`, `.odp`, `.ods`, `.epub`. Notebook: `.ipynb`. Plain text, and zip-based documents with notebooks, each have the size cap the PRD states (file size on disk, in binary units, enforced by the plugin). The detector command itself reads a path it is given. `.pdf` and `.rtf` are not among the twenty; they yield no extracted prose. The extracted prose of a zip-based document or a notebook does not begin or end with whitespace: line breaks sit only between its paragraphs, slides, cells, chapters, or markdown cells, so a single paragraph extracts as exactly its visible text. The scan window is measured on that text.
+**Twenty supported formats.** Plain text: `.md`, `.mdx`, `.markdown`, `.txt`, `.text`, `.rst`, `.tex`, `.org`, `.adoc`. Zip-based documents: `.docx`, `.docm`, `.pptx`, `.pptm`, `.xlsx`, `.xlsm`, `.odt`, `.odp`, `.ods`, `.epub`. Notebook: `.ipynb`. Plain text, and zip-based documents with notebooks, each have the size cap the PRD states (file size on disk, in binary units, enforced by the plugin). The detector command itself reads a path it is given. `.pdf` and `.rtf` are not among the twenty; they yield no extracted prose. How prose is extracted from each format is the PRD’s rule (FP-02).
 
 **Plugin hooks.** Host events send JSON on standard input. Named entries and the shipped files under `hooks/`:
 
@@ -81,33 +81,15 @@ The error objects are stated under `scripts/detect.py`.
 - Failure does not print a traceback or other multi-frame dump on the error stream.
 - Two or more file operands: the first file is scanned (exit 0, its report on standard output), and the error stream carries the multi-file notice stated under `scripts/detect.py`.
 
-**Structured success report.**
+**Structured success report.** A successful scan prints the report object stated under `scripts/detect.py`: one member per fired finding and the `_metrics` member. Which findings fire, the window they are computed on, the band a score falls in, and when the interval is a pair are the PRD’s rules (FP-01).
 
-- Findings: each fired machine-checked pattern is one finding member carrying a label, a positive hit count, and up to three short samples. Unfired numbers are omitted. Numbers with no detector never appear.
-- Metrics always include the scanned-character count, the longer-than-window indication, the integer score, the band, the confidence and its reason, the count of fired findings, and the three character-layer counts; member names and value forms are under `scripts/detect.py`.
-- The band name agrees with the score’s range.
-- Findings, including character-layer findings, are computed only on the scan-window prefix the PRD states. A mark that sits only past that window does not appear as a finding.
-- When the interval switch is on, metrics carry the interval member; it is a low/high pair when the document has enough sentences (the PRD's minimum) and `null` when it has fewer. That interval does not replace the point score. The resampling count and seed are the implementer’s. Presence or absence of the interval does not change the point score.
-- The same extracted prose, on the same detector, produces the same report. There is no model and no random component in the default scan.
-
-**Cleanup versus report.**
-
-- Without the cleanup switch, the character layer is reported as findings and as metrics counts; it is not applied to the text.
-- With the cleanup switch, standard output is the scrubbed text, not the structured report, and the process exits 0. Empty input still fails.
-
-**Network.**
-
-- A detector scan opens no network connection. Analysis is local.
+**Cleanup output.** With the cleanup switch, standard output is the scrubbed text, not the structured report, and the process exits 0 (form under `scripts/detect.py`).
 
 **Plugin config and ledger.**
 
-- The one-word level is stored as `.prosecheck-active` under `CLAUDE_CONFIG_DIR`. Valid contents are exactly `lite`, `full`, `strict`, and `off`.
-- Every eligible guard attempt is recorded on the session ledger for that session id. The ledger holds the file’s base name only — never the document text and never the full path. Ledgers of different session ids are separate. A ledger older than the age limit the PRD states is gone by the time a later session is in use. Ledger files are written with owner-only permissions.
-- A hook that throws, receives malformed JSON, or cannot read the mode flag still exits successfully. It must not fail the host session. Malformed input is treated as an empty object.
-
-**Portable export.**
-
-- The contract exported by `/prosecheck init` does not embed this machine’s install path or user name. `init` while the level is `off` writes no files: not `AGENTS.md`, not the Cursor rule.
+- The one-word level is stored as `.prosecheck-active` under `CLAUDE_CONFIG_DIR`. Its content is exactly one of `lite`, `full`, `strict`, and `off`.
+- Session ledgers are files under `CLAUDE_CONFIG_DIR` named as stated under Config filenames. What a ledger records, how long it is kept, and its file permissions are the PRD’s rules (FP-05, FP-06, non-functional constraints).
+- Every hook process exits 0.
 
 ## `scripts/detect.py`
 

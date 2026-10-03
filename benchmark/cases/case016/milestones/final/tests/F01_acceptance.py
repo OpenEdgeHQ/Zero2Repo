@@ -1202,12 +1202,14 @@ def test_confidence_low_below_300_with_one_score_moving_family():
     require_finding(findings, 42)
     moving = score_moving_numbers(findings)
     print(f"[F01] one-family confidence moving={sorted(moving)}", flush=True)
-    # Hold `low` when AI vocabulary is the score-moving family and opener-
-    # repetition 42 is present as writing advice. Do not pin this invented
-    # pad as exactly {1} — a correct extra score-moving fire on the pad
-    # is not a failure of this sentence.
+    # AI vocabulary is the score-moving family the sentence adds; opener
+    # repetition 42 is writing advice and does not count. Below 300 words,
+    # one score-moving family is `low`; should the implementation also
+    # count another score-moving family on the pad, the same rule makes
+    # the document `moderate`. Either way a reason is given.
     assert 1 in moving
-    assert confidence_of(metrics) == "low"
+    expected = "low" if moving == {1} else "moderate"
+    assert confidence_of(metrics) == expected, (sorted(moving), confidence_of(metrics))
     assert str(reason_of(metrics)).strip()
 
 

@@ -51,7 +51,7 @@ envfile_values(envfile_path=None, stream=None, verbose=False, interpolate=True, 
 - `interpolate` — expansion on (`True`) or off (`False`).
 - `encoding` — codec name used to decode a file or FIFO.
 
-**Returns** a mapping (`collections.abc.Mapping`, for example a `dict`) from binding name (`str`) to recorded value. Membership is `name in mapping`. A value is a `str` (possibly `""`) or, for a no-value binding, a no-value marker that is not a `str`; the marker is the implementer’s choice (for example `None`). A name that is not a binding of the source is not a key. An empty source gives a mapping with no keys. The call does not raise for a missing path.
+**Returns** a mapping (`collections.abc.Mapping`, for example a `dict`) from binding name (`str`) to recorded value. Membership is `name in mapping`. A value is a `str` (possibly `""`) or, for a no-value binding, a no-value marker that is not a `str`; the marker is the implementer’s choice. A name that is not a binding of the source is not a key. An empty source gives a mapping with no keys. The call does not raise for a missing path.
 
 ## `find_envfile`
 
@@ -76,7 +76,7 @@ load_envfile(envfile_path=None, stream=None, verbose=False, override=False, inte
 - `envfile_path`, `stream`, `verbose`, `interpolate`, `encoding` — as for `envfile_values`.
 - `override` — whether source values replace names already in the process environment.
 
-**Returns** a report value: one value for success and a different value for failure (PRD FP-03). The two values are the implementer’s choice (for example `True` and `False`); the call does not raise for a missing path, an empty source, or a disabled load. **Side effect:** writes names into `os.environ` of the running process.
+**Returns** a report value: one value for success and a different value for failure (PRD FP-03). The two values are the implementer’s choice; the call does not raise for a missing path, an empty source, or a disabled load. **Side effect:** writes names into `os.environ` of the running process.
 
 ## `get_key`
 
@@ -86,7 +86,7 @@ get_key(envfile_path, key_to_get, encoding="utf-8")
 
 The first two arguments are positional: path, name.
 
-**Returns** the value as a `str` (possibly `""`), or the no-value outcome: a value that is not a `str`, of the implementer’s choice (for example `None`). Does not raise for a missing name, a no-value line, or a missing path. **Diagnostics:** *key-not-found* for a name missing from an existing file; *file-not-found* and *key-not-found* for a missing path.
+**Returns** the value as a `str` (possibly `""`), or the no-value outcome: a value that is not a `str`, of the implementer’s choice. Does not raise for a missing name, a no-value line, or a missing path. **Diagnostics:** *key-not-found* for a name missing from an existing file; *file-not-found* and *key-not-found* for a missing path.
 
 ## `set_key`
 
@@ -101,7 +101,7 @@ The first three arguments are positional: path, name, value.
 - `encoding` — codec used to read and write the file.
 - `follow_symlinks` — whether a symbolic link at the path is followed.
 
-**Returns** a success report; its value is the implementer’s choice (for example the tuple `(True, key, value)`). **On-disk form** of the stored line, followed by one line feed:
+**Returns** a success report; its value is the implementer’s choice. **On-disk form** of the stored line, followed by one line feed:
 
 ```
 [export ]<NAME>=<STORED>
@@ -117,7 +117,7 @@ unset_key(envfile_path, key_to_unset, quote_mode="always", encoding="utf-8", fol
 
 The first two arguments are positional: path, name. `quote_mode` is accepted and does not change any stored line. `encoding` and `follow_symlinks` are as for `set_key`.
 
-**Returns** a success report, or for a delete that does not succeed either a report different from the success report or a raised exception (the implementer’s choice; for example `(True, key)` and `(None, key)`). **Diagnostics:** *path-missing* for a missing path; *key-not-removed* for a name not in an existing file.
+**Returns** a success report, or for a delete that does not succeed either a report different from the success report or a raised exception (the implementer’s choice). **Diagnostics:** *path-missing* for a missing path; *key-not-removed* for a name not in an existing file.
 
 ## Command-line program
 

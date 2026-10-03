@@ -15,5 +15,5 @@ Build the recompressor CLI from this repository's Autotools sources and run it o
 - **Profile id:** `cpu_baseline`
 - **Platforms:** linux, darwin, windows
 - **Required on:** linux
-- **Setup:** C99 compiler and GNU make; link against the C and math libraries only. A git checkout additionally needs autoconf and automake to generate the configure script. Optional configure flags enable sanitizers or a portable mixer without SIMD.
+- **Setup:** C99 compiler and GNU make; link against the C and math libraries only. A git checkout additionally needs autoconf and automake to generate the configure script. Optional configure flags enable sanitizers or a portable build without CPU-specific code paths.
 - **Build:** From the repository root, generate the configure script if it is missing, run configure, then make. The default target produces the command-line tool.

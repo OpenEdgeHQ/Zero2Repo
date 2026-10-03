@@ -912,10 +912,17 @@ def standalone_int_present(text: str, value: int) -> bool:
 
 
 def window_body(n: int) -> str:
-    """Exactly *n* characters of extractable padding with no leading/trailing space."""
+    """Exactly *n* characters of extractable padding with no leading/trailing space.
+
+    Ordinary space-separated words, so a test about the window length does
+    not also time a single very long token (that budget has its own test).
+    """
     if n < 1:
         raise HarnessError("window body length must be positive")
-    return ("bridge" * (n // 6 + 2))[:n]
+    body = ("bridge " * (n // 7 + 2))[:n]
+    if body.endswith(" "):
+        body = body[:-1] + "s"
+    return body
 
 
 def spreadsheet_sheet_xml(

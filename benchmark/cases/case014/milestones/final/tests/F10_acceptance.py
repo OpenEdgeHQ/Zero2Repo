@@ -1400,25 +1400,34 @@ def test_runner_gyro_accel_unit_conversion():
     pitch_si = si_e[-1].pitch_deg
     roll_raw = raw_g_e[-1].roll_deg
     pitch_raw = raw_g_e[-1].pitch_deg
-    assert None not in (roll_g, pitch_g, roll_si, pitch_si, roll_raw, pitch_raw)
+    assert None not in (roll_g, pitch_g, roll_si, pitch_si)
     tilt_g = abs(roll_g) + abs(pitch_g)
     tilt_si = abs(roll_si) + abs(pitch_si)
-    tilt_raw = abs(roll_raw) + abs(pitch_raw)
-    print(f"g vs m/s2 tilt {tilt_g:.3f} {tilt_si:.3f} unconverted={tilt_raw:.3f}", flush=True)
+    print(
+        f"g vs m/s2 tilt {tilt_g:.3f} {tilt_si:.3f} unconverted roll={roll_raw} pitch={pitch_raw}",
+        flush=True,
+    )
     assert tilt_g < 12.0 and tilt_si < 12.0, "g accelerometer was not a level pad"
     last_raw = raw_g_e[-1]
     last_si = si_e[-1]
-    assert last_raw.lat_deg is not None and last_si.lat_deg is not None
-    err_raw = hypot3(
-        ecef_from_llh_deg(last_raw.lat_deg, last_raw.lon_deg, last_raw.h_m or h),
-        ecef_from_llh_deg(lat, lon, h),
-    )
+    assert last_si.lat_deg is not None
     err_si = hypot3(
         ecef_from_llh_deg(last_si.lat_deg, last_si.lon_deg, last_si.h_m or h),
         ecef_from_llh_deg(lat, lon, h),
     )
+    if last_raw.lat_deg is None:
+        # Unconverted g counts (about 1 m/s^2 of specific force) are not a
+        # still pad: publishing no position at all is one correct outcome.
+        print(f"unconverted-g: no position published; SI pad err={err_si:.3f}", flush=True)
+        return
+    err_raw = hypot3(
+        ecef_from_llh_deg(last_raw.lat_deg, last_raw.lon_deg, last_raw.h_m or h),
+        ecef_from_llh_deg(lat, lon, h),
+    )
     print(f"unconverted-g pad err={err_raw:.3f} SI={err_si:.3f}", flush=True)
-    assert err_raw > err_si + 5.0, "unconverted g counts still stayed on the level pad"
+    assert err_raw > 5.0 and err_raw > err_si + 5.0, (
+        "unconverted g counts still stayed on the level pad"
+    )
 
 
 def test_runner_pressure_unit_tokens():

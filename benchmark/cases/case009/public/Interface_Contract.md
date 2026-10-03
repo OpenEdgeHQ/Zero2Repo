@@ -237,7 +237,7 @@ Each entry lists its options and positional arguments. Every printed text not de
 #### `prune`
 - `--dry-run`, `--force`, `--recent`, `--verify-remote`, `--verify-unreachable`, `--when-unverified=<halt|continue>`, `--verbose`.
 - `--verbose` writes on standard output one line per deleted object (with `--dry-run`, per object that would be deleted) carrying its 64-hex `<oid>`; the rest of each line (for example its size) is free.
-- `--verify-remote` sends the prune remote a `download` batch request listing the candidates. In the reply, an object with a `download` action is held by the endpoint; an object with an `error`, or without a `download` action, is not.
+- `--verify-remote` sends the prune remote a `download` batch request listing the candidates (request and reply forms as under **HTTP batch and basic transfer**).
 
 #### `pull [<remote> [<ref>…]]`
 - `--include <patterns>`, `--exclude <patterns>`.

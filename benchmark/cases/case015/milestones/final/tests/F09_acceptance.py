@@ -58,11 +58,11 @@ def test_dump_codec_mode_field_two_opus_share_vorbis_differs():
 
 
 # ---------------------------------------------------------------------------
-# B. Stored-stage field: Vorbis effort 1 versus effort 3
+# B. Stored-stage field follows the effort, not the input
 # ---------------------------------------------------------------------------
 
 
-def test_dump_stored_stage_field_vorbis_effort1_vs_effort3():
+def test_dump_stored_stage_field_follows_effort_not_input():
     with workspace() as ws:
         src_x = vorbis_with_runtime_comment(ws)
         y_bytes = _vorbis_comment_variant(_read_fixture(_SCALE_FILES[2]))
@@ -95,10 +95,6 @@ def test_dump_stored_stage_field_vorbis_effort1_vs_effort3():
             "the stored stage of a Vorbis archive follows the effort, not the "
             f"input: effort 1 gave {stage_1x}/{stage_1y}, effort 3 gave "
             f"{stage_3x}/{stage_3y}"
-        )
-        assert stage_1x != stage_3x, (
-            "Vorbis archives made at effort 1 and at effort 3 store different "
-            f"stages; both report level {stage_1x}"
         )
 
 

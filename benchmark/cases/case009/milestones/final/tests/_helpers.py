@@ -6610,8 +6610,21 @@ def bitflip_stored_object(
     assert new_data != data, (
         f"bitflip of {path} produced identical bytes"
     )
+    # A product may legitimately store objects read-only; the judge runs
+    # unprivileged, so add owner write permission for the write-back and
+    # restore the original mode afterwards.
     try:
-        path.write_bytes(new_data)
+        orig_mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError as exc:
+        raise AssertionError(f"cannot stat {path}: {exc}") from exc
+    try:
+        if not orig_mode & stat.S_IWUSR:
+            os.chmod(path, orig_mode | stat.S_IWUSR)
+        try:
+            path.write_bytes(new_data)
+        finally:
+            if not orig_mode & stat.S_IWUSR:
+                os.chmod(path, orig_mode)
     except OSError as exc:
         raise AssertionError(
             f"cannot write flipped object at {path}: {exc}"

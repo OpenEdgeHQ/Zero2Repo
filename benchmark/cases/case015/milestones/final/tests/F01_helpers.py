@@ -41,9 +41,9 @@ _RANGE_PAIR = re.compile(r"(?<![\d])-1(?!\d).*?(?<![\d])-9(?!\d)")
 _EFFORT_NINE = re.compile(r"(?<![\d])-9(?!\d)")
 # Interface Contract, version: the identity lines a caller reads.
 _RELEASE_LINE = re.compile(r"^oggrepack (\S*\d\S*)(?: .*)?$")
-_BUILD_HOST_LINE = re.compile(r"^Build host (\S+?)\.?$")
-_OPUS_MODE_LINE = re.compile(r"^Ogg Opus mode: \S.*$")
-_SIMD_LINE = re.compile(r"^SIMD: (\S+) built, (\S+) dispatched$")
+_BUILD_HOST_LINE = re.compile(r"^host: (\S+)$")
+_OPUS_MODE_LINE = re.compile(r"^opus: \S.*$")
+_DISPATCH_LINE = re.compile(r"^dispatch: (\S+)$")
 # PRD: on Unix/Linux, batch compress names the archive by appending `.orp`.
 BATCH_ARCHIVE_SUFFIX = ".orp"
 
@@ -65,7 +65,10 @@ REQUIRED_HELP_NAMES = (
 )
 
 _KNOWN_SHORT = frozenset("hvbpj123456789")
-_LEGAL_SIMD = frozenset({"scalar", "sse2", "avx2"})
+# Interface Contract: ORP_SIMD values and version ``dispatch:`` paths.
+SIMD_PORTABLE = "portable"
+SIMD_NATIVE = "native"
+_LEGAL_SIMD = frozenset({SIMD_PORTABLE, SIMD_NATIVE})
 
 
 def token(nbytes: int = 6) -> str:
@@ -371,7 +374,7 @@ def malformed_memcap_runtime() -> str:
 
 
 def invalid_simd_token() -> str:
-    """Runtime mixer-kernel token outside the published legal set."""
+    """Runtime ORP_SIMD value outside the published legal set."""
     while True:
         word = token()
         if word not in _LEGAL_SIMD:
@@ -387,11 +390,6 @@ def require_path_absent(ws: Workspace, relpath: str) -> None:
 def require_bytes_unchanged(ws: Workspace, relpath: str, before: bytes) -> None:
     after = ws.read_bytes(relpath)
     assert after == before, f"bytes of {relpath!r} changed"
-
-
-def mixer_kernel_names(text: str) -> set[str]:
-    """PRD-named mixer kernels that appear as whole tokens in *text*."""
-    return cli_tokens(text) & _LEGAL_SIMD
 
 
 def _version_lines(text: str) -> list[str]:
@@ -412,63 +410,58 @@ def version_release(version_text: str) -> str:
 
 
 def version_build_host(version_text: str) -> str:
-    """``<host-triple>`` of the Contract line ``Build host <host-triple>``."""
+    """``<host-triple>`` of the Contract line ``host: <host-triple>``."""
     found = [m.group(1) for line in _version_lines(version_text)
              if (m := _BUILD_HOST_LINE.match(line))]
     assert len(found) == 1, (
-        "version stdout does not carry exactly one `Build host <host-triple>` "
+        "version stdout does not carry exactly one `host: <host-triple>` "
         f"line; stdout={version_text!r}"
     )
     return found[0]
 
 
 def opus_mode_lines(version_text: str) -> list[str]:
-    """Contract ``Ogg Opus mode: <component>`` lines of version stdout."""
+    """Contract ``opus: <component>`` lines of version stdout."""
     return [line for line in _version_lines(version_text) if _OPUS_MODE_LINE.match(line)]
 
 
-def version_simd(version_text: str) -> tuple[frozenset[str], str]:
-    """``(built kernels, dispatched kernel)`` of the Contract ``SIMD:`` line."""
-    found = [m for line in _version_lines(version_text) if (m := _SIMD_LINE.match(line))]
+def version_dispatch(version_text: str) -> str:
+    """``<path>`` of the Contract version line ``dispatch: <path>``."""
+    found = [m.group(1) for line in _version_lines(version_text)
+             if (m := _DISPATCH_LINE.match(line))]
     assert len(found) == 1, (
-        "version stdout does not carry exactly one "
-        "`SIMD: <built-kernels> built, <dispatched-kernel> dispatched` line; "
+        "version stdout does not carry exactly one `dispatch: <path>` line; "
         f"stdout={version_text!r}"
     )
-    built = frozenset(found[0].group(1).split(","))
-    dispatched = found[0].group(2)
-    assert built and built <= _LEGAL_SIMD, (
-        f"built kernels {sorted(built)!r} are not names from {sorted(_LEGAL_SIMD)}"
+    assert found[0] in _LEGAL_SIMD, (
+        f"dispatched path {found[0]!r} is not one of {sorted(_LEGAL_SIMD)}"
     )
-    assert dispatched in _LEGAL_SIMD, (
-        f"dispatched kernel {dispatched!r} is not a name from {sorted(_LEGAL_SIMD)}"
-    )
-    return built, dispatched
+    return found[0]
 
 
 def require_compiled_in_identity_field(
     version_text: str, help_text: str
 ) -> tuple[str, ...]:
-    """Version carries the ``Ogg Opus mode:`` line (Opus is compiled in).
+    """Version carries the ``opus:`` line (Opus is compiled in).
 
     This product supports Ogg Opus, so the present arm is required; the
     line is version identity, not help usage.
     """
     lines = opus_mode_lines(version_text)
     assert len(lines) == 1, (
-        "version stdout does not carry exactly one `Ogg Opus mode: <component>` "
+        "version stdout does not carry exactly one `opus: <component>` "
         "line although Ogg Opus encode and decode are compiled in; "
         f"stdout={version_text!r}"
     )
     help_lines = set(_version_lines(help_text))
     assert lines[0] not in help_lines, (
-        "the `Ogg Opus mode:` line is part of help output, not version identity"
+        "the `opus:` line is part of help output, not version identity"
     )
     return tuple(lines)
 
 
 def require_version_identity(version_text: str, help_text: str) -> None:
-    """Assert version stdout names product, release, host, Opus, and kernels.
+    """Assert version stdout names product, release, host, Opus, and code path.
 
     Reads the Contract's version lines. The build host is the configure host
     triple; its CPU part is this machine's ``uname -m``.
@@ -487,12 +480,7 @@ def require_version_identity(version_text: str, help_text: str) -> None:
         f"`<cpu>-<vendor>-<os>` for this machine ({machine})"
     )
     require_compiled_in_identity_field(version_text, help_text)
-    version_simd(version_text)
-    kernels = mixer_kernel_names(version_text)
-    assert kernels, (
-        f"version stdout does not name a mixer kernel; "
-        f"tokens={sorted(version_tokens)}"
-    )
+    version_dispatch(version_text)
 
 
 def require_stderr_identifies_path_failure(result: RunResult, path: str) -> None:
@@ -511,6 +499,8 @@ __all__ = (
     "PRODUCT_NAME",
     "REQUIRED_HELP_NAMES",
     "SIMD_ENV",
+    "SIMD_NATIVE",
+    "SIMD_PORTABLE",
     "HarnessError",
     "cli_tokens",
     "derived_batch_archive",
@@ -519,7 +509,6 @@ __all__ = (
     "invalid_simd_token",
     "jobs_trailing_value",
     "malformed_memcap_runtime",
-    "mixer_kernel_names",
     "named_archive_files",
     "opus_mode_lines",
     "path_is_file",
@@ -553,7 +542,7 @@ __all__ = (
     "unknown_verb",
     "version_build_host",
     "version_release",
-    "version_simd",
+    "version_dispatch",
     "workspace",
     "workspace_regular_files",
 )
