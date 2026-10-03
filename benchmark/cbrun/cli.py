@@ -304,6 +304,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"  FAILED: {result.error}", file=sys.stderr)
             _print_token_usage(result.token_usage)
+            if result.needs_review:
+                counts = (result.transcript_scan or {}).get("counts") or {}
+                print(
+                    f"  NEEDS REVIEW: transcript scan flagged high={counts.get('high', 0)} "
+                    f"medium={counts.get('medium', 0)}; see {result.logs.get('transcript_scan')}",
+                    file=sys.stderr,
+                )
             results.append(result)
             write_summary(results, args.out)
 
