@@ -29,7 +29,7 @@ from .access_monitor import AccessMonitor, AccessMonitorError
 from .assets import AdapterError, CaseSpec, load_case
 from .denylist import (
     DEFAULT_FIX_RETRIES,
-    GITHUB_BLOCK_HOSTS,
+    CODE_HOST_BLOCK_HOSTS,
     ScanResult,
     build_access_fix_instruction,
     build_fix_instruction,
@@ -228,7 +228,8 @@ def run_trial(
     result.provenance["agent_image"] = result.agent_image_id
     result.provenance["deliverable_image"] = result.deliverable_image_id
 
-    block_hosts = GITHUB_BLOCK_HOSTS if block_github else None
+    block_hosts = CODE_HOST_BLOCK_HOSTS if block_github else None
+    result.blocked_hosts = list(block_hosts or ())
     container = Container.start(
         image.agent_image,
         gpus=gpus,

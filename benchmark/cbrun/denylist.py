@@ -19,6 +19,9 @@ __all__ = [
     "CONTAINER_DENYLIST_HASHES_PATH",
     "DEFAULT_FIX_RETRIES",
     "GITHUB_BLOCK_HOSTS",
+    "OTHER_CODE_HOSTS",
+    "GITHUB_MIRROR_HOSTS",
+    "CODE_HOST_BLOCK_HOSTS",
     "build_fix_instruction",
     "build_access_fix_instruction",
     "CONTAINER_ACCESS_MONITOR_PATH",
@@ -68,6 +71,12 @@ _COMMAND_LIKE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".cpp", ".cc", ".cxx")
 DEFAULT_FIX_RETRIES = 1
 
+# Hostnames pointed at 0.0.0.0 in the solve container's /etc/hosts, so a clone
+# or download of the upstream repository fails at run time. Only code hosts and
+# their mirrors are listed: package registries (PyPI, npm, Go proxy, crates.io,
+# ...) stay reachable because ordinary dependency installs need them; the
+# post-trial transcript scan (``transcript_scan``) reports source archives
+# fetched from them.
 GITHUB_BLOCK_HOSTS = (
     "github.com",
     "www.github.com",
@@ -76,7 +85,49 @@ GITHUB_BLOCK_HOSTS = (
     "gist.github.com",
     "raw.githubusercontent.com",
     "objects.githubusercontent.com",
+    "gist.githubusercontent.com",
+    "media.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "github-releases.githubusercontent.com",
+    "objects-origin.githubusercontent.com",
+    "uploads.github.com",
 )
+
+# Other public code hosts.
+OTHER_CODE_HOSTS = (
+    "gitlab.com",
+    "www.gitlab.com",
+    "gitee.com",
+    "www.gitee.com",
+    "bitbucket.org",
+    "www.bitbucket.org",
+    "api.bitbucket.org",
+    "sourcegraph.com",
+    "www.sourcegraph.com",
+    "codeberg.org",
+    "git.sr.ht",
+)
+
+# Well-known GitHub mirrors and download proxies.
+GITHUB_MIRROR_HOSTS = (
+    "ghproxy.com",
+    "mirror.ghproxy.com",
+    "ghproxy.net",
+    "gh-proxy.com",
+    "ghfast.top",
+    "hub.fastgit.org",
+    "hub.fastgit.xyz",
+    "download.fastgit.org",
+    "raw.fastgit.org",
+    "kkgithub.com",
+    "raw.kkgithub.com",
+    "bgithub.xyz",
+    "gitclone.com",
+    "githubfast.com",
+)
+
+# Everything ``--block-github`` (alias ``--block-code-hosts``) blocks.
+CODE_HOST_BLOCK_HOSTS = GITHUB_BLOCK_HOSTS + OTHER_CODE_HOSTS + GITHUB_MIRROR_HOSTS
 
 # Scan only source-like files under /app.
 _SOURCE_SUFFIXES = {

@@ -195,9 +195,15 @@ whole prompt into one argv slot and fails once it exceeds 128KiB.
 
 ### Network policy and upstream denylist
 
-* During **solve**, GitHub hostnames are blocked via container `/etc/hosts`
-  (`--add-host …:0.0.0.0`). Model API calls and PyPI/npm remain reachable.
-  Disable with `--no-block-github`.
+* During **solve**, code-hosting hostnames are blocked via container
+  `/etc/hosts` (`--add-host …:0.0.0.0`): GitHub and its download hosts,
+  GitLab, Gitee, Bitbucket, Sourcegraph, Codeberg, sourcehut, and well-known
+  GitHub mirrors/proxies (`CODE_HOST_BLOCK_HOSTS` in `denylist.py`). Model API
+  calls, web search and package registries (PyPI, npm, Go proxy, crates.io)
+  remain reachable, because ordinary dependency installs need them; source
+  archives fetched from a registry are reported by the transcript scan below.
+  `summary.json` records `blocked_hosts`. Disable with `--no-block-github`
+  (alias `--no-block-code-hosts`).
 * Each case ships `source/denylist.json` (install/import bans for the
   upstream product). It is tracked with the case. The file never enters the
   solve container: the `:agent` image carries only name hashes plus the

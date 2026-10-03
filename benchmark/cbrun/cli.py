@@ -132,9 +132,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--block-github",
+        "--block-code-hosts",
+        dest="block_github",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Block GitHub hostnames in solve container (default: on).",
+        help="Block GitHub, other code hosts and GitHub mirrors in the solve "
+        "container via /etc/hosts (default: on). Package registries stay reachable.",
     )
     return parser.parse_args(argv)
 

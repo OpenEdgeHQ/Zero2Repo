@@ -67,6 +67,8 @@ class TrialResult:
     invalid_reason: str | None = None
     substrates_missing: list[str] = field(default_factory=list)
     token_usage: dict = field(default_factory=dict)
+    # Hostnames blocked via /etc/hosts during solve (empty with --no-block-github).
+    blocked_hosts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
