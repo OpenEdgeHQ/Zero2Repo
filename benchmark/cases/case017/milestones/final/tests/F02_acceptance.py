@@ -1,12 +1,9 @@
 # feature: F02
 """FP-02: set, membership, and remove of 64-bit values.
 
-Assertions follow Full_PRD.original.md FP-02 (L117–L143) together with
-in-scope pre-FP obligations the public set / membership / remove entries
-can trigger: the L7 first path (set 42 and a value above 2^40), values
-in the closed 64-bit range with no second copy (L17–L19), library with
-no file or network I/O (L37, L55), 64-bit domain with no 32-bit variant
-(L60), and no removable-substrate negative control (L59, L78).
+Covers FP-02 together with the product-wide rules the set / membership /
+remove entries touch: values in the closed 64-bit range with no second
+copy, no file or network I/O, and no 32-bit variant.
 """
 
 from __future__ import annotations

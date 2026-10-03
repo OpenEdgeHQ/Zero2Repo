@@ -9,7 +9,7 @@ from _harness import DEFAULT_COPY_DEST, workspace
 from F01_helpers import (
     assert_fired,
     assert_only_rule,
-    require_copy_success,
+    require_copied_layout,
     snippet_no_object_parameters,
     snippet_no_unknown_parameters,
     snippet_no_unknown_returns,
@@ -124,7 +124,7 @@ from F04_helpers import (
 def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
-        specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
         print(f"F04 copied specifier={specifier}", flush=True)
         yield ws, specifier
 

@@ -196,30 +196,22 @@ def _line_starts(source: str) -> list[int]:
 
 
 def _offset_from_line_column(source: str, line: int, column: int) -> int:
-    starts = _line_starts(source)
-    n_lines = len(starts)
+    """Character offset of a 1-based ``line`` / ``column`` in *source*.
 
-    def _in_line(line_index: int, col_offset: int) -> int | None:
-        if line_index < 0 or line_index >= n_lines:
-            return None
+    The Interface Contract states the host report gives the reported
+    position as 1-based line and column of the first label's span. No
+    other base is tried.
+    """
+    starts = _line_starts(source)
+    line_index = line - 1
+    if 0 <= line_index < len(starts) and column >= 1:
         start = starts[line_index]
-        end = starts[line_index + 1] if line_index + 1 < n_lines else len(source)
-        offset = start + col_offset
+        end = starts[line_index + 1] if line_index + 1 < len(starts) else len(source)
+        offset = start + column - 1
         if start <= offset <= end:
             return offset
-        return None
-
-    for line_index, col_offset in (
-        (line - 1, column - 1),
-        (line - 1, column),
-        (line, column),
-        (line, column - 1),
-    ):
-        placed = _in_line(line_index, col_offset)
-        if placed is not None:
-            return placed
     raise HarnessError(
-        f"cannot place diagnostic at line={line} column={column} "
+        f"cannot place diagnostic at 1-based line={line} column={column} "
         f"in a {len(source)}-byte source"
     )
 

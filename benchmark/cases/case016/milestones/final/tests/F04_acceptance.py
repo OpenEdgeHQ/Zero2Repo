@@ -11,24 +11,14 @@ import pytest
 
 from _harness import ENV_DEFAULT_MODE, LEDGER_PREFIX, ledger_paths, workspace
 from F01_helpers import (
-    CORE_SLOTS,
-    binding,
-    SHORT_FACTUAL,
-    SHORT_SLOP,
-    bind_core_metric_paths,
-    pad_human,
     proxy_sink,
-    require_success_report,
     scan_stdin,
-    unicode_len,
 )
 from F02_helpers import runtime_token
 from F04_helpers import (
     BANNED_VOCABULARY,
     CONTEXT_ONLY,
-    delivered_text,
     hook_connect_observer,
-    joined_stdout,
     make_flag_unreadable,
     make_flag_unwritable,
     named_score_present,
@@ -42,12 +32,15 @@ from F04_helpers import (
     require_named_welcome_facts,
     has_cleanup_switch_finish,
     require_not_source_code_scope,
+    reminder_text,
+    report_findings_direct,
     require_probe_finding,
     require_short_reminder,
     require_stored_on_level,
     require_strict_cleanup,
     require_welcome_facts_absent,
     session_start,
+    session_text,
     standalone_word_present,
     stored_session_text,
     subagent_contract,
@@ -62,48 +55,6 @@ _FIRE_WORDS = tuple(word for word in BANNED_VOCABULARY if word not in CONTEXT_ON
 MALFORMED_STDIN = "this is not a JSON object {"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _bind_f04_metrics():
-    """Locate score / band / confidence / scanned via F01's sealed probes.
-
-    A failure is recorded; tests that read those metrics fail with it.
-    """
-    with binding(*CORE_SLOTS):
-        fact = scan_stdin(SHORT_FACTUAL)
-        slop = scan_stdin(SHORT_SLOP)
-        if fact.returncode != 0:
-            raise AssertionError(
-                f"factual bind failed: exit {fact.returncode} stderr={fact.stderr_text!r}"
-            )
-        if slop.returncode != 0:
-            raise AssertionError(
-                f"slop bind failed: exit {slop.returncode} stderr={slop.stderr_text!r}"
-            )
-        _ff, f_metrics = require_success_report(
-            fact, input_chars=unicode_len(SHORT_FACTUAL)
-        )
-        _sf, s_metrics = require_success_report(
-            slop, input_chars=unicode_len(SHORT_SLOP)
-        )
-        none_text = " ".join(["lock"] * 39)
-        high_text = pad_human(300)
-        none_r = scan_stdin(none_text)
-        high_r = scan_stdin(high_text)
-        if none_r.returncode != 0 or high_r.returncode != 0:
-            raise AssertionError("confidence bind probes must succeed")
-        _nf, none_m = require_success_report(none_r, input_chars=unicode_len(none_text))
-        _hf, high_m = require_success_report(high_r, input_chars=unicode_len(high_text))
-        bind_core_metric_paths(
-            f_metrics,
-            s_metrics,
-            none_metrics=none_m,
-            high_conf_metrics=high_m,
-            scanned_metrics=f_metrics,
-            scanned_chars=unicode_len(SHORT_FACTUAL),
-            scanned_over_metrics=None,
-        )
-
-
 # ===========================================================================
 # A. Session-start emits the level-specific contract; off emits nothing
 # ===========================================================================
@@ -115,7 +66,7 @@ def test_session_start_with_no_flag_emits_the_default_full_contract():
     with workspace() as ws:
         assert ws.read_mode_flag() is None
         result = session_start(ws)
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     assert text.strip(), "no-flag session-start emitted nothing"
     require_banned_list(text)
@@ -132,7 +83,7 @@ def test_session_start_emits_a_contract_for_lite_full_and_strict():
         with workspace() as ws:
             ws.write_mode_flag(level)
             result = session_start(ws)
-            texts[level] = delivered_text(result)
+            texts[level] = session_text(result)
             path_bag[level] = workspace_paths(ws)
             print(
                 f"[F04] stored {level} session-start len={len(texts[level])}",
@@ -151,7 +102,7 @@ def test_session_start_with_off_emits_nothing_and_succeeds():
     with workspace() as full_ws:
         full_ws.write_mode_flag("full")
         full_result = session_start(full_ws)
-        full_text = delivered_text(full_result)
+        full_text = session_text(full_result)
         full_paths = workspace_paths(full_ws)
     with workspace() as ws:
         ws.write_mode_flag("off")
@@ -170,7 +121,7 @@ def test_session_start_with_off_emits_nothing_and_succeeds():
 def test_contract_contains_every_named_banned_word(level):
     with workspace() as ws:
         ws.write_mode_flag(level)
-        text = delivered_text(session_start(ws))
+        text = session_text(session_start(ws))
     require_banned_list(text)
     print(f"[F04] {level} banned-list ok len={len(text)}", flush=True)
 
@@ -179,7 +130,7 @@ def test_contract_contains_every_named_banned_word(level):
 def test_contract_does_not_say_it_applies_to_source_code(level):
     with workspace() as ws:
         ws.write_mode_flag(level)
-        text = delivered_text(session_start(ws))
+        text = session_text(session_start(ws))
         paths = workspace_paths(ws)
     assert text.strip()
     require_banned_list(text)
@@ -191,7 +142,7 @@ def test_contract_does_not_say_it_applies_to_source_code(level):
 def test_on_level_contract_is_more_than_the_banned_word_list(level):
     with workspace() as ws:
         ws.write_mode_flag(level)
-        text = delivered_text(session_start(ws))
+        text = session_text(session_start(ws))
     require_banned_list(text)
     print(f"[F04] {level} banned-list is the graded contract body", flush=True)
 
@@ -204,11 +155,11 @@ def test_on_level_contract_is_more_than_the_banned_word_list(level):
 def test_lite_contract_omits_post_write_detector_instruction():
     with workspace() as lite_ws:
         lite_ws.write_mode_flag("lite")
-        lite_text = delivered_text(session_start(lite_ws))
+        lite_text = session_text(session_start(lite_ws))
         lite_paths = workspace_paths(lite_ws)
     with workspace() as full_ws:
         full_ws.write_mode_flag("full")
-        full_text = delivered_text(session_start(full_ws))
+        full_text = session_text(session_start(full_ws))
         full_paths = workspace_paths(full_ws)
     paths = tuple(dict.fromkeys((*lite_paths, *full_paths)))
     require_lite_omits_scoring(lite_text, full_text, *paths)
@@ -218,7 +169,7 @@ def test_lite_contract_omits_post_write_detector_instruction():
 def test_full_contract_targets_score_at_most_40():
     with workspace() as ws:
         ws.write_mode_flag("full")
-        text = delivered_text(session_start(ws))
+        text = session_text(session_start(ws))
         paths = workspace_paths(ws)
     assert named_score_present(text, 40, *paths)
     assert standalone_word_present(text, "clean") or has_light_tells(text)
@@ -228,11 +179,11 @@ def test_full_contract_targets_score_at_most_40():
 def test_strict_contract_targets_clean_at_most_20_and_differs_from_full_by_cleanup_finish():
     with workspace() as strict_ws:
         strict_ws.write_mode_flag("strict")
-        strict_text = delivered_text(session_start(strict_ws))
+        strict_text = session_text(session_start(strict_ws))
         strict_paths = workspace_paths(strict_ws)
     with workspace() as full_ws:
         full_ws.write_mode_flag("full")
-        full_text = delivered_text(session_start(full_ws))
+        full_text = session_text(session_start(full_ws))
         full_paths = workspace_paths(full_ws)
     paths = tuple(dict.fromkeys((*strict_paths, *full_paths)))
     require_strict_cleanup(strict_text, full_text, *paths)
@@ -247,9 +198,9 @@ def test_strict_contract_targets_clean_at_most_20_and_differs_from_full_by_clean
 def test_first_session_start_on_a_fresh_writable_install_prepends_the_welcome():
     with workspace() as ws:
         assert ws.read_mode_flag() is None
-        first = delivered_text(session_start(ws))
+        first = session_text(session_start(ws))
         flag_after = ws.read_mode_flag()
-        second = delivered_text(session_start(ws))
+        second = session_text(session_start(ws))
     assert first.strip()
     require_named_welcome_facts(first)
     require_banned_list(second)
@@ -265,9 +216,9 @@ def test_first_session_start_on_a_fresh_writable_install_prepends_the_welcome():
 
 def test_second_session_start_on_the_same_config_does_not_repeat_the_welcome():
     with workspace() as ws:
-        first = delivered_text(session_start(ws))
-        second = delivered_text(session_start(ws))
-        third = delivered_text(session_start(ws))
+        first = session_text(session_start(ws))
+        second = session_text(session_start(ws))
+        third = session_text(session_start(ws))
         paths = workspace_paths(ws)
     require_named_welcome_facts(first)
     require_welcome_facts_absent(second)
@@ -290,7 +241,7 @@ def test_after_session_start_later_hooks_see_the_stored_level():
         before_sub = subagent_start(ws, env_updates={ENV_DEFAULT_MODE: "off"})
         require_empty_stdout(before_prompt)
         require_empty_stdout(before_sub)
-        first = delivered_text(session_start(ws))
+        first = session_text(session_start(ws))
         paths = workspace_paths(ws)
         later_prompt, payload = user_prompt(
             ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: "off"}
@@ -312,8 +263,7 @@ def test_after_session_start_later_hooks_see_the_stored_level():
     print("[F04] later hooks after first start wrap/name full", flush=True)
 
     with workspace() as lite_ws:
-        session = delivered_text(
-            session_start(lite_ws, env_updates={ENV_DEFAULT_MODE: "lite"})
+        session = session_text(session_start(lite_ws, env_updates={ENV_DEFAULT_MODE: "lite"})
         )
         lite_paths = workspace_paths(lite_ws)
         later_prompt, payload = user_prompt(
@@ -323,7 +273,7 @@ def test_after_session_start_later_hooks_see_the_stored_level():
             lite_ws, env_updates={ENV_DEFAULT_MODE: "off"}
         )
         wrapped = subagent_contract(later_sub)
-    assert standalone_word_present(delivered_text(later_prompt), "lite")
+    assert standalone_word_present(reminder_text(later_prompt), "lite")
     require_short_reminder(
         later_prompt,
         level="lite",
@@ -341,12 +291,12 @@ def test_after_session_start_later_hooks_see_the_stored_level():
 def test_welcome_is_not_shown_when_the_flag_cannot_be_written():
     lite_text = stored_session_text("lite")
     with workspace() as live_ws:
-        live_first = delivered_text(session_start(live_ws))
+        live_first = session_text(session_start(live_ws))
     require_named_welcome_facts(live_first)
     with workspace() as ws:
         make_flag_unwritable(ws)
         result = session_start(ws)
-        text = joined_stdout(result)
+        text = result.stdout_text
         paths = workspace_paths(ws)
     assert text.strip(), "unwritable session-start emitted nothing"
     require_banned_list(text)
@@ -365,7 +315,7 @@ def test_non_command_prompt_at_full_returns_a_short_reminder_naming_full():
     lite_text = stored_session_text("lite")
     with workspace() as ws:
         ws.write_mode_flag("full")
-        session = delivered_text(session_start(ws))
+        session = session_text(session_start(ws))
         paths = workspace_paths(ws)
         result, payload = user_prompt(ws, ordinary_prompt())
     require_banned_list(session)
@@ -387,7 +337,7 @@ def test_prompt_reminder_names_lite_and_strict():
     for level in ("lite", "strict"):
         with workspace() as ws:
             ws.write_mode_flag(level)
-            session = delivered_text(session_start(ws))
+            session = session_text(session_start(ws))
             paths = workspace_paths(ws)
             result, payload = user_prompt(ws, ordinary_prompt())
         require_short_reminder(
@@ -405,7 +355,7 @@ def test_prompt_submit_with_off_emits_nothing_and_succeeds():
     with workspace() as full_ws:
         full_ws.write_mode_flag("full")
         result, _payload = user_prompt(full_ws, ordinary_prompt())
-        full_text = delivered_text(result)
+        full_text = reminder_text(result)
     with workspace() as ws:
         ws.write_mode_flag("off")
         result, payload = user_prompt(ws, ordinary_prompt())
@@ -491,9 +441,7 @@ def test_subagent_start_with_off_emits_nothing_and_succeeds():
 def test_each_standalone_banned_word_except_context_only_fires_an_f01_family(word):
     probe = two_sentence_probe(word)
     probe_run = scan_stdin(probe)
-    probe_findings, _pm = require_success_report(
-        probe_run, input_chars=unicode_len(probe)
-    )
+    probe_findings = report_findings_direct(probe_run)
     require_probe_finding(probe_findings)
     print(f"[F04] probe {word!r} produced a finding", flush=True)
 
@@ -508,7 +456,7 @@ def test_malformed_json_still_succeeds_and_behaves_as_an_empty_object():
 
     with workspace() as ws:
         result = session_start(ws, stdin=MALFORMED_STDIN)
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     assert result.returncode == 0
     require_banned_list(text)
@@ -522,7 +470,7 @@ def test_malformed_json_still_succeeds_and_behaves_as_an_empty_object():
     with workspace() as ws:
         ws.write_mode_flag("lite")
         result = session_start(ws, stdin=MALFORMED_STDIN)
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     assert result.returncode == 0
     require_lite_omits_scoring(text, full_text, *paths)
@@ -530,7 +478,7 @@ def test_malformed_json_still_succeeds_and_behaves_as_an_empty_object():
     with workspace() as ws:
         ws.write_mode_flag("strict")
         result = session_start(ws, stdin=MALFORMED_STDIN)
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     require_strict_cleanup(text, full_text, *paths)
 
@@ -579,7 +527,7 @@ def test_invalid_stored_level_is_ignored_and_defaults_to_full():
     with workspace() as ws:
         ws.write_mode_flag(bogus)
         result = session_start(ws)
-        text = joined_stdout(result)
+        text = result.stdout_text
         paths = workspace_paths(ws)
     require_banned_list(text)
     require_full_scoring(text, *paths)
@@ -588,7 +536,7 @@ def test_invalid_stored_level_is_ignored_and_defaults_to_full():
     with workspace() as ws:
         ws.write_mode_flag(bogus)
         result = session_start(ws, env_updates={ENV_DEFAULT_MODE: "lite"})
-        text = joined_stdout(result)
+        text = result.stdout_text
         paths = workspace_paths(ws)
     full_text = stored_session_text("full")
     require_lite_omits_scoring(text, full_text, *paths)
@@ -610,7 +558,7 @@ def test_environment_level_applies_only_when_nothing_valid_is_stored():
 
     with workspace() as ws:
         session = session_start(ws, env_updates={ENV_DEFAULT_MODE: "lite"})
-        text = delivered_text(session)
+        text = session_text(session)
         paths = workspace_paths(ws)
         prompt_r, payload = user_prompt(
             ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: "lite"}
@@ -631,7 +579,7 @@ def test_environment_level_applies_only_when_nothing_valid_is_stored():
 
     with workspace() as ws:
         session = session_start(ws, env_updates={ENV_DEFAULT_MODE: "full"})
-        text = delivered_text(session)
+        text = session_text(session)
         paths = workspace_paths(ws)
         prompt_r, payload = user_prompt(
             ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: "full"}
@@ -652,7 +600,7 @@ def test_environment_level_applies_only_when_nothing_valid_is_stored():
 
     with workspace() as ws:
         session = session_start(ws, env_updates={ENV_DEFAULT_MODE: "strict"})
-        text = delivered_text(session)
+        text = session_text(session)
         paths = workspace_paths(ws)
         prompt_r, payload = user_prompt(
             ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: "strict"}
@@ -674,7 +622,7 @@ def test_environment_level_applies_only_when_nothing_valid_is_stored():
     for level in ("lite", "strict"):
         with workspace() as ws:
             start = session_start(ws, env_updates={ENV_DEFAULT_MODE: level})
-            start_text = delivered_text(start)
+            start_text = session_text(start)
             paths = workspace_paths(ws)
             prompt_r, payload = user_prompt(
                 ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: None}
@@ -698,7 +646,7 @@ def test_environment_level_applies_only_when_nothing_valid_is_stored():
     with workspace() as ws:
         ws.write_mode_flag("full")
         session = session_start(ws, env_updates={ENV_DEFAULT_MODE: "off"})
-        text = delivered_text(session)
+        text = session_text(session)
         paths = workspace_paths(ws)
         prompt_r, payload = user_prompt(
             ws, ordinary_prompt(), env_updates={ENV_DEFAULT_MODE: "off"}
@@ -724,7 +672,7 @@ def test_unreadable_mode_flag_still_succeeds():
     with workspace() as ws:
         make_flag_unreadable(ws)
         result = session_start(ws)
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     assert result.returncode == 0
     require_banned_list(text)
@@ -733,7 +681,7 @@ def test_unreadable_mode_flag_still_succeeds():
     with workspace() as ws:
         make_flag_unreadable(ws)
         result = session_start(ws, env_updates={ENV_DEFAULT_MODE: "lite"})
-        text = delivered_text(result)
+        text = session_text(result)
         paths = workspace_paths(ws)
     full_text = stored_session_text("full")
     require_lite_omits_scoring(text, full_text, *paths)
@@ -806,10 +754,10 @@ def test_contract_hooks_open_no_connection_to_a_proxy_sink():
                     ws, ordinary_prompt(), env_updates=env
                 )
                 sub_r = subagent_start(ws, env_updates=env)
-                session_text = delivered_text(session)
-                prompt_text = delivered_text(prompt_r)
+                session_text_ = session_text(session)
+                prompt_text = reminder_text(prompt_r)
                 wrapped = subagent_contract(sub_r)
-                assert session_text.strip()
+                assert session_text_.strip()
                 assert standalone_word_present(prompt_text, "full")
                 require_banned_list(wrapped)
                 after_sink = sink.n_connections

@@ -47,13 +47,13 @@ from F03_helpers import (
     isa_pressure_pa,
 )
 
-# Named numeric oracles from FP-05 (L230–L235, L245).
+# Fixed inputs and tolerances for FP-05.
 NAMED_10M_STD = (10.0, 10.0, 10.0)
 ENTRY_POS_STD = GNSS_STD_M  # 2/2/2, inside 2 m / 3 m
 BETWEEN_POS_STD = (4.0, 4.0, 4.0)  # worse than entry, better than exit
 EXIT_POS_BAD = NAMED_10M_STD
 UNDER_CAP_STD = (40.0, 40.0, 40.0)  # tens of metres, still below 120 m
-# One non-positive diagonal: the F02-proven unfusable covariance (L230).
+# One non-positive diagonal: the F02-proven unfusable covariance.
 UNFUSABLE_POS_STD = (0.0, 2.0, 2.0)
 ENTRY_VEL_STD = (0.10, 0.10, 0.10)  # inside 0.25 / 0.30
 VEL_H_BAD_STD = (1.00, 1.00, 0.10)  # horiz worse than 0.25, vert inside 0.30
@@ -89,31 +89,6 @@ static int fail_read(const char *what)
 {
     fprintf(stderr, "probe stdin: %s\n", what);
     return 2;
-}
-
-/* Error-state 1-sigma from the public UDU factors (P = U diag(d) U').
- * Same grouping the Python wrapper publishes as stddev(): pos, vel, rpy,
- * acc_bias, gyr_bias. Attitude 1-sigma also has ins_get_rpy_stddev. */
-static void error_state_pdiag(const ins_t *f, float *out)
-{
-    int n = f->n;
-    int i, k;
-    for (i = 0; i < n; ++i) {
-        float s = 0.0f;
-        for (k = i; k < n; ++k) {
-            float u = f->U[i + k * n];
-            s += u * u * f->d[k];
-        }
-        out[i] = s;
-    }
-}
-
-static void print_sigma3(const char *key, const float *pdiag, int idx)
-{
-    float a = sqrtf(pdiag[idx] > 0.0f ? pdiag[idx] : 0.0f);
-    float b = sqrtf(pdiag[idx + 1] > 0.0f ? pdiag[idx + 1] : 0.0f);
-    float c = sqrtf(pdiag[idx + 2] > 0.0f ? pdiag[idx + 2] : 0.0f);
-    printf(" %s=%.9g,%.9g,%.9g", key, a, b, c);
 }
 
 static void print_snap(const ins_t *f, long long t_us)
@@ -175,16 +150,10 @@ static void print_snap(const ins_t *f, long long t_us)
     } else {
         printf(" biasgyr=-");
     }
-    if (pos) {
-        float pdiag[INS_UNKNOWNS_MAX];
-        error_state_pdiag(f, pdiag);
-        print_sigma3("posstd", pdiag, 0);
-        print_sigma3("velstd", pdiag, 3);
-        print_sigma3("baccstd", pdiag, INS_IDX_ACC);
-        print_sigma3("bgyrstd", pdiag, INS_IDX_GYR);
-    } else {
-        printf(" posstd=- velstd=- baccstd=- bgyrstd=-");
-    }
+    /* The C INS publishes attitude 1-sigma only (ins_get_rpy_stddev).
+       Position, velocity, and bias 1-sigma are published by the Python
+       wrapper's stddev(); the C arm reports them as unpublished. */
+    printf(" posstd=- velstd=- baccstd=- bgyrstd=- stdpub=0");
     {
         /* Raw return; the parser checks it against the published convention. */
         printf(" dr=%d", ins_deadreckoning_ms(f));
@@ -907,7 +876,11 @@ def parse_gate_snapshot(line: str) -> GateSnapshot:
         note_product_issue("F05", f"GNSS counters missing or negative: {line}")
     if n_rate < 0:
         note_product_issue("F05", f"GNSS used exceeds GNSS seen: {line}")
-    if pos_ok and (pos_std is None or vel_std is None or bacc_std is None or bgyr_std is None):
+    # stdpub=0: the C arm, whose INS publishes attitude 1-sigma only.
+    std_published = fields.get("stdpub", "1") != "0"
+    if std_published and pos_ok and (
+        pos_std is None or vel_std is None or bacc_std is None or bgyr_std is None
+    ):
         note_product_issue("F05", f"initialized snapshot missing published 1-sigma: {line}")
     for _tok in nonfinite_fields(fields):
         note_product_issue('F05', f"non-finite published value {_tok}: {line}")
@@ -976,7 +949,6 @@ def _run_gate(kind: str, scen: GateScenario) -> GateRun:
     if kind == "c":
         result = invoke(_C_PROBE, stdin=payload, timeout=timeout)
     elif kind == "py":
-        # TEST-FIX(F05): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config and Ins; python/INSLIB/_core.py:54 loads the shared object from that same directory
         package = importable_package_name()
         result = run_python(
             _PY_PROBE.replace("__PKG__", package),

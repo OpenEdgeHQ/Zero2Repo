@@ -459,9 +459,9 @@ def test_longitude_190_agrees_with_minus_170():
     b = c_wmm_all(lat, -170.0, year)
     other = c_wmm_all(lat, STUTTGART_LON_DEG, year)
     print(f"190={a} -170={b} other_lon={STUTTGART_LON_DEG} {other}", flush=True)
-    _assert_angle_deg(a[0], b[0], WRAP_D_DEG, "L121 D 190 vs -170")
+    _assert_angle_deg(a[0], b[0], WRAP_D_DEG, "PRD D 190 vs -170")
     for idx, name in ((1, "I"), (2, "F"), (3, "Bn"), (4, "Be"), (5, "Bd")):
-        _assert_close(a[idx], b[idx], 1e-3 if idx >= 3 else 1e-3, f"L125 {name} 190 vs -170")
+        _assert_close(a[idx], b[idx], 1e-3 if idx >= 3 else 1e-3, f"PRD {name} 190 vs -170")
     d_other_190 = abs(angle_diff_deg(a[0], other[0]))
     d_other_170 = abs(angle_diff_deg(b[0], other[0]))
     print(

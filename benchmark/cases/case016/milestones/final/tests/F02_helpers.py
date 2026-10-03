@@ -15,18 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from _harness import HarnessError, RunResult, invoke, invoke_hook, workspace
-from F01_helpers import (
-    switch_from_usage,
-    _is_usage_synopsis_line,
-    _strip_usage_flags,
-    _usage_line_flags,
-    metrics_from_report,
-    parse_structured_mapping,
-    strip_error_covariates,
-    strip_paths_from_stderr,
-    unicode_len,
-    usage_from_help,
-)
+from F01_helpers import unicode_len
 
 PLAIN_EXTS: tuple[str, ...] = (
     ".md",
@@ -62,7 +51,15 @@ _P = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _ODF_T = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
 _ODF_O = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
 
-_CLEANUP_FLAG: str | None = None
+# Detector command forms the Interface Contract states.
+CLEANUP_FLAG = "--clean"
+HELP_FLAG = "--help"
+USAGE_SYNOPSIS = "usage: detect.py [--clean] [--ci] [--] [FILE]"
+EMPTY_INPUT_ERROR = "empty input"
+CANNOT_READ_PREFIX = "cannot read input:"
+EXIT_EMPTY_OR_UNREADABLE = 1
+EXIT_UNKNOWN_OPTION = 2
+METRICS_KEY = "_metrics"
 
 
 def _xml(text: str) -> str:
@@ -376,38 +373,94 @@ def write_zip_slop(ws, relpath: str, text: str) -> Path:
     return writer(ws, relpath, text)
 
 
-def _talks_clean_or_scrub(text: str) -> bool:
-    low = text.lower()
-    return "clean" in low or "scrub" in low
-
-
-def cleanup_flag_from_usage(usage: str) -> str:
-    """Discover the cleanup switch from usage (L170 / L177).
-
-    Association is a usage line that talks about clean/scrub, not a
-    required ``--clean`` spelling. Aliases on one usage line are one switch.
-    """
-    return switch_from_usage(usage, _talks_clean_or_scrub, "cleanup / scrub")
+def cleanup_flag_from_usage(usage: str | None = None) -> str:
+    """The cleanup switch the Contract states (``--clean``). Usage is not read."""
+    return CLEANUP_FLAG
 
 
 def _cleanup_flag() -> str:
-    global _CLEANUP_FLAG
-    if _CLEANUP_FLAG is None:
-        _CLEANUP_FLAG = cleanup_flag_from_usage(usage_from_help())
-        print(f"[F02] cleanup switch from usage: {_CLEANUP_FLAG!r}", flush=True)
-    return _CLEANUP_FLAG
+    return CLEANUP_FLAG
 
 
 def _stdout_is_report(text: str) -> bool:
+    """True when *text* is the stated success report: one JSON object with ``_metrics``."""
     try:
-        obj = parse_structured_mapping(text, source="cleanup stdout")
-    except HarnessError:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
         return False
+    return isinstance(obj, dict) and isinstance(obj.get(METRICS_KEY), dict)
+
+
+# ---------------------------------------------------------------------------
+# Detector failure forms (stated): stdout empty; last non-empty stderr line is
+# one JSON object {"error": <string>}; exit 1 empty/unreadable, 2 unknown option.
+# ---------------------------------------------------------------------------
+
+
+def detector_error(result: RunResult) -> str:
+    """Return the ``error`` string of a failed detector run (stated form)."""
+    assert result.returncode != 0, (
+        f"expected a failing status, got 0; stdout={result.stdout_text[:300]!r}"
+    )
+    assert result.stdout_text.strip() == "", (
+        f"failure printed on stdout: {result.stdout_text[:300]!r}"
+    )
+    lines = [ln for ln in result.stderr_text.splitlines() if ln.strip()]
+    assert lines, f"failure wrote nothing on stderr; exit={result.returncode}"
+    assert "Traceback (most recent call last)" not in result.stderr_text, (
+        f"failure printed a traceback: {result.stderr_text!r}"
+    )
     try:
-        metrics_from_report(obj)
-    except HarnessError:
-        return False
-    return True
+        obj = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"last stderr line is not a JSON object: {lines[-1]!r} ({exc})"
+        ) from None
+    assert isinstance(obj, dict) and isinstance(obj.get("error"), str), (
+        f"last stderr line is not {{\"error\": <string>}}: {lines[-1]!r}"
+    )
+    return obj["error"]
+
+
+def require_empty_input_error(result: RunResult) -> str:
+    msg = detector_error(result)
+    assert result.returncode == EXIT_EMPTY_OR_UNREADABLE, (
+        f"empty input exit {result.returncode}, stated {EXIT_EMPTY_OR_UNREADABLE}"
+    )
+    assert msg == EMPTY_INPUT_ERROR, f"empty-input error is {msg!r}"
+    return msg
+
+
+def require_cannot_read_error(result: RunResult) -> str:
+    msg = detector_error(result)
+    assert result.returncode == EXIT_EMPTY_OR_UNREADABLE, (
+        f"unreadable input exit {result.returncode}, stated {EXIT_EMPTY_OR_UNREADABLE}"
+    )
+    assert msg.startswith(CANNOT_READ_PREFIX), f"unreadable-input error is {msg!r}"
+    return msg
+
+
+def require_unknown_option_error(result: RunResult, token: str) -> str:
+    msg = detector_error(result)
+    assert result.returncode == EXIT_UNKNOWN_OPTION, (
+        f"unknown option exit {result.returncode}, stated {EXIT_UNKNOWN_OPTION}"
+    )
+    assert token in msg, f"unknown-option error does not name {token!r}: {msg!r}"
+    assert HELP_FLAG in msg, f"unknown-option error does not point at {HELP_FLAG}: {msg!r}"
+    return msg
+
+
+def states_one_file_at_a_time(stderr: str, first_operand: str) -> bool:
+    """Contract: a stderr notice line, not a JSON object, naming the first operand."""
+    def _json_object(line: str) -> bool:
+        try:
+            return isinstance(json.loads(line), dict)
+        except ValueError:
+            return False
+    return any(
+        first_operand in line and not _json_object(line.strip())
+        for line in stderr.splitlines()
+    )
 
 
 def extract_via_cleanup(ws, relpath: str) -> str:
@@ -566,24 +619,82 @@ def _hook_strings(result: RunResult) -> list[str]:
     return found
 
 
-def plugin_prompt(ws, prompt: str) -> tuple[RunResult, str]:
-    """Fire the prompt-submit hook with a slash-command prompt.
+# ---------------------------------------------------------------------------
+# Hook stdout envelopes (stated forms)
+# ---------------------------------------------------------------------------
 
-    Walks string values in the structured stdout. Non-success on this
-    hook is unexpected (hooks exit successfully).
+
+def block_reply(result: RunResult) -> str:
+    """The ``reason`` of the prompt-submit block decision (stated envelope)."""
+    if result.returncode != 0:
+        raise HarnessError(
+            f"prompt-submit hook failed: exit={result.returncode} "
+            f"stderr={result.stderr_text!r}"
+        )
+    try:
+        obj = json.loads(result.stdout_text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"command stdout is not one JSON object: {result.stdout_text[:400]!r} ({exc})"
+        ) from None
+    assert isinstance(obj, dict), f"command stdout is not an object: {obj!r}"
+    assert obj.get("decision") == "block", f"command is not a block decision: {obj!r}"
+    reason = obj.get("reason")
+    assert isinstance(reason, str), f"block reason is not a string: {obj!r}"
+    return reason
+
+
+def guard_nudge(result: RunResult) -> str:
+    """The post-tool-use correction text, or ``""`` when the hook printed nothing.
+
+    Flagged: one JSON object ``{"hookSpecificOutput": {"hookEventName":
+    "PostToolUse", "additionalContext": <nudge>}}``. Not flagged / skipped:
+    empty standard output.
     """
+    if result.returncode != 0:
+        raise HarnessError(
+            f"post-tool-use hook failed: exit={result.returncode} "
+            f"stderr={result.stderr_text!r}"
+        )
+    text = result.stdout_text
+    if text.strip() == "":
+        return ""
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"guard stdout is not JSON: {text[:400]!r} ({exc})") from None
+    hso = obj.get("hookSpecificOutput") if isinstance(obj, dict) else None
+    assert isinstance(hso, dict), f"guard stdout lacks hookSpecificOutput: {obj!r}"
+    assert hso.get("hookEventName") == "PostToolUse", f"guard event name: {hso!r}"
+    ctx = hso.get("additionalContext")
+    assert isinstance(ctx, str) and ctx.strip(), f"guard additionalContext: {hso!r}"
+    return ctx
+
+
+_NUDGE_SCORE = re.compile(r"\(score (\d{1,3}), band ")
+
+
+def nudge_score(nudge: str, base: str) -> int:
+    """Score field ``(score <n>, band <band>`` of a guard nudge naming *base*."""
+    assert nudge.startswith("prosecheck: "), f"nudge form: {nudge[:300]!r}"
+    assert base in nudge, f"nudge does not name {base!r}: {nudge[:300]!r}"
+    found = _NUDGE_SCORE.findall(nudge)
+    assert len(found) == 1, f"nudge score field not found once: {nudge[:300]!r}"
+    return int(found[0])
+
+
+def plugin_prompt(ws, prompt: str) -> tuple[RunResult, str]:
+    """Fire the prompt-submit hook with a slash-command prompt; return the reply."""
     result = ws.invoke_hook(
         "prompt-submit",
         payload={"prompt": prompt},
     )
-    strings = _hook_strings(result)
-    blob = "\n".join(strings)
+    reply = block_reply(result)
     print(
-        f"[F02] prompt {prompt[:80]!r} exit={result.returncode} "
-        f"n_strings={len(strings)} blob_len={len(blob)}",
+        f"[F02] prompt {prompt[:80]!r} exit={result.returncode} reply={reply[:200]!r}",
         flush=True,
     )
-    return result, blob
+    return result, reply
 
 
 def check_file(ws, relpath: str) -> tuple[RunResult, str]:
@@ -592,11 +703,12 @@ def check_file(ws, relpath: str) -> tuple[RunResult, str]:
 
 
 def show_session(ws) -> tuple[RunResult, str]:
-    """Read the session ledger through the public show command (L241, L248)."""
+    """Read the session ledger through the public show command."""
     return plugin_prompt(ws, "/prosecheck show")
 
 
 def guard_write(ws, relpath: str) -> tuple[RunResult, str]:
+    """Fire the post-tool-use hook for a Write; return ``(result, nudge or "")``."""
     dest = ws.resolve(relpath)
     result = ws.invoke_hook(
         "post-tool-use",
@@ -611,101 +723,96 @@ def guard_write(ws, relpath: str) -> tuple[RunResult, str]:
             "cwd": str(ws.path),
         },
     )
-    strings = _hook_strings(result)
-    blob = "\n".join(strings)
+    nudge = guard_nudge(result)
     print(
-        f"[F02] guard write {relpath!r} exit={result.returncode} "
-        f"n_strings={len(strings)} blob_len={len(blob)}",
+        f"[F02] guard write {relpath!r} exit={result.returncode} nudge={nudge[:200]!r}",
         flush=True,
     )
-    return result, blob
+    return result, nudge
 
 
-def _ints_0_100(text: str) -> list[int]:
-    """0–100 integers a caller reads as numbers.
+# ---------------------------------------------------------------------------
+# /prosecheck check reply (stated forms)
+# ---------------------------------------------------------------------------
 
-    Digits that end a word (``python3``, ``utf8``, ``x14``) are part of that
-    word, not a free-standing integer.
-    """
-    found: list[int] = []
-    for match in re.finditer(r"(?<![\dA-Za-z_])(\d{1,3})(?!\d)", text):
-        value = int(match.group(1))
-        if 0 <= value <= 100:
-            found.append(value)
-    return found
+_CHECK_SCORE_LINE = re.compile(
+    r"^(?P<base>.+) - (?P<phrase>.+) \(score (?P<score>\d{1,3})/100, band: (?P<band>[a-z ]+)\)$"
+)
+_CHECK_SCORE_ANY = re.compile(r"\(score \d{1,3}/100, band: ")
 
 
-def readable_scores_0_100(text: str) -> list[int]:
-    """0–100 integers a caller can read. Empty means none were present."""
-    return list(dict.fromkeys(_ints_0_100(text)))
+def check_scored(reply: str) -> dict[str, Any]:
+    """First line of a scored check reply: ``<base> - <phrase> (score <n>/100, band: <band>)``."""
+    first = reply.splitlines()[0] if reply.splitlines() else ""
+    m = _CHECK_SCORE_LINE.match(first)
+    assert m, f"check reply first line is not the scored form: {reply[:400]!r}"
+    return {
+        "base": m.group("base"),
+        "phrase": m.group("phrase"),
+        "score": int(m.group("score")),
+        "band": m.group("band"),
+    }
+
+
+def check_has_score(reply: str) -> bool:
+    """True when the reply carries the stated score field."""
+    return _CHECK_SCORE_ANY.search(reply) is not None
 
 
 def score_in_check_reply(text: str, *, expected: int | None = None) -> int:
-    """Locate a 0–100 score a caller can read. Do not require /100 or a field name.
-
-    When *expected* is given (the detector score of the same file), that
-    integer must appear among the readable 0–100 values. Hit counts and a
-    scale of 100 may also be present; they are not a substitute for the
-    detector score.
-    """
-    if not str(text).strip():
-        raise HarnessError("check reply is empty; no 0-100 score to read")
-    uniq = readable_scores_0_100(text)
-    if not uniq:
-        raise HarnessError(
-            f"check reply has no 0-100 integer a caller can read; text={text[:400]!r}"
-        )
+    """Read the stated score field of a scored check reply."""
+    rec = check_scored(text)
     if expected is not None:
-        if expected not in uniq:
-            raise HarnessError(
-                f"check reply 0-100 integers {uniq} do not include detector "
-                f"score {expected}; text={text[:400]!r}"
-            )
-        return expected
-    if len(uniq) == 1:
-        return uniq[0]
-    if 100 in uniq and len(uniq) == 2:
-        other = [n for n in uniq if n != 100]
-        return other[0]
-    raise HarnessError(
-        "check reply has several 0-100 integers; pass expected=detector score "
-        f"to classify: {uniq!r}; text={text[:400]!r}"
-    )
+        assert rec["score"] == expected, (
+            f"check score {rec['score']} != detector score {expected}; reply={text[:400]!r}"
+        )
+    return rec["score"]
 
 
-def strip_size_and_paths(text: str, *paths: str, sizes: Sequence[int] = ()) -> str:
-    out = text
+NOT_SCORED_MARKS = ("not a file", "cannot read", "no readable text", "detector unavailable", "no report")
+_STANDALONE_0_100 = re.compile(r"(?<![\d.,])(?:100|[1-9]?\d)(?![\d]|[.,]\d)")
+
+
+def _without_paths(reply: str, *paths: str) -> str:
+    tokens = set()
     for path in paths:
-        if not path:
-            continue
-        out = out.replace(path, "")
-        out = out.replace(os.path.basename(path), "")
-    for size in sizes:
-        out = re.sub(rf"(?<!\d){size}(?!\d)", "", out)
-    return re.sub(r"\s+", " ", out).strip()
+        if path:
+            tokens.add(str(path))
+            tokens.add(Path(str(path)).name)
+    out = reply
+    for token in sorted(tokens, key=len, reverse=True):
+        out = out.replace(token, " ")
+    return out
 
 
-def empty_input_kind(record: str, *paths: str) -> str:
-    """Identifying empty-input kind after path covariates (L115, L150–L152).
+def check_not_scored(reply: str, *paths: str) -> str:
+    """A not-scored check reply, read as the Contract states it.
 
-    Empty-extracted-prose arms share empty standard input's kind. That kind
-    is not a required phrase. Extra strings such as a file path are not the
-    kind and are not a mismatch. Do not compare unstripped raw records.
+    Non-empty; no score field; no standalone integer 0-100 once the named
+    path(s) and their base names are removed. Returns the reply with those
+    paths removed. Line count, prefix and the position of the mark are free.
     """
-    tokens: list[str] = []
-    for path in paths:
-        if not path:
-            continue
-        for token in (path, str(path).replace("\\", "/"), os.path.basename(path)):
-            if token and token not in tokens:
-                tokens.append(token)
-    return strip_error_covariates(
-        strip_paths_from_stderr(record, *tokens), *tokens
+    assert reply.strip(), "check reply is empty"
+    assert not check_has_score(reply), f"not-scored reply carries a score: {reply[:400]!r}"
+    rest = _without_paths(reply, *paths)
+    found = _STANDALONE_0_100.findall(rest)
+    assert not found, (
+        f"not-scored reply shows an integer from 0 through 100 {found}: {reply[:400]!r}"
     )
+    return rest
+
+
+def not_scored_marks(text: str) -> list[str]:
+    """Which of the Contract's not-scored marks the text carries."""
+    low = text.lower()
+    return [mark for mark in NOT_SCORED_MARKS if mark in low]
+
+
+_OVER_KB = re.compile(r"(?<![A-Za-z])over (\d+) KB(?![A-Za-z])")
 
 
 def kilobyte_figure(cap_bytes: int) -> int:
-    """Named on-disk cap expressed in kilobytes (512 KB, 4 MB → 4096 KB)."""
+    """Named on-disk cap expressed in kilobytes (512 KB, 4 MB -> 4096 KB)."""
     if cap_bytes < 1024 or cap_bytes % 1024 != 0:
         raise HarnessError(
             f"cap {cap_bytes} is not a whole number of kilobytes"
@@ -713,111 +820,95 @@ def kilobyte_figure(cap_bytes: int) -> int:
     return cap_bytes // 1024
 
 
-def standalone_int_present(text: str, value: int) -> bool:
-    return re.search(rf"(?<!\d){value}(?!\d)", str(text)) is not None
+def _cap_figures(cap_bytes: int) -> tuple[int, ...]:
+    kb = kilobyte_figure(cap_bytes)
+    # PRD FP-02: caps are in binary units, so the 4 MB cap is 4096 KB.
+    return (kb,)
+
+
+def require_check_over_cap(reply: str, *, cap_bytes: int, path: str | None = None) -> None:
+    """Over-cap reply: ``over <KB> KB`` with the cap's kilobyte figure; no score."""
+    rest = check_not_scored(reply, *([path] if path else []))
+    m = _OVER_KB.search(rest)
+    assert m, f"over-cap check reply has no over <KB> KB: {reply[:400]!r}"
+    assert int(m.group(1)) in _cap_figures(cap_bytes), (
+        f"over-cap reply names {m.group(1)} KB, stated {_cap_figures(cap_bytes)}"
+    )
+
+
+def require_check_cannot_read(reply: str, path: str, typed: str | None = None) -> None:
+    """Missing path: exactly the mark ``cannot read`` and the path as typed."""
+    shown = typed if typed is not None else path
+    assert shown in reply, f"cannot-read reply does not carry {shown!r}: {reply[:400]!r}"
+    rest = check_not_scored(reply, path, shown)
+    assert not_scored_marks(rest) == ["cannot read"], (
+        f"cannot-read reply marks {not_scored_marks(rest)}: {reply[:400]!r}"
+    )
+    assert not _OVER_KB.search(rest)
+
+
+def require_check_not_a_file(reply: str, *paths: str) -> None:
+    """Directory: exactly the mark ``not a file``."""
+    rest = check_not_scored(reply, *paths)
+    assert not_scored_marks(rest) == ["not a file"], (
+        f"not-a-file reply marks {not_scored_marks(rest)}: {reply[:400]!r}"
+    )
+    assert not _OVER_KB.search(rest)
+
+
+# ---------------------------------------------------------------------------
+# /prosecheck show reply (stated forms)
+# ---------------------------------------------------------------------------
+
+
+def show_rows(reply: str) -> list[tuple[str, str]]:
+    """Rows ``  <file> - <rest>`` after the header, newest first."""
+    lines = reply.splitlines()
+    assert len(lines) >= 2, f"show reply has no ledger rows: {reply[:400]!r}"
+    rows: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        assert line.startswith("  ") and " - " in line, f"show row form: {line!r}"
+        name, rest = line.strip().split(" - ", 1)
+        rows.append((name, rest))
+    return rows
+
+
+def show_row(reply: str, basename: str) -> str:
+    """Remainder of the newest row for *basename*."""
+    for name, rest in show_rows(reply):
+        if name == basename:
+            return rest
+    raise AssertionError(f"show has no row for {basename!r}: {reply[:400]!r}")
+
+
+_SHOW_SCORE = re.compile(r"\(score \d{1,3}/")
+_SHOW_SIZE_SKIP = re.compile(r"^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$")
 
 
 def require_binary_ledger_record(blob: str, basename: str) -> None:
-    """L77 / L150 / L265: show records the file and it was not re-scored.
+    """Binary row: ``<file> - binary, ... (not re-scored)``; no score, not a size skip."""
+    rest = show_row(blob, basename)
+    assert "not re-scored" in rest, f"binary row does not say not re-scored: {rest!r}"
+    assert not _SHOW_SCORE.search(rest), f"binary row carries a score: {rest!r}"
+    assert not _SHOW_SIZE_SKIP.match(rest), f"binary row is a size skip: {rest!r}"
+    print(f"[F02] ledger binary row {basename!r}: {rest!r}", flush=True)
 
-    The ledger holds the base name. A binary row is not a scored 0–100
-    row and not a skip-for-size kilobyte report. Do not require the
-    letters “binary” or this checkout’s sentence.
-    """
-    if not str(blob).strip():
-        raise HarnessError("show reply is empty; ledger was not read")
-    if basename not in blob:
-        raise HarnessError(
-            f"show does not record {basename!r} on the session ledger; "
-            f"text={blob[:400]!r}"
-        )
-    scores = readable_scores_0_100(blob)
-    if scores:
-        raise HarnessError(
-            f"ledger row for {basename!r} still carried a 0-100 score "
-            f"{scores}; text={blob[:400]!r}"
-        )
-    kb = kilobyte_figure(PLAIN_CAP)
-    if standalone_int_present(blob, kb):
-        raise HarnessError(
-            f"ledger row names the {kb} kilobyte cap; that is skip-for-size, "
-            f"not binary; text={blob[:400]!r}"
-        )
-    stripped = strip_size_and_paths(blob, basename)
-    if not stripped:
-        raise HarnessError(
-            "after stripping the base name, show has no remaining marker "
-            f"that the file was not re-scored; text={blob[:400]!r}"
-        )
-    print(
-        f"[F02] ledger records {basename!r} without a 0-100 score "
-        f"(not skip-for-size)",
-        flush=True,
+
+def require_show_size_skip(blob: str, basename: str, *, cap_bytes: int) -> None:
+    """Size-skip row: ``<file> - not scored: <free text naming <KB> KB>``; no score."""
+    rest = show_row(blob, basename)
+    m = _SHOW_SIZE_SKIP.match(rest)
+    assert m, f"size-skip row is not the stated form: {rest!r}"
+    assert int(m.group(1)) in _cap_figures(cap_bytes), (
+        f"size-skip row names {m.group(1)} KB, stated {_cap_figures(cap_bytes)}"
     )
+    assert not _SHOW_SCORE.search(rest)
 
 
-def require_over_cap_kilobyte_report(
-    blob: str,
-    *,
-    cap_bytes: int,
-    unlike: str | None = None,
-    absent_score: int | None = None,
-) -> None:
-    """L241 / L271: over-cap is reported as over that cap, in kilobytes.
-
-    The kilobyte figure of the named cap must appear (512 for plain text,
-    4096 for the 4 MB archive/notebook cap). Do not require the letters
-    “over” or “KB”. A generic cannot-read / not-a-file skip is not this
-    report: pass that skip as *unlike* so the kilobyte figure must be
-    present here and absent there.
-
-    When *absent_score* is the detector 0–100 score of that same oversize
-    file, that integer must not appear as a readable 0–100 value. Other
-    0–100 digits (for example 4 from a report that names 4 MB alongside
-    4096 KB) are not forbidden. When *absent_score* is omitted, a 0–100
-    integer is still refused — the 512 KB plain-text figure does not
-    collide with that range.
-    """
-    if not str(blob).strip():
-        raise HarnessError("over-cap reply is empty")
-    kb = kilobyte_figure(cap_bytes)
-    # Contract: the 4 MB cap is named in kilobytes as 4000 or 4096, or both.
-    figures = (4000, 4096) if kb == 4096 else (kb,)
-    if not any(standalone_int_present(blob, figure) for figure in figures):
-        raise HarnessError(
-            f"over-cap reply does not report the {kb} kilobyte cap "
-            f"(as one of {figures}); text={blob[:400]!r}"
-        )
-    scores = readable_scores_0_100(blob)
-    if absent_score is not None:
-        if not 0 <= absent_score <= 100:
-            raise HarnessError(
-                f"absent_score {absent_score} is not a 0-100 detector score"
-            )
-        if absent_score in scores:
-            raise HarnessError(
-                "over-cap reply still carried that file's detector "
-                f"score {absent_score}; text={blob[:400]!r}"
-            )
-    elif scores:
-        raise HarnessError(
-            f"over-cap reply printed a 0-100 score {scores}; text={blob[:400]!r}"
-        )
-    if unlike is not None:
-        if not str(unlike).strip():
-            raise HarnessError(
-                "cannot-read / not-a-file contrast reply is empty"
-            )
-        if standalone_int_present(unlike, kb):
-            raise HarnessError(
-                "cannot-read / not-a-file reply also names the kilobyte cap, "
-                f"so over-cap is not a distinct class; unlike={unlike[:400]!r}"
-            )
-    print(
-        f"[F02] over-cap report names {kb} KB "
-        f"(absent_score={absent_score!r})",
-        flush=True,
-    )
+def standalone_int_present(text: str, value: int) -> bool:
+    return re.search(rf"(?<!\d){value}(?!\d)", str(text)) is not None
 
 
 def window_body(n: int) -> str:

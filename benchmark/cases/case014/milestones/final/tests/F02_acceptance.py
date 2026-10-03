@@ -241,7 +241,7 @@ def test_imu_only_epoch_is_normal_on_100hz_1hz_stream():
     assert imu_only, "100 Hz / 1 Hz stream has no IMU-only epochs"
     assert len(imu_only) > len(with_gnss), "IMU-only epochs are not the 100 Hz majority"
     # Post-init IMU-only yaw-rate stretch. Skipping those epochs must not
-    # produce the same published yaw as processing them (L145: IMU-only is a
+    # produce the same published yaw as processing them (PRD: IMU-only is a
     # normal step). No unpublished numeric yaw bound is pinned.
     yaw_rate = 0.35
     imu_only_count = 40

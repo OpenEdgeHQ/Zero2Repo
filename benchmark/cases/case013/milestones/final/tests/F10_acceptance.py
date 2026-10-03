@@ -22,7 +22,6 @@ from _harness import (
 from F01_helpers import (
     combined_report,
     first_heading_text,
-    report_remainder_after_stripping_paths,
 )
 from F02_helpers import BEGIN_MEMBUNDLE_COMMENT, END_MEMBUNDLE_COMMENT, extract_membundle_agents_block
 from F03_helpers import path_tokens_for, snapshot_tree
@@ -34,10 +33,10 @@ from F08_helpers import (
     seed_validatable_bundle,
 )
 from F10_helpers import (
+    SAMPLE_SMALL_CAP,
     MBG_RULE_IDS,
     ascii_agents_body,
     assert_exceeded_mark_matches_mbg005,
-    assert_human_in_force_budget_remainders_differ,
     assert_in_force_cap_differs,
     assert_named_ssot_symlinks,
     assert_rule_absent,
@@ -51,12 +50,11 @@ from F10_helpers import (
     budget_safe_tokens,
     budget_word_list,
     domain_codex_region,
-    fixture_line_integers,
-    human_budget_remainder,
+    finding_rule_ids,
+    human_lint_budget,
+    link_check_marks,
     mentions_profile,
-    remainder_has_quantity,
     parse_structured_lint,
-    payload_remainder_after_strip,
     require_agents_failure,
     require_agents_success,
     run_agents_check,
@@ -68,7 +66,17 @@ from F10_helpers import (
 )
 
 
-PLEASE_ITEM = "Please search before editing"
+def _gen_hex(n: int = 6) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+
+# Generated per test process: an invariant list item whose first word is not
+# a modal, and a profile name outside the five profiles.
+NON_MODAL_ITEM = f"Q{_gen_hex(6)} s{_gen_hex(5)} before e{_gen_hex(5)}"
+SAMPLE_UNKNOWN_PROFILE = f"x{_gen_hex(6)}-profile"
 
 
 def _paths(ws, *extra: str | Path) -> list[str]:
@@ -126,26 +134,17 @@ def test_non_ascii_arrow_is_mbg001_and_fails_lint():
         assert_rule_absent(ok_payload, "MBG-001")
         human_ok, _ = _lint_human(ws, ascii_body, "ascii-human.md")
         require_agents_success(human_ok)
-        stripped_fail = payload_remainder_after_strip(
-            fail_payload, path_tokens=_paths(ws), fixture_tokens=(token,)
-        )
+        fail_ids = finding_rule_ids(fail_payload)
         please = budget_safe_token("pls")
         please_body = ascii_agents_body(
-            invariants_item=f"{PLEASE_ITEM} {please}",
+            invariants_item=f"{NON_MODAL_ITEM} {please}",
         )
         _, please_payload = _lint_structured(ws, please_body, "please.md")
         assert_rule_only(please_payload, "MBG-002")
-        stripped_please = payload_remainder_after_strip(
-            please_payload, path_tokens=_paths(ws), fixture_tokens=(please,)
-        )
-        print(
-            f"[F10] mbg001 remainder={stripped_fail!r} "
-            f"mbg002 remainder={stripped_please!r}",
-            flush=True,
-        )
-        assert stripped_fail != stripped_please, (
-            "MBG-001 and MBG-002 structured reports are not distinguishable "
-            f"after stripping paths and unique tokens; {stripped_fail!r}"
+        please_ids = finding_rule_ids(please_payload)
+        assert fail_ids != please_ids, (
+            "MBG-001 and MBG-002 structured reports carry the same finding "
+            f"rule ids; {fail_ids!r}"
         )
 
 
@@ -172,7 +171,7 @@ def test_invariants_please_item_is_mbg002_must_item_is_not():
     with workspace() as ws:
         suffix = budget_safe_token("inv")
         please_body = ascii_agents_body(
-            invariants_item=f"{PLEASE_ITEM} {suffix}",
+            invariants_item=f"{NON_MODAL_ITEM} {suffix}",
         )
         must_body = ascii_agents_body(invariants_item=f"MUST {suffix}")
         _, please_payload = _lint_structured(ws, please_body, "please.md")
@@ -184,7 +183,7 @@ def test_invariants_please_item_is_mbg002_must_item_is_not():
         assert_rule_absent(must_payload, "MBG-002")
         two_item = ascii_agents_body(
             invariants_item=f"MUST {suffix}",
-            extra_invariants_items=(f"{PLEASE_ITEM} {suffix}b",),
+            extra_invariants_items=(f"{NON_MODAL_ITEM} {suffix}b",),
         )
         _, two_payload = _lint_structured(ws, two_item, "two.md")
         assert_rule_only(two_payload, "MBG-002")
@@ -199,7 +198,7 @@ def test_each_finite_modal_prefix_and_token_alone_and_backtick_pass_mbg002():
     with workspace() as ws:
         suffix = budget_safe_token("mdl")
         please_body = ascii_agents_body(
-            invariants_item=f"{PLEASE_ITEM} {suffix}",
+            invariants_item=f"{NON_MODAL_ITEM} {suffix}",
         )
         _, please_payload = _lint_structured(ws, please_body, "please.md")
         assert_rule_only(please_payload, "MBG-002")
@@ -245,7 +244,7 @@ def test_modal_without_following_space_is_mbg002():
 def test_mbg002_heading_classes_constraints_rfc2119_and_1_and_not_section_2():
     with workspace() as ws:
         suffix = budget_safe_token("hd")
-        please = f"{PLEASE_ITEM} {suffix}"
+        please = f"{NON_MODAL_ITEM} {suffix}"
         for label, heading in (
             ("constraints", "Constraints"),
             ("rfc", "rfc 2119 notes"),
@@ -403,13 +402,13 @@ def _under_400_delimited(token: str) -> str:
     return ascii_agents_body(inner=inner)
 
 
-def test_delimited_block_over_cap_20_is_mbg005_default_400_and_nonpositive_are_not():
+def test_delimited_block_over_small_cap_is_mbg005_default_400_and_nonpositive_are_not():
     with workspace() as ws:
         under_token = budget_safe_token("under")
         under = _under_400_delimited(under_token)
-        fail20, payload20 = _lint_structured(ws, under, "under.md", budget=20)
+        fail20, payload20 = _lint_structured(ws, under, "under.md", budget=SAMPLE_SMALL_CAP)
         assert_rule_only(payload20, "MBG-005")
-        human20, _ = _lint_human(ws, under, "under-human.md", budget=20)
+        human20, _ = _lint_human(ws, under, "under-human.md", budget=SAMPLE_SMALL_CAP)
         require_agents_failure(human20)
 
 
@@ -433,18 +432,16 @@ def test_token_estimate_uses_delimited_block_when_end_follows_begin_else_whole_f
         )
         only_end = f"{huge}\n\n{section}{inner}\n{END_MEMBUNDLE_COMMENT}\n"
         ordered_result, ordered_payload = _lint_structured(
-            ws, ordered, "ordered.md", budget=20
+            ws, ordered, "ordered.md", budget=SAMPLE_SMALL_CAP
         )
-        _, omitted_payload = _lint_structured(ws, omitted, "omitted.md", budget=20)
+        _, omitted_payload = _lint_structured(ws, omitted, "omitted.md", budget=SAMPLE_SMALL_CAP)
         assert_rule_only(omitted_payload, "MBG-005")
-        omitted_human, _ = _lint_human(ws, omitted, "omitted-human.md", budget=20)
+        omitted_human, _ = _lint_human(ws, omitted, "omitted-human.md", budget=SAMPLE_SMALL_CAP)
         require_agents_failure(omitted_human)
-        assert_working_memory_estimate_sorts_below(
-            ordered_payload, omitted_payload, shared_caps=(20,)
-        )
+        assert_working_memory_estimate_sorts_below(ordered_payload, omitted_payload)
         print(
             f"[F10] ordered delimiter lint exit={ordered_result.returncode} "
-            f"(MBG-005 pass/fail on the few-word inner is not scored)",
+            f"(MBG-005 pass/fail on the few-word inner is not checked here)",
             flush=True,
         )
         for label, body in (
@@ -452,74 +449,57 @@ def test_token_estimate_uses_delimited_block_when_end_follows_begin_else_whole_f
             ("begin", only_begin),
             ("end", only_end),
         ):
-            _, payload = _lint_structured(ws, body, f"{label}.md", budget=20)
+            _, payload = _lint_structured(ws, body, f"{label}.md", budget=SAMPLE_SMALL_CAP)
             assert_rule_only(payload, "MBG-005")
-            human, _ = _lint_human(ws, body, f"{label}-human.md", budget=20)
+            human, _ = _lint_human(ws, body, f"{label}-human.md", budget=SAMPLE_SMALL_CAP)
             require_agents_failure(human)
         inner_huge = ascii_agents_body(inner=huge)
-        _, inner_payload = _lint_structured(ws, inner_huge, "inner-huge.md", budget=20)
+        _, inner_payload = _lint_structured(ws, inner_huge, "inner-huge.md", budget=SAMPLE_SMALL_CAP)
         assert_rule_only(inner_payload, "MBG-005")
 
 
-def test_human_lint_prints_budget_400_versus_20():
+def test_human_lint_prints_budget_400_versus_small_cap():
     with workspace() as ws:
         token = budget_safe_token("hb")
-        # Few-word inner: omit and cap-20 share findings/status so remainder
-        # difference cannot ride on an MBG-005 extra line. Presence of 400
-        # versus 20 stays; the other sample integer is not required absent.
+        # Few-word inner: omit and the small cap share findings/status, so the
+        # printed in-force cap is the only difference between the reports.
         under = ascii_agents_body(inner=f"keep compact {token}")
         write_agents(ws, "under.md", under)
         omit = run_agents_lint(ws, "under.md")
-        cap20 = run_agents_lint(ws, "under.md", budget=20)
+        cap20 = run_agents_lint(ws, "under.md", budget=SAMPLE_SMALL_CAP)
         cap400 = run_agents_lint(ws, "under.md", budget=400)
         cap0 = run_agents_lint(ws, "under.md", budget=0)
         cap_neg = run_agents_lint(ws, "under.md", budget=-1)
-        paths = _paths(ws, "under.md")
-
-        def _budget_rem(result) -> str:
-            return human_budget_remainder(
-                combined_report(result), path_tokens=paths, fixture_tokens=(token,)
-            )
-
-        omit_rem = _budget_rem(omit)
-        cap20_rem = _budget_rem(cap20)
-        cap400_rem = _budget_rem(cap400)
-        cap0_rem = _budget_rem(cap0)
-        cap_neg_rem = _budget_rem(cap_neg)
-        print(
-            f"[F10] omit has 400={remainder_has_quantity(omit_rem, 400)}; "
-            f"cap20 has 20={remainder_has_quantity(cap20_rem, 20)}; "
-            f"cap400 has 400={remainder_has_quantity(cap400_rem, 400)}; "
-            f"cap0 has 400={remainder_has_quantity(cap0_rem, 400)}; "
-            f"cap-1 has 400={remainder_has_quantity(cap_neg_rem, 400)}",
-            flush=True,
+        caps = {
+            "omit": human_lint_budget(omit),
+            "cap20": human_lint_budget(cap20),
+            "cap400": human_lint_budget(cap400),
+            "cap0": human_lint_budget(cap0),
+            "cap-1": human_lint_budget(cap_neg),
+        }
+        print(f"[F10] human in-force budgets={caps!r}", flush=True)
+        assert caps["omit"] == 400, (
+            f"omit-cap human report does not print Budget 400: {caps['omit']}"
         )
-        assert remainder_has_quantity(omit_rem, 400), (
-            f"omit-cap human report does not print 400: {omit_rem!r}"
+        assert caps["cap20"] == SAMPLE_SMALL_CAP, (
+            f"small-cap human report does not print Budget {SAMPLE_SMALL_CAP}: "
+            f"{caps['cap20']}"
         )
-        assert remainder_has_quantity(cap20_rem, 20), (
-            f"budget-20 human report does not print 20: {cap20_rem!r}"
+        assert caps["cap400"] == 400, (
+            f"budget-400 human report does not print Budget 400: {caps['cap400']}"
         )
-        assert remainder_has_quantity(cap400_rem, 400), (
-            f"budget-400 human report does not print 400: {cap400_rem!r}"
+        assert caps["cap0"] == 400, (
+            f"budget-0 human report does not print Budget 400: {caps['cap0']}"
         )
-        assert remainder_has_quantity(cap0_rem, 400), (
-            f"budget-0 human report does not print 400: {cap0_rem!r}"
-        )
-        assert remainder_has_quantity(cap_neg_rem, 400), (
-            f"budget--1 human report does not print 400: {cap_neg_rem!r}"
-        )
-        assert_human_in_force_budget_remainders_differ(
-            cap20_rem, omit_rem, cap400_rem, cap0_rem, cap_neg_rem
+        assert caps["cap-1"] == 400, (
+            f"budget--1 human report does not print Budget 400: {caps['cap-1']}"
         )
         arrow = ascii_agents_body(extra=f"flow {token} ➔ next\n")
-        fail, fail_report = _lint_human(ws, arrow, "arrow.md")
+        fail, _fail_report = _lint_human(ws, arrow, "arrow.md")
         require_agents_failure(fail)
-        fail_rem = human_budget_remainder(
-            fail_report, path_tokens=_paths(ws, "arrow.md"), fixture_tokens=(token,)
-        )
-        assert remainder_has_quantity(fail_rem, 400), (
-            f"human MBG-001 fail with omit cap does not print 400: {fail_rem!r}"
+        fail_cap = human_lint_budget(fail)
+        assert fail_cap == 400, (
+            f"human MBG-001 fail with omit cap does not print Budget 400: {fail_cap}"
         )
 
 
@@ -532,7 +512,7 @@ def test_structured_lint_reports_token_statistics_grouping():
         require_agents_success(omit_result)
         omit = parse_structured_lint(omit_result)
         cap20 = parse_structured_lint(
-            run_agents_lint(ws, "short.md", structured=True, budget=20)
+            run_agents_lint(ws, "short.md", structured=True, budget=SAMPLE_SMALL_CAP)
         )
         cap400 = parse_structured_lint(
             run_agents_lint(ws, "short.md", structured=True, budget=400)
@@ -555,7 +535,7 @@ def test_structured_lint_reports_token_statistics_grouping():
         _, arrow_payload = _lint_structured(ws, arrow, "arrow.md")
         assert_rule_only(arrow_payload, "MBG-001")
         huge = _under_400_delimited(token)
-        _, huge20 = _lint_structured(ws, huge, "huge.md", budget=20)
+        _, huge20 = _lint_structured(ws, huge, "huge.md", budget=SAMPLE_SMALL_CAP)
         assert_rule_only(huge20, "MBG-005")
         assert_structured_pass_fail_distinct(omit, arrow_payload)
         assert_exceeded_mark_matches_mbg005(omit, arrow_payload, huge20)
@@ -647,13 +627,10 @@ def test_structured_lint_reports_rule_identifiers_on_fail_not_on_pass():
         assert_rule_only(one_payload, "MBG-001")
         _, two_payload = _lint_structured(ws, two_body, "count-two.md")
         assert_rule_only(two_payload, "MBG-001")
-        drop_lines = fixture_line_integers(two_body, one_mark, two_mark)
-        drop_lines |= fixture_line_integers(one_body, one_mark)
         assert_structured_counts_greater(
             one_payload,
             two_payload,
             rule_id="MBG-001",
-            drop_integers=sorted(drop_lines),
         )
         assert_warning_count_unchanged_when_errors_increase(
             one_payload, two_payload
@@ -737,7 +714,7 @@ def test_init_default_and_unknown_domain_use_software_profile():
             run_agents_init(ws, explicit, domain="software", name=name)
         )
         require_agents_success(
-            run_agents_init(ws, unknown, domain="unknown-domain", name=name)
+            run_agents_init(ws, unknown, domain=SAMPLE_UNKNOWN_PROFILE, name=name)
         )
         runtime_unknown = budget_safe_token("dom")
         require_agents_success(
@@ -777,10 +754,7 @@ def test_init_writes_delimiters_mermaid_and_project_name():
             f"other project name is not in the first heading: {heading_b!r}"
         )
         assert heading_a != heading_b, "different names produced the same first heading"
-        paths = _paths(ws, root_a, root_b)
-        rem_a = report_remainder_after_stripping_paths(text_a, paths)
-        rem_b = report_remainder_after_stripping_paths(text_b, paths)
-        assert rem_a != rem_b, "different names produced the same file after path strip"
+        assert text_a != text_b, "different names produced the same file"
 
 
 def test_init_defaults_to_cwd_not_knowledge():
@@ -926,7 +900,6 @@ def test_link_check_only_reports_without_creating_and_regular_file_is_invalid():
         write_agents(ws, Path(cursor_root) / "AGENTS.md", body)
         before = snapshot_tree(ws.path / missing_root)
         check_missing = run_agents_link(ws, missing_root, check_only=True)
-        report_missing = combined_report(check_missing)
         after = snapshot_tree(ws.path / missing_root)
         print(
             f"[F10] check-only missing created={after.keys() - before.keys()}",
@@ -938,26 +911,15 @@ def test_link_check_only_reports_without_creating_and_regular_file_is_invalid():
         assert_ssot_mapping_state(
             base, ".github/copilot-instructions.md", kind="missing"
         )
-        paths = _paths(ws, missing_root)
-        remainder_missing = report_remainder_after_stripping_paths(report_missing, paths)
-        remainder_missing = remainder_missing.replace(agents_token, "")
-        for name in (
-            "CLAUDE.md",
-            ".cursorrules",
-            ".windsurfrules",
-            "copilot-instructions.md",
-        ):
-            assert name in remainder_missing or name in report_missing, (
-                f"check-only report does not carry mapping {name}: "
-                f"{report_missing!r}"
-            )
+        # One mapping line per link path (link_check_marks asserts each).
+        link_check_marks(check_missing)
         create = run_agents_link(ws, missing_root)
         require_agents_success(create)
         assert_named_ssot_symlinks(base)
         plant_ssot_links(ws.path / valid_root)
         valid = run_agents_link(ws, valid_root, check_only=True)
         require_agents_success(valid)
-        valid_report = combined_report(valid)
+        valid_marks = link_check_marks(valid)
         plant_ssot_links(ws.path / claude_root, regular="CLAUDE.md")
         plant_ssot_links(ws.path / cursor_root, regular=".cursorrules")
         claude_check = run_agents_link(ws, claude_root, check_only=True)
@@ -966,34 +928,28 @@ def test_link_check_only_reports_without_creating_and_regular_file_is_invalid():
         assert_ssot_mapping_state(
             ws.path / cursor_root, ".cursorrules", kind="regular"
         )
-        strip_paths = _paths(ws, claude_root, cursor_root, valid_root)
-        claude_rem = report_remainder_after_stripping_paths(
-            combined_report(claude_check), strip_paths
-        ).replace(agents_token, "")
-        cursor_rem = report_remainder_after_stripping_paths(
-            combined_report(cursor_check), strip_paths
-        ).replace(agents_token, "")
-        valid_rem = report_remainder_after_stripping_paths(
-            valid_report, strip_paths
-        ).replace(agents_token, "")
+        claude_marks = link_check_marks(claude_check)
+        cursor_marks = link_check_marks(cursor_check)
         print(
-            f"[F10] claude remainder={claude_rem!r} cursor remainder={cursor_rem!r}",
+            f"[F10] valid={valid_marks!r} claude={claude_marks!r} "
+            f"cursor={cursor_marks!r}",
             flush=True,
         )
-        assert claude_rem != valid_rem, (
+        assert all(mark == "✓" for mark in valid_marks.values()), (
+            f"all-valid check-only report marks a mapping invalid: {valid_marks!r}"
+        )
+        assert claude_marks["CLAUDE.md"] == "✗", (
+            f"regular CLAUDE.md is not marked invalid: {claude_marks!r}"
+        )
+        assert claude_marks != valid_marks, (
             "regular CLAUDE.md check-only report matches the all-valid report"
         )
-        assert "CLAUDE.md" in claude_rem, (
-            f"CLAUDE.md regular check-only remainder dropped the mapping name: "
-            f"{claude_rem!r}"
+        assert cursor_marks[".cursorrules"] == "✗", (
+            f"regular .cursorrules is not marked invalid: {cursor_marks!r}"
         )
-        assert cursor_rem != claude_rem, (
-            "regular .cursorrules and CLAUDE.md check-only reports are not "
-            "distinguishable after stripping workspace paths"
-        )
-        assert ".cursorrules" in cursor_rem, (
-            f".cursorrules regular check-only remainder dropped the mapping "
-            f"name: {cursor_rem!r}"
+        assert cursor_marks != claude_marks, (
+            "regular .cursorrules and CLAUDE.md check-only reports mark the "
+            "same mappings"
         )
 
 

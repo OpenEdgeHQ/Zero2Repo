@@ -9,7 +9,6 @@ from F01_helpers import (
     REQUIRED_HELP_NAMES,
     SIMD_ENV,
     cli_tokens,
-    dedicated_compiled_in_field,
     derived_batch_archive,
     files_identical,
     invalid_simd_token,
@@ -26,6 +25,7 @@ from F01_helpers import (
     require_ok,
     require_path_absent,
     require_refusal,
+    require_compiled_in_identity_field,
     require_stderr_identifies_path_failure,
     require_stdout_text,
     require_usage,
@@ -114,18 +114,7 @@ def test_help_and_version_stdout_differ():
         version_text = require_stdout_text(version_run)
         require_help_usage(help_text)
         require_version_identity(version_text, help_text)
-        payloads = dedicated_compiled_in_field(version_text, help_text)
-        assert payloads, (
-            "version identity is silent on whether Ogg Opus encode and decode "
-            "are compiled in, or answers that only by a codec-name substring "
-            "in usage, banner, or license text"
-        )
-        help_lines = {line.strip() for line in help_text.splitlines() if line.strip()}
-        for payload in payloads:
-            assert payload not in help_lines, (
-                "dedicated compiled-in field is not distinguishable from help "
-                "usage or the shared product banner"
-            )
+        payloads = require_compiled_in_identity_field(version_text, help_text)
         assert help_text != version_text, (
             "help stdout and version stdout are identical"
         )
@@ -160,7 +149,7 @@ def test_version_identity_names_version_host_opus_and_kernels():
         require_version_identity(version_text, help_text)
         tokens = cli_tokens(version_text)
         kernels = mixer_kernel_names(version_text)
-        payloads = dedicated_compiled_in_field(version_text, help_text)
+        payloads = require_compiled_in_identity_field(version_text, help_text)
         assert PRODUCT_NAME in tokens, (
             f"version stdout does not name the product as a whole token; "
             f"tokens={sorted(tokens)}"
@@ -169,17 +158,6 @@ def test_version_identity_names_version_host_opus_and_kernels():
             f"version stdout does not name a mixer kernel; "
             f"tokens={sorted(tokens)}"
         )
-        assert payloads, (
-            "version identity is silent on whether Ogg Opus encode and decode "
-            "are compiled in, or answers that only by a codec-name substring "
-            "in usage, banner, or license text"
-        )
-        help_lines = {line.strip() for line in help_text.splitlines() if line.strip()}
-        for payload in payloads:
-            assert payload not in help_lines, (
-                "dedicated compiled-in field is not distinguishable from help "
-                "usage or the shared product banner"
-            )
         print(
             f"[F01] version identity named; kernels={sorted(kernels)} "
             f"compiled_in_payloads={len(payloads)}",

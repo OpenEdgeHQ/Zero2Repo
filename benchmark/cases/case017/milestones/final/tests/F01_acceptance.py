@@ -1,10 +1,9 @@
 # feature: F01
 """FP-01: create, clone, and release a bitmap.
 
-Assertions follow Full_PRD.original.md FP-01 (L94–L116) together with the
-in-scope pre-FP obligations: in-memory form is the buffer (L5–L7), library
-with no file or network I/O (L37, L55), little-endian-only compile (L57),
-64-bit domain (L63), and no removable-substrate negative control (L59, L78).
+Covers FP-01 together with the product-wide rules it touches: the
+in-memory form is the buffer, the library performs no file or network I/O,
+big-endian targets do not compile, and values span the 64-bit domain.
 """
 
 from __future__ import annotations

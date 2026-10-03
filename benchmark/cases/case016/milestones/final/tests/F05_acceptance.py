@@ -12,16 +12,20 @@ from pathlib import Path
 from _harness import HarnessError, workspace
 from F01_helpers import BAND_RANGES, SCAN_CAP
 from F02_helpers import (
-    readable_scores_0_100,
     NOTEBOOK_EXT,
     PLAIN_EXTS,
     ZIP_EXTS,
     pad_file_to_size,
     runtime_token,
-    standalone_int_present,
     write_notebook,
 )
 from F05_helpers import (
+    COVERAGE_NOTE,
+    nudge_bases,
+    parse_nudge,
+    require_scored_row,
+    show_row,
+    show_rows_for,
     fire_pinned,
     pinned_score,
     ARCHIVE_KB_FIGURES,
@@ -33,19 +37,16 @@ from F05_helpers import (
     PLAIN_KB,
     assert_private_ledger_snapshot,
     basename_absent,
-    basename_mentions,
     changed_config_files,
     config_omits,
     elapsed_call,
     fire_tool,
     fresh_name,
-    grouped_int_present,
     guard_connect_observer,
     interpreter_standin,
     measure_path,
     measure_text,
     missing_score_arms,
-    names_window,
     nudge_text,
     own_nudge_section,
     phrase_for_band,
@@ -57,14 +58,11 @@ from F05_helpers import (
     prose_none,
     prose_under,
     relocated_plugin_root,
-    remainder,
     repeat_to,
     require_flagged_envelope,
     require_silent,
-    row_around,
     show_text,
     similar_clean,
-    states_scored_prefix,
     snapshot_config,
     status_remainder,
     updates_without_interpreters,
@@ -85,40 +83,15 @@ def _sid() -> str:
     return runtime_token("s")
 
 
-def _without_names(text: str, *names: str) -> str:
-    """Drop runtime names before looking for integers.
-
-    A generated file name is hex and can itself contain 512, 4096, or a
-    score. Those digits are not what the product reported.
-    """
-    body = text
-    for name in sorted((n for n in names if n), key=len, reverse=True):
-        body = body.replace(name, " ")
-    return body
-
-
-def _no_score(text: str, *names: str) -> None:
-    """No 0–100 integer outside the file's own name."""
-    body = _without_names(text, *names)
-    for value in readable_scores_0_100(body):
-        assert False, (
-            f"show carried a 0-100 integer {value} outside the file name; "
-            f"text={text[:300]!r}"
-        )
-
-
-def _kb_figure(text: str) -> tuple[int, ...]:
-    # 4,096 is the same integer as 4096, and 4,000 is the same as 4000.
-    # Contract: the 4 MB limit is named in kilobytes as 4000 or 4096.
-    found = [n for n in ARCHIVE_KB_FIGURES if grouped_int_present(text, n)]
-    assert found, (
-        f"size skip did not name {ARCHIVE_KB_FIGURES[0]} or {ARCHIVE_KB_FIGURES[1]}; "
-        f"text={text[:300]!r}"
+def _kb_figure(row) -> int:
+    # Contract: a size skip names the archive / notebook cap in kilobytes
+    # (PRD FP-02: 4096) in the stated row form.
+    assert row.kind == "size", f"not a size-skip row: {row.line!r}"
+    assert row.kb in ARCHIVE_KB_FIGURES, (
+        f"size skip did not name {ARCHIVE_KB_FIGURES[0]}; "
+        f"row={row.line!r}"
     )
-    assert not standalone_int_present(text, PLAIN_KB), (
-        f"archive size skip named the plain-text cap {PLAIN_KB}; text={text[:300]!r}"
-    )
-    return tuple(found)
+    return row.kb
 
 
 def test_unset_level_uses_full_threshold_not_strict():
@@ -210,7 +183,7 @@ def _level_arm(level: str, text: str, stall: float, *, score: bool) -> None:
                         "the stall is not on the detector startup path"
                     )
                 assert stand.invocations() > started, f"{level} did not start the detector"
-                assert standalone_int_present(show_text(ws, sid), prose_dense().score)
+                require_scored_row(show_text(ws, sid), name, prose_dense())
             else:
                 assert elapsed < stall, f"{level} waited {elapsed:.2f}s for the detector"
                 assert nudge == ""
@@ -241,7 +214,7 @@ def test_score_equal_to_40_is_flagged_only_in_strict():
         assert nudge == ""
         full_show = show_text(full, sid)
         assert name in full_show
-        assert standalone_int_present(full_show, exact.score)
+        require_scored_row(full_show, name, exact)
         full_rem = status_remainder(
             full_show,
             name,
@@ -317,6 +290,7 @@ def test_score_equal_to_40_is_flagged_only_in_strict():
     print(f"[F05] exact-40 full={full_rem!r} strict={strict_rem!r}", flush=True)
     assert full_rem == under_rem, f"full-40={full_rem!r} under={under_rem!r}"
     assert full_rem != strict_rem
+    assert full_rem == "under" and strict_rem == "flagged" and dense_rem == "flagged"
 
 
 def test_score_equal_to_20_is_not_flagged_in_strict():
@@ -335,7 +309,7 @@ def test_score_equal_to_20_is_not_flagged_in_strict():
             assert nudge == "", f"{level} flagged a score of exactly 20"
             shown = show_text(ws, sid)
             assert name in shown
-            assert standalone_int_present(shown, 20)
+            require_scored_row(shown, name, exact)
 
 
 def test_score_above_20_and_not_above_40_is_flagged_only_in_strict():
@@ -355,7 +329,7 @@ def test_score_above_20_and_not_above_40_is_flagged_only_in_strict():
         assert nudge == "", f"full flagged a score of {mid.score}"
         shown = show_text(full, sid)
         assert name in shown
-        assert standalone_int_present(shown, mid.score)
+        require_scored_row(shown, name, mid)
     with workspace() as strict:
         strict.write_mode_flag("strict")
         name = fresh_name(".md")
@@ -404,7 +378,7 @@ def test_unflagged_eligible_file_emits_nothing_and_is_not_rewritten():
         assert nudge == ""
         shown = show_text(ws, sid)
         assert name in shown
-        assert standalone_int_present(shown, clean.score)
+        require_scored_row(shown, name, clean)
 
 
 def test_confidence_none_is_recorded_unflagged():
@@ -429,7 +403,8 @@ def test_confidence_none_is_recorded_unflagged():
         assert none_nudge == ""
         assert under_nudge == ""
         shown = show_text(ws, sid)
-        assert none_name in shown and standalone_int_present(shown, none.score)
+        assert none_name in shown
+        require_scored_row(shown, none_name, none)
         none_rem = status_remainder(
             shown,
             none_name,
@@ -451,6 +426,7 @@ def test_confidence_none_is_recorded_unflagged():
             flush=True,
         )
         assert none_rem == under_rem, f"none={none_rem!r} under={under_rem!r}"
+        assert under_rem == "under", f"under-threshold row reads {under_rem!r}"
     with workspace() as strict:
         strict.write_mode_flag("strict")
         sid = _sid()
@@ -491,6 +467,7 @@ def test_confidence_none_is_recorded_unflagged():
     assert strict_none_rem == under_rem, (
         f"strict-none={strict_none_rem!r} under={under_rem!r}"
     )
+    assert strict_rem == "flagged", f"strict-40 row reads {strict_rem!r}"
     assert strict_none_rem != strict_rem, (
         f"strict-none={strict_none_rem!r} flagged={strict_rem!r}"
     )
@@ -613,9 +590,11 @@ def _notebook_pair(ws, dense_text: str, *, code_first: bool) -> None:
         )
         assert nudge == ""
         code_show = show_text(ws, code_sid)
-        assert not standalone_int_present(
-            _without_names(code_show, code_name), measured.score
-        )
+        if show_rows_for(code_show, code_name):
+            row = show_row(code_show, code_name)
+            assert not (row.kind == "scored" and row.score == measured.score), (
+                f"code-only notebook was listed with the markdown score: {row.line!r}"
+            )
 
     if code_first:
         silence_code()
@@ -647,7 +626,7 @@ def test_pdf_and_rtf_differ_from_a_failed_check():
             assert nudge == ""
             shown = show_text(ws, sid)
             assert name in shown
-            _no_score(shown, name)
+            binary_row = show_row(shown, name)
             missing = fresh_name(".md")
             miss_sid = _sid()
             _, miss_nudge = fire_tool(
@@ -660,13 +639,12 @@ def test_pdf_and_rtf_differ_from_a_failed_check():
             assert miss_nudge == ""
             miss_show = show_text(ws, miss_sid)
             assert missing in miss_show
-            binary_body = _without_names(shown, name, sid).lower()
-            failed_body = _without_names(miss_show, missing, miss_sid).lower()
-            assert "not re-scored" in binary_body, (
-                f"{ext} listing is not the not-re-scored row; text={binary_body[:300]!r}"
+            failed_row = show_row(miss_show, missing)
+            assert binary_row.kind == "binary", (
+                f"{ext} listing is not the not-re-scored row; row={binary_row.line!r}"
             )
-            assert "not scored" in failed_body and "not re-scored" not in failed_body, (
-                f"missing path is not the not-scored row; text={failed_body[:300]!r}"
+            assert failed_row.kind == "failed", (
+                f"missing path is not the not-scored row; row={failed_row.line!r}"
             )
         live = fresh_name(".md")
         live_path = plant_prose(ws, live, dense.text)
@@ -849,10 +827,10 @@ def test_write_edit_and_multiedit_score_the_file_on_disk():
                 file_path=str(path),
                 content=clean.text,
             )
-            require_flagged_envelope(nudge, base=name, measured=disk)
-            assert not standalone_int_present(
-                _without_names(nudge, name), clean.score
-            ), f"{tool} reported the payload score {clean.score}"
+            read = require_flagged_envelope(nudge, base=name, measured=disk)
+            assert read.score != clean.score, (
+                f"{tool} reported the payload score {clean.score}"
+            )
 
 
 def test_notebook_edit_ignores_a_file_path_field():
@@ -1001,10 +979,10 @@ def test_relative_path_resolves_against_the_payload_working_directory():
                     f"[F05] relative {tool} nudge={nudge[:400]!r}",
                     flush=True,
                 )
-                require_flagged_envelope(nudge, base=name, measured=on_disk)
-                assert not standalone_int_present(
-                    _without_names(nudge, name), clean.score
-                ), f"{tool} reported the other file's score {clean.score}"
+                read = require_flagged_envelope(nudge, base=name, measured=on_disk)
+                assert read.score != clean.score, (
+                    f"{tool} reported the other file's score {clean.score}"
+                )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1025,10 +1003,10 @@ def test_apply_patch_concatenates_only_flagged_files():
         command = f"*** Update File: {slop_path}\n*** Update File: {clean_path}\n"
         _, nudge = fire_tool(ws, "apply_patch", session_id=sid, command=command)
         require_flagged_envelope(nudge, base=slop_name, measured=slop_measured)
-        assert clean_name not in nudge
+        assert clean_name not in nudge_bases(nudge) and clean_name not in nudge
         shown = show_text(ws, sid)
-        assert slop_name in shown and clean_name in shown
-        assert standalone_int_present(shown, clean_measured.score)
+        require_scored_row(shown, slop_name, slop_measured)
+        require_scored_row(shown, clean_name, clean_measured)
 
 
 def test_duplicate_patch_path_is_one_scored_row():
@@ -1046,10 +1024,10 @@ def test_duplicate_patch_path_is_one_scored_row():
         )
         require_flagged_envelope(once, base=name, measured=measured)
         shown_once = show_text(ws, sid)
-        assert name in shown_once
-        assert standalone_int_present(shown_once, measured.score)
-        once_nudge = basename_mentions(once, name)
-        once_show = basename_mentions(shown_once, name)
+        require_scored_row(shown_once, name, measured)
+        once_nudge = nudge_bases(once).count(name)
+        once_show = len(show_rows_for(shown_once, name))
+        assert once_nudge == 1 and once_show == 1
 
         # Seventeen lines, sixteen distinct paths. The repeated path is
         # the first two lines, so it sits inside a sixteen-line cap. The
@@ -1075,15 +1053,15 @@ def test_duplicate_patch_path_is_one_scored_row():
             ws, "apply_patch", session_id=dsid, command=command
         )
         _patch_sections(nudge, distinct, measured)
-        assert basename_mentions(nudge, name) == once_nudge, (
+        assert nudge_bases(nudge).count(name) == once_nudge, (
             "naming the same path twice concatenated a second nudge for it"
         )
         shown = show_text(ws, dsid)
-        assert standalone_int_present(shown, measured.score)
-        assert basename_mentions(shown, name) == once_show, (
+        assert len(show_rows_for(shown, name)) == once_show, (
             "naming the same path twice recorded a second scored row"
         )
-        assert all(other in shown for other, _ in others)
+        require_scored_row(shown, name, measured)
+        assert all(show_rows_for(shown, other) for other, _ in others)
 
 
 def _patch_sections(nudge: str, names: list[str], measured) -> None:
@@ -1113,13 +1091,15 @@ def test_apply_patch_scores_at_most_sixteen_distinct_paths():
         sid = _sid()
         seventeen = "\n".join(f"*** Update File: {path}" for _, path in flagged) + "\n"
         _, nudge = fire_tool(ws, "apply_patch", session_id=sid, command=seventeen)
-        in_nudge = [name for name, _path in flagged if name in nudge]
-        omitted = [name for name, _path in flagged if name not in nudge]
+        bases = nudge_bases(nudge)
+        in_nudge = [name for name, _path in flagged if name in bases]
+        omitted = [name for name, _path in flagged if name not in bases]
+        assert len(bases) == len(in_nudge)
         assert len(in_nudge) == 16 and len(omitted) == 1
         _patch_sections(nudge, in_nudge, measured)
         shown = show_text(ws, sid)
         assert omitted[0] not in shown
-        assert all(name in shown for name in in_nudge)
+        assert all(show_rows_for(shown, name) for name in in_nudge)
         quiet = []
         for _ in range(17):
             name = fresh_name(".md")
@@ -1130,9 +1110,10 @@ def test_apply_patch_scores_at_most_sixteen_distinct_paths():
         _, nudge = fire_tool(ws, "apply_patch", session_id=qsid, command=body)
         assert nudge == ""
         qshow = show_text(ws, qsid)
-        quiet_show = [name for name, _path in quiet if name in qshow]
+        quiet_show = [name for name, _path in quiet if show_rows_for(qshow, name)]
         assert len(quiet_show) == 16
-        assert standalone_int_present(qshow, clean.score)
+        for name in quiet_show:
+            require_scored_row(qshow, name, clean)
 
 
 def test_show_holds_fired_labels_base_name_and_not_the_body():
@@ -1153,12 +1134,11 @@ def test_show_holds_fired_labels_base_name_and_not_the_body():
         )
         require_flagged_envelope(nudge, base=name, measured=measured)
         shown = show_text(ws, sid)
-        assert name in shown
-        assert standalone_int_present(shown, measured.score)
-        assert measured.band in shown
-        present = [label for label in measured.labels if label in shown]
-        assert present
+        row = require_scored_row(shown, name, measured)
+        present = list(row.labels)
+        assert present, f"scored row with fired labels lists none: {row.line!r}"
         assert len(present) <= 5
+        assert all(label in measured.labels for label in present), row.line
         if len(measured.labels) > 5:
             assert len(present) < len(measured.labels)
         assert marker not in shown
@@ -1178,9 +1158,9 @@ def test_ledger_keeps_at_most_the_newest_twenty():
             fire_tool(ws, "Write", session_id=sid, file_path=str(path), content=clean.text)
             names.append(name)
         shown = show_text(ws, sid)
-        assert names[-1] in shown
+        assert show_rows_for(shown, names[-1])
         assert names[0] not in shown
-        assert sum(1 for name in names if name in shown) == 20
+        assert sum(1 for name in names if show_rows_for(shown, name)) == 20
 
 
 def test_ledger_is_per_session_id():
@@ -1254,11 +1234,9 @@ def test_plain_text_over_512_kb_names_512():
             )
             assert nudge == ""
             shown = show_text(ws, sid)
-            assert name in shown
-            body = _without_names(shown, name)
-            assert "not scored" in body.lower()
-            assert standalone_int_present(body, PLAIN_KB)
-            assert not standalone_int_present(body, scored.score)
+            row = show_row(shown, name)
+            assert row.kind == "size", f"over-cap plain text is not a size skip: {row.line!r}"
+            assert row.kb == PLAIN_KB, f"size skip names {row.kb}, not {PLAIN_KB}"
 
 
 def test_zip_between_the_caps_is_still_scored():
@@ -1280,7 +1258,6 @@ def test_zip_between_the_caps_is_still_scored():
 
 def test_archive_and_notebook_over_4_mb_share_a_kilobyte_figure():
     dense = prose_dense()
-    scored = measure_text(dense.text)
     specs = (
         (".docx", OVER_BOTH_4MB),
         (".docx", OVER_BOTH_4MB_OTHER),
@@ -1302,16 +1279,9 @@ def test_archive_and_notebook_over_4_mb_share_a_kilobyte_figure():
             )
             assert nudge == ""
             shown = show_text(ws, sid)
-            assert name in shown
-            body = _without_names(shown, name, sid)
-            print(f"[F05] over4 {ext} size={path.stat().st_size} show={body[:300]!r}", flush=True)
-            assert "not scored" in body.lower(), (
-                f"{ext} size skip was not reported as not scored; text={body[:300]!r}"
-            )
-            assert not standalone_int_present(body, scored.score), (
-                f"{ext} size skip still carried the detector score {scored.score}"
-            )
-            figures.append(_kb_figure(body))
+            row = show_row(shown, name)
+            print(f"[F05] over4 {ext} size={path.stat().st_size} row={row.line!r}", flush=True)
+            figures.append(_kb_figure(row))
     assert len(set(sizes[:2])) == 2
     assert len(set(figures)) == 1
 
@@ -1342,24 +1312,19 @@ def test_truncated_extracted_prose_names_the_262144_window():
         over_name, over_nudge, over_show, over_measured = arms["over"]
         require_flagged_envelope(exact_nudge, base=exact_name, measured=exact_measured)
         require_flagged_envelope(over_nudge, base=over_name, measured=over_measured)
-    # L230 requires the scored-prefix statement only when the scan was
-    # truncated. Naming the window size on a scan that fits is allowed.
-    assert not states_scored_prefix(exact_nudge), (
-        "exact-window extra context states that only a 262,144-character "
-        f"prefix was scored; text={exact_nudge[:500]!r}"
+    # The stated coverage note sits on the nudge line and on the show row
+    # only when extracted prose is longer than the window.
+    assert not parse_nudge(exact_nudge, exact_name).truncated, (
+        f"exact-window nudge carries the coverage note; text={exact_nudge[:500]!r}"
     )
-    assert not names_window(exact_show)
-    assert names_window(over_nudge)
-    assert states_scored_prefix(over_nudge), (
-        "over-window extra context prints the window digits but does not "
-        "state that only the first 262,144 characters were scored; "
-        f"text={over_nudge[:500]!r}"
+    assert parse_nudge(over_nudge, over_name).truncated, (
+        f"over-window nudge lacks the coverage note; text={over_nudge[:500]!r}"
     )
-    assert names_window(over_show)
-    exact_row = row_around(exact_show, exact_name, [])
-    over_row = row_around(over_show, over_name, [])
-    assert not names_window(exact_row)
-    assert names_window(over_row)
+    assert COVERAGE_NOTE not in exact_show
+    exact_row = require_scored_row(exact_show, exact_name, exact_measured)
+    over_row = require_scored_row(over_show, over_name, over_measured)
+    assert not exact_row.truncated
+    assert over_row.truncated
 
 
 def _node_on_stripped_path(updates: dict[str, str]) -> dict[str, str]:
@@ -1373,10 +1338,10 @@ def _node_on_stripped_path(updates: dict[str, str]) -> dict[str, str]:
 def _failed_show(ws, name: str, path: str, sid: str, *extra: object) -> tuple[str, str]:
     shown = show_text(ws, sid)
     assert name in shown, f"failed save {name!r} was not recorded"
-    row = row_around(shown, name, [])
-    rem = remainder(row, [name, path, sid, *extra])
-    print(f"[F05] failure {name} remainder={rem!r}", flush=True)
-    return shown, rem
+    row = show_row(shown, name)
+    assert row.kind == "failed", f"failed save is not a not-scored row: {row.line!r}"
+    print(f"[F05] failure {name} reason={row.reason!r}", flush=True)
+    return shown, row.reason
 
 
 def _detector_failure(
@@ -1519,19 +1484,11 @@ def test_missing_score_is_not_any_integer():
             )
             assert stand.invocations() > started, "stand-in was not on the detector path"
         assert result.returncode == 0 and nudge == ""
+        # _failed_show requires the not-scored row: no integer on the
+        # report, the planted one included, stands in for the score.
         shown, counted = _failed_show(
             ws, count_name, str(count_path), count_sid, planted
         )
-        body = _without_names(shown, count_name, str(count_path), count_sid)
-        assert not standalone_int_present(body, planted), (
-            f"the planted count {planted} was recorded as the file score; "
-            f"text={shown[:400]!r}"
-        )
-        for value in leftovers:
-            assert not standalone_int_present(body, value), (
-                f"leftover integer {value} was recorded as the file score; "
-                f"text={shown[:400]!r}"
-            )
     print(f"[F05] missing-score bare={bare!r} counted={counted!r}", flush=True)
     assert bare == counted
     assert bare != plain
@@ -1743,17 +1700,15 @@ def _budget_arm(
             assert elapsed <= max_elapsed, (
                 f"{ext} sleep {sleep_s}s took {elapsed:.2f}s"
             )
-        body = _without_names(shown, name)
         if scored:
             require_flagged_envelope(nudge, base=name, measured=measured)
-            assert standalone_int_present(body, measured.score)
+            require_scored_row(shown, name, measured)
             return None
         assert result.returncode == 0
         assert nudge == ""
-        assert name in shown
-        assert not standalone_int_present(body, measured.score)
-        row = row_around(shown, name, [])
-        return remainder(row, [name, str(path), sid, measured.score])
+        row = show_row(shown, name)
+        assert row.kind == "failed", f"timed-out save is not a not-scored row: {row.line!r}"
+        return row.reason
 
 
 def test_detector_budgets_are_8s_plain_and_15s_archive():
@@ -1882,8 +1837,7 @@ def test_hook_phrases_for_the_other_four_bands():
             file_path=str(path), content=clean.text,
         )
         assert nudge == ""
-        row = row_around(show_text(ws, sid), name, [])
-        assert clean.band in row
+        require_scored_row(show_text(ws, sid), name, clean)
         for band in ("mixed", "heavy tells", "pervasive tells"):
             lo, hi = BAND_RANGES[band]
             measured, report = pinned_score(lo + secrets.randbelow(hi - lo + 1))
@@ -1895,8 +1849,8 @@ def test_hook_phrases_for_the_other_four_bands():
                 ws, report, tool="Write", session_id=_sid(),
                 file_path=str(path), content="payload",
             )
-            require_flagged_envelope(nudge, base=name, measured=measured)
-            assert phrases[band] in nudge
+            read = require_flagged_envelope(nudge, base=name, measured=measured)
+            assert read.phrase == phrases[band]
 
 
 def test_shell_command_write_is_not_seen():

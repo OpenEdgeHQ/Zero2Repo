@@ -33,7 +33,7 @@ from F02_helpers import (
 )
 from F03_helpers import G_MPS2, still_level_acc
 
-# Named numeric oracles from FP-07 (L290, L300, L301, L305–L306).
+# Fixed inputs and tolerances for FP-07.
 ISA_P0_PA = 101325.0
 ISA_FEW_HUNDRED_TOL_M = 1.0
 BARO_1SIGMA_DEFAULT_M = 2.0
@@ -45,7 +45,7 @@ GAP_JUST_OVER_S = 0.52
 GAP_BACKWARDS_S = 0.40
 VERT_TIMEOUT = LONG_TIMEOUT
 
-# Independent tropospheric ISA constants (L290). Not the product's rounded
+# Independent tropospheric ISA constants. Not the product's rounded
 # scale/exponent pair.
 _ISA_T0_K = 288.15
 _ISA_LAPSE_K_PER_M = 0.0065
@@ -370,7 +370,7 @@ static int run_suite(void)
     opt.allow_unlimited_deadreckoning = true;
     /* This slice observes the vertical channel on IMU+baro. Suite
        standstill detection would ZUPT the channel and hide the
-       accelerometer-only 1-sigma growth L295 names. */
+       accelerometer-only 1-sigma growth PRD names. */
     opt.auto_zupt_disable = true;
     opt.auto_zupt_velocity_blind_disable = true;
     int rc = nav_suite_init(&s, &init, &opt);
@@ -453,7 +453,7 @@ def vert_token(v: float) -> str:
 
 
 def tropospheric_isa_altitude_m(pressure_pa: float) -> float:
-    """Independent tropospheric ISA altitude from static pressure (L290)."""
+    """Independent tropospheric ISA altitude from static pressure."""
     p = float(pressure_pa)
     if not math.isfinite(p) or p <= 0.0:
         raise HarnessError(f"ISA pressure {p} is not a positive finite value")
@@ -1035,7 +1035,7 @@ def runtime_h_init_m() -> float:
 
 
 def runtime_isa_band_heights() -> tuple[float, float]:
-    """Two distinct tropospheric heights inside 300–800 m (L305)."""
+    """Two distinct tropospheric heights inside 300–800 m."""
     u = runtime_uuid_int()
     a = 320.0 + (u % 160)
     b = 560.0 + ((u // 160) % 200)

@@ -864,7 +864,6 @@ def _require_compiled_product():
     """
     result = _compile_product_once()
     detail = _compile_detail(result)
-    # TEST-FIX(F04): upstream Makefile:441 shows `make pylib` is the rule that writes the shared object; a missing or failed compile leaves no library for the delay probes
     assert result is not None, (
         "make pylib replay did not run\n" + detail
     )
@@ -872,11 +871,9 @@ def _require_compiled_product():
         "make pylib replay failed\n" + detail
     )
     ident = product_identity()
-    # TEST-FIX(F04): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config and Ins; python/INSLIB/_core.py:54 loads the shared object from that directory
     assert ident is not None, (
         "python package directory was not found after make pylib replay\n" + detail
     )
-    # TEST-FIX(F04): upstream Makefile:438 shows make pylib writes the shared object inside the package directory, and the object stem equals that directory name
     assert ident.library is not None and ident.library.is_file(), (
         "shared library is missing after make pylib replay\n" + detail
     )
@@ -895,10 +892,8 @@ def _run_delay(kind: str, scen: DelayScenario) -> DelayRun:
     payload = encode_delay(scen)
     ident = _require_compiled_product()
     if kind == "c":
-        # TEST-FIX(F04): upstream Makefile:438 shows the C probe links the shared object make pylib wrote, whose stem equals the package directory
         result = invoke(_C_PROBE, stdin=payload, timeout=LONG_TIMEOUT, root=repo_root())
     elif kind == "py":
-        # TEST-FIX(F04): upstream python/INSLIB/__init__.py:29 shows Config and Ins are imported from the package directory make pylib wrote, not from a hardcoded name
         result = run_python(
             _PY_PROBE.replace("__PKG__", ident.package_name),
             stdin=payload,
@@ -1854,7 +1849,6 @@ def forced_replay_lag_ms(
     timeout: float | None = DEFAULT_REPLAY_TIMEOUT,
 ) -> float:
     """Run the Python replay estimator with force-on. Missing numeric lag asserts."""
-    # TEST-FIX(F04): upstream python/replay.py:72 imports the package beside the script; python/INSLIB/_core.py:54 loads that package's shared object, so the estimator runs from the compiled root
     _require_compiled_product()
     result = run_replay(
         dataset,

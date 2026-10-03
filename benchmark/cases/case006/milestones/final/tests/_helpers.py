@@ -329,8 +329,8 @@ def require_usage_without_help_page(
 def require_usage_help(result: Any, greeting: str, *marks: str) -> None:
     """No-args-is-help / missing-subcommand help: status 2, greeting absent.
 
-    The PRD says the help page is printed and does not name a stream.
-    Marks are required on caller-visible stdout+stderr (either stream).
+    The Contract puts a help page shown because of incorrect usage on
+    standard error; marks are required there.
     Other exit statuses hard-fail.
     """
     code, stdout, stderr = _status_and_streams(result)
@@ -342,14 +342,14 @@ def require_usage_help(result: Any, greeting: str, *marks: str) -> None:
         f"usage-help ran the callback; greeting {greeting!r} present; "
         f"stdout={stdout!r} stderr={stderr!r}"
     )
-    visible = stdout + stderr
+    visible = stderr
     assert visible.strip(), (
-        f"usage-help produced empty caller-visible output; "
+        f"usage-help produced an empty help page on stderr; "
         f"stdout={stdout!r} stderr={stderr!r}"
     )
     for mark in marks:
         assert mark in visible, (
-            f"usage-help missing {mark!r} on caller-visible output; "
+            f"usage-help missing {mark!r} on stderr; "
             f"stdout={stdout!r} stderr={stderr!r}"
         )
 
@@ -653,7 +653,7 @@ def require_usage_kinds_unlike(
     """Two usage-error runs (exit 2, greeting absent) with unlike stderr remainders.
 
     After stripping *covariates* from stderr, the remainders must differ.
-    Restricted to the L173 vs omitted-required contrast: do not use this
+    Restricted to the FP-03 non-sequence-default vs omitted-required contrast: do not use this
     to compare omitted-required against an illegal boolean environment word.
     """
     require_usage_error_without_marker(left, greeting)
@@ -867,7 +867,7 @@ def call_with_fed_stdin(text: str, call: Callable[[], Any]) -> Any:
 
 
 def automatic_env_name(prefix: str, *parts: str) -> str:
-    """L288 spec oracle: prefix, then each command/param name, uppercased.
+    """FP-07 rule: prefix, then each command/param name, uppercased.
 
     Dashes in every part become underscores. Parts are joined with
     underscores. The top-level invocation name is not a part — callers
@@ -1275,9 +1275,9 @@ def require_positional_items(payload: Any, *items: Any) -> None:
 
 
 def posix_app_slug(app_name: str) -> str:
-    """L411 spec oracle: lowercase, whitespace runs become a single dash.
+    """FP-11 rule: lowercase, whitespace runs become a single dash.
 
-    Not a product-internal transform. ``Foo Bar`` → ``foo-bar``.
+    Not a product-internal transform.
     """
     if not app_name:
         raise ValueError("app_name must be a non-empty string")
@@ -2006,9 +2006,9 @@ _KNOWN_COMPLETION_SHELLS = _INDEX_COMPLETION_SHELLS | {_FISH_COMPLETION_SHELL}
 
 
 def complete_variable_name(executable: str) -> str:
-    """L418 spec oracle: underscore + uppercase executable + ``_COMPLETE``.
+    """FP-12 rule: underscore + uppercase executable + ``_COMPLETE``.
 
-    Dashes become underscores. Dots are left as written — L418 does not
+    Dashes become underscores. Dots are left as written — FP-12 does not
     name that substitution.
     """
     if not executable:
@@ -2037,7 +2037,7 @@ def completion_line_env(
 ) -> dict[str, str]:
     """Feed one shell's word list and incomplete token into the process env.
 
-    Also sets ``{shell}_complete`` on the L418 variable. Does not assert
+    Also sets ``{shell}_complete`` on the FP-12 variable. Does not assert
     that these keys appear on stdout — they are the feed, not the contract.
     Fish puts the incomplete token in ``COMP_CWORD``; index shells put
     the cursor index there.

@@ -28,16 +28,15 @@ from F03_helpers import opus_head_fields, place_opus_classified
 from F04_helpers import _prove_family0
 from F05_helpers import stderr_names_input
 from F07_helpers import (
-    batch_member_name_paths,
-    dedicated_mixed_failure_count_payloads,
     derived_batch_expand,
-    mixed_failure_extra_remainder,
     place_non_ogg_sized,
     place_runtime_vorbis,
     place_vorbis_in_subdir,
     prepare_batch_archive,
+    require_batch_summary,
     require_compress_member,
     require_expand_restored,
+    require_no_batch_summary,
     scramble_or_remove,
     stderr_path_index,
     unrelated_pair,
@@ -409,35 +408,11 @@ def test_mixed_failure_stderr_counts_differ_from_all_success():
             "when at least one file fails, standard error must distinguish "
             "the mixed run from all-success"
         )
-        extra_ref_1of2 = mixed_failure_extra_remainder(
-            ws, mix_1of2, ok_run, batch_member_name_paths(ref_1, mix_v)
-        )
-        extra_ref_2of2 = mixed_failure_extra_remainder(
-            ws, mix_2of2, ok_run, batch_member_name_paths(ref_2a, ref_2b)
-        )
-        extra_ref_1of3 = mixed_failure_extra_remainder(
-            ws,
-            mix_1of3,
-            ok3_run,
-            batch_member_name_paths(ref_3, mix_v2, mix_v3),
-        )
-        failed_ref, attempted_ref = dedicated_mixed_failure_count_payloads(
-            extra_ref_1of2, extra_ref_2of2, extra_ref_1of3
-        )
-        assert failed_ref, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose failed-count payload is "
-            "nonzero on mixed failure and distinguishable across mixed runs "
-            "that differ only in how many members failed; an all-success run "
-            "of the same operands does not answer a nonzero failed-file count "
-            "on that field"
-        )
-        assert attempted_ref, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose attempted-count payload is "
-            "distinguishable across mixed runs that differ only in how many "
-            "files were attempted"
-        )
+        require_no_batch_summary(ok_run, what="compress refusal all-success 2")
+        require_no_batch_summary(ok3_run, what="compress refusal all-success 3")
+        require_batch_summary(mix_1of2, 1, 2, what="compress refusal 1 of 2")
+        require_batch_summary(mix_2of2, 2, 2, what="compress refusal 2 of 2")
+        require_batch_summary(mix_1of3, 1, 3, what="compress refusal 1 of 3")
 
         # --- missing-path group (status 3) ---
         miss_ok_a = place_vorbis(ws, "a")
@@ -496,35 +471,11 @@ def test_mixed_failure_stderr_counts_differ_from_all_success():
             "when at least one file fails, standard error must distinguish "
             "the mixed run from all-success"
         )
-        extra_miss_1of2 = mixed_failure_extra_remainder(
-            ws, miss_1of2, miss_ok, batch_member_name_paths(miss_1, miss_v)
-        )
-        extra_miss_2of2 = mixed_failure_extra_remainder(
-            ws, miss_2of2, miss_ok, batch_member_name_paths(miss_2a, miss_2b)
-        )
-        extra_miss_1of3 = mixed_failure_extra_remainder(
-            ws,
-            miss_1of3,
-            miss_ok3,
-            batch_member_name_paths(miss_3, miss_v2, miss_v3),
-        )
-        failed_miss, attempted_miss = dedicated_mixed_failure_count_payloads(
-            extra_miss_1of2, extra_miss_2of2, extra_miss_1of3
-        )
-        assert failed_miss, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose failed-count payload is "
-            "nonzero on mixed failure and distinguishable across mixed runs "
-            "that differ only in how many members failed; an all-success run "
-            "of the same operands does not answer a nonzero failed-file count "
-            "on that field"
-        )
-        assert attempted_miss, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose attempted-count payload is "
-            "distinguishable across mixed runs that differ only in how many "
-            "files were attempted"
-        )
+        require_no_batch_summary(miss_ok, what="missing path all-success 2")
+        require_no_batch_summary(miss_ok3, what="missing path all-success 3")
+        require_batch_summary(miss_1of2, 1, 2, what="missing path 1 of 2")
+        require_batch_summary(miss_2of2, 2, 2, what="missing path 2 of 2")
+        require_batch_summary(miss_1of3, 1, 3, what="missing path 1 of 3")
 
         # --- expand refusal group ---
         exp_src_a, exp_saved_a, exp_arc_a = prepare_batch_archive(ws)
@@ -605,38 +556,11 @@ def test_mixed_failure_stderr_counts_differ_from_all_success():
             "when at least one file fails, standard error must distinguish "
             "the mixed run from all-success"
         )
-        extra_exp_1of2 = mixed_failure_extra_remainder(
-            ws,
-            exp_1of2,
-            exp_ok,
-            batch_member_name_paths(exp_refuse, exp_arc_c),
-        )
-        extra_exp_2of2 = mixed_failure_extra_remainder(
-            ws, exp_2of2, exp_ok, batch_member_name_paths(exp_r2a, exp_r2b)
-        )
-        extra_exp_1of3 = mixed_failure_extra_remainder(
-            ws,
-            exp_1of3,
-            exp_ok3,
-            batch_member_name_paths(exp_r3, exp_arc_d, exp_arc_e),
-        )
-        failed_exp, attempted_exp = dedicated_mixed_failure_count_payloads(
-            extra_exp_1of2, extra_exp_2of2, extra_exp_1of3
-        )
-        assert failed_exp, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose failed-count payload is "
-            "nonzero on mixed failure and distinguishable across mixed runs "
-            "that differ only in how many members failed; an all-success run "
-            "of the same operands does not answer a nonzero failed-file count "
-            "on that field"
-        )
-        assert attempted_exp, (
-            "when at least one file fails, standard error writes a dedicated "
-            "mixed-failure summary field whose attempted-count payload is "
-            "distinguishable across mixed runs that differ only in how many "
-            "files were attempted"
-        )
+        require_no_batch_summary(exp_ok, what="expand refusal all-success 2")
+        require_no_batch_summary(exp_ok3, what="expand refusal all-success 3")
+        require_batch_summary(exp_1of2, 1, 2, what="expand refusal 1 of 2")
+        require_batch_summary(exp_2of2, 2, 2, what="expand refusal 2 of 2")
+        require_batch_summary(exp_1of3, 1, 3, what="expand refusal 1 of 3")
         print(
             "[F07] H mixed stderr distinguishable from all-success; "
             "dedicated summary field answers failed and attempted counts",

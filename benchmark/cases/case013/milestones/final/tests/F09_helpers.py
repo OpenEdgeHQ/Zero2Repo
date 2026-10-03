@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -30,16 +29,8 @@ from _harness import (
 from F03_helpers import (
     mcp_is_protocol_error,
     mcp_is_tool_error,
-    mcp_payload_and_text,
     mcp_reply_for_id,
-    record_string_values,
 )
-from F04_helpers import (
-    McpSearchOutcome,
-    identity_in_records,
-    require_mcp_search_success,
-)
-from F08_helpers import McpValidateOutcome
 
 SIX_TOOL_NAMES = frozenset(
     {
@@ -52,8 +43,6 @@ SIX_TOOL_NAMES = frozenset(
     }
 )
 
-_MEMBUNDLE_TOOL_IDENT = re.compile(r"^membundle_[A-Za-z][A-Za-z0-9_]*$")
-_WHITESPACE = re.compile(r"\s+")
 
 # Recipe artifact name. The binary is built in a writable copy, not the judge cwd.
 _BIN_REL = Path("bin") / "membundle"
@@ -66,12 +55,10 @@ _NEVER_STARTED = (
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -186,7 +173,7 @@ def resolve_mcp_binary() -> Path:
     failure or a tool error.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so the MCP server never starts and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it the MCP server never starts and its results are missing.
     assert binary is not None, _NEVER_STARTED
     return binary
 
@@ -195,12 +182,12 @@ def _raise_if_mcp_binary_missing(binary: Path, exc: FileNotFoundError) -> NoRetu
     """Turn a vanished workdir binary into the never-started assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F09): upstream _harness.py:620 shows FileNotFoundError before any JSON-RPC line when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F09): with no bin/membundle there is no product to run before any JSON-RPC line; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_STARTED) from None
 
 
 def initialize_request(request_id: int | str = 1) -> dict[str, Any]:
-    """JSON-RPC initialize request. Client params are not scored."""
+    """JSON-RPC initialize request. Client params are not read."""
     return rpc_request(
         "initialize",
         {
@@ -335,104 +322,74 @@ def require_some_rpc_error_code(batch: McpBatchResult, code: int) -> dict[str, A
 
 
 def require_initialize_handshake(reply: Mapping[str, Any]) -> Any:
-    """Initialize is a result whose walked strings include the frozen literals."""
+    """Initialize result: ``protocolVersion``, ``serverInfo.name``, ``capabilities``.
+
+    Reads the stated initialize result members directly.
+    """
     if mcp_is_protocol_error(reply):
         raise AssertionError(
             "initialize replied with a JSON-RPC error object; "
             f"reply={reply!r}"
         )
+    if "result" not in reply:
+        raise AssertionError(f"initialize reply has no result member: {reply!r}")
     result = reply.get("result")
-    if result is None:
-        raise HarnessError(
-            f"initialize reply has no result to walk: {reply!r}"
-        )
-    values = record_string_values(result)
+    assert isinstance(result, Mapping), (
+        f"initialize result is not a JSON object: {result!r}"
+    )
+    protocol = result.get("protocolVersion")
+    server_info = result.get("serverInfo")
+    name = server_info.get("name") if isinstance(server_info, Mapping) else None
     print(
-        f"[F09] initialize strings contain protocol="
-        f"{'2024-11-05' in values} identity="
-        f"{'membundle-agent-memory' in values}",
+        f"[F09] initialize protocolVersion={protocol!r} serverInfo.name={name!r}",
         flush=True,
     )
-    assert "2024-11-05" in values, (
-        "initialize result does not contain protocol version 2024-11-05 as a "
-        f"string value; values={sorted(values)!r}"
+    assert protocol == "2024-11-05", (
+        f"initialize result protocolVersion is {protocol!r}, not '2024-11-05'; "
+        f"result={result!r}"
     )
-    assert "membundle-agent-memory" in values, (
-        "initialize result does not contain server identity membundle-agent-memory "
-        f"as a string value; values={sorted(values)!r}"
+    assert isinstance(server_info, Mapping), (
+        f"initialize result serverInfo is not an object: {result!r}"
+    )
+    assert name == "membundle-agent-memory", (
+        f"initialize result serverInfo.name is {name!r}, not "
+        f"'membundle-agent-memory'; result={result!r}"
     )
     assert_initialize_advertises_tools_resources_prompts(result)
     return result
 
 
 def assert_initialize_advertises_tools_resources_prompts(result: Any) -> None:
-    """Initialize result advertises tools, resources, and prompts (L271).
+    """Initialize ``capabilities`` has object members ``tools``, ``resources``, ``prompts``.
 
-    Walked leaves include object keys, so a capabilities object whose keys
-    are those three names counts. Do not require a listChanged field or a
-    nested schema.
+    The members of each capability object are free and are not read.
     """
-    leaves = walk_json_leaves(result)
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"initialize result is not a JSON object: {result!r}")
+    capabilities = result.get("capabilities")
+    assert isinstance(capabilities, Mapping), (
+        f"initialize result capabilities is not an object: {result!r}"
+    )
     missing = [
-        name for name in ("tools", "resources", "prompts") if name not in leaves
+        name
+        for name in ("tools", "resources", "prompts")
+        if not isinstance(capabilities.get(name), Mapping)
     ]
     print(
-        f"[F09] initialize advertises tools/resources/prompts missing={missing!r}",
+        f"[F09] initialize capabilities missing object members={missing!r}",
         flush=True,
     )
     assert not missing, (
-        "initialize result does not advertise capabilities "
-        f"{missing!r}; walked leaves={sorted(leaves, key=str)!r}"
+        "initialize result capabilities does not carry object members "
+        f"{missing!r}; capabilities={capabilities!r}"
     )
 
 
-def walk_json_leaves(obj: Any) -> frozenset[Any]:
-    """Strings, numbers, and booleans from values and object keys.
-
-    Raises on an unclassified Python value. JSON null contributes nothing.
-    """
-    collected: set[Any] = set()
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, str):
-            collected.add(value)
-            return
-        if isinstance(value, bool):
-            collected.add(value)
-            return
-        if isinstance(value, (int, float)):
-            collected.add(value)
-            return
-        if value is None:
-            return
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    raise HarnessError(
-                        f"JSON object key is not a string: {key!r}"
-                    )
-                collected.add(key)
-                _walk(item)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-            for item in value:
-                _walk(item)
-            return
-        raise HarnessError(
-            f"value is not a walkable JSON leaf container: {type(value).__name__}"
-        )
-
-    _walk(obj)
-    return frozenset(collected)
-
-
 def require_empty_ping(reply: Mapping[str, Any]) -> Any:
-    """Ping is a JSON-RPC success with a present result whose leftover leaf set is empty.
+    """Ping is a JSON-RPC success whose ``result`` is the empty object ``{}``.
 
     A reply that only echoes the request id (no result member) is not an
-    empty result. JSON null and a JSON object with no leftover string,
-    number, or boolean leaves (values and keys) are both empty encodings;
-    do not pin one.
+    empty result.
     """
     if mcp_is_protocol_error(reply):
         raise AssertionError(
@@ -444,124 +401,68 @@ def require_empty_ping(reply: Mapping[str, Any]) -> Any:
             f"id alone is not an empty result; reply={reply!r}"
         )
     result = reply.get("result")
-    leaves = walk_json_leaves(result)
-    print(f"[F09] ping leftover leaves={sorted(leaves, key=str)!r}", flush=True)
-    assert not leaves, (
-        "ping result leftover set after walking strings, numbers, and "
-        f"booleans (values and keys) is not empty; leaves={sorted(leaves, key=str)!r} "
-        f"reply={reply!r}"
+    print(f"[F09] ping result={result!r}", flush=True)
+    assert isinstance(result, Mapping) and len(result) == 0, (
+        f"ping result is not the empty object {{}}; reply={reply!r}"
     )
     return result
 
 
 def listed_tool_names(result: Any) -> frozenset[str]:
-    """Tool identities listed on a ``tools/list`` success result.
+    """Tool names from a ``tools/list`` result's ``tools`` array (each item's ``name``).
 
-    Exact ``membundle_*`` string values (not keys, not substrings of a description)
-    are the listed identities. An extra mutation identity fails. An array of
-    tool objects whose length is not six fails "exactly six".
+    The array has exactly six items with six distinct names; an extra tool
+    object of any name fails.
     """
-    if result is None:
-        raise HarnessError("tools/list result is missing; cannot list tools")
-    values = record_string_values(result)
-    names = {value for value in values if value in SIX_TOOL_NAMES}
-    extra = {
-        value
-        for value in values
-        if isinstance(value, str)
-        and _MEMBUNDLE_TOOL_IDENT.match(value)
-        and value not in SIX_TOOL_NAMES
-    }
-    listing_lengths: list[int] = []
-
-    def _direct_six(obj: Mapping[str, Any]) -> bool:
-        return any(
-            isinstance(value, str) and value in SIX_TOOL_NAMES
-            for value in obj.values()
-        )
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for item in value.values():
-                _walk(item)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            if value and all(isinstance(item, Mapping) for item in value):
-                if any(_direct_six(item) for item in value):
-                    listing_lengths.append(len(value))
-            for item in value:
-                _walk(item)
-            return
-        if value is None or isinstance(value, (str, bool, int, float)):
-            return
-        raise HarnessError(
-            f"tools/list result is not walkable JSON: {type(value).__name__}"
-        )
-
-    _walk(result)
-    print(
-        f"[F09] listed tools={sorted(names)} extras={sorted(extra)} "
-        f"array_lengths={listing_lengths}",
-        flush=True,
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"tools/list result is not a JSON object: {result!r}")
+    tools = result.get("tools")
+    assert isinstance(tools, list), (
+        f"tools/list result has no tools array: {result!r}"
     )
+    names: list[str] = []
+    for item in tools:
+        assert isinstance(item, Mapping) and isinstance(item.get("name"), str), (
+            f"tools/list item is not an object with a string name: {item!r}"
+        )
+        names.append(item["name"])
+    print(f"[F09] listed tools={names!r}", flush=True)
+    assert len(names) == len(set(names)), (
+        f"tools/list repeats a tool name; names={names!r}"
+    )
+    extra = sorted(set(names) - SIX_TOOL_NAMES)
     if extra:
         raise AssertionError(
-            "tools/list includes additional memory-mutation tool identities "
-            f"{sorted(extra)!r}; listed={sorted(names)!r}"
+            "tools/list includes additional tool names "
+            f"{extra!r}; listed={names!r}"
         )
-    if listing_lengths and any(length != 6 for length in listing_lengths):
+    if len(tools) != 6:
         raise AssertionError(
-            "tools/list array of tool objects is not exactly six long; "
-            f"lengths={listing_lengths!r} names={sorted(names)!r}"
+            "tools/list tools array is not exactly six long; "
+            f"length={len(tools)} names={names!r}"
         )
     return frozenset(names)
 
 
-def assert_json_arrays_empty(result: Any) -> list[int]:
-    """Success result contains a JSON array of length 0, and every reachable JSON array has length 0.
+def assert_json_arrays_empty(result: Any, key: str) -> list[Any]:
+    """Success result is an object whose *key* member is the empty array ``[]``.
 
-    A protocol error is not an empty collection. An empty object, a null
-    member, or a non-array result with no nested array is not an empty
-    collection (L271). Do not pin a key name.
+    A protocol error is not an empty collection; neither is an empty
+    object, a null member, or a missing member. Other members are free.
     """
     if isinstance(result, Mapping) and mcp_is_protocol_error(result):
         raise AssertionError(
             "protocol error is not an empty collection; "
             f"reply={result!r}"
         )
-    lengths: list[int] = []
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for item in value.values():
-                _walk(item)
-            return
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            lengths.append(len(value))
-            for item in value:
-                _walk(item)
-            return
-        if value is None or isinstance(value, (str, bool, int, float)):
-            return
-        raise HarnessError(
-            f"collection result is not walkable JSON: {type(value).__name__}"
-        )
-
-    _walk(result)
-    print(f"[F09] reachable array lengths={lengths}", flush=True)
-    if not lengths:
-        raise AssertionError(
-            "success result contains no JSON array collection of length 0; "
-            "an empty object, a null member, or a non-array result is not "
-            "an empty collection; "
-            f"result={result!r}"
-        )
-    if any(length != 0 for length in lengths):
-        raise AssertionError(
-            "a reachable JSON array is not empty; "
-            f"lengths={lengths!r} result={result!r}"
-        )
-    return lengths
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"list result is not a JSON object: {result!r}")
+    value = result.get(key)
+    print(f"[F09] list result {key}={value!r}", flush=True)
+    assert isinstance(value, list) and len(value) == 0, (
+        f"list result member {key!r} is not the empty array []; result={result!r}"
+    )
+    return value
 
 
 def assert_request_reply_count(
@@ -591,7 +492,10 @@ def assert_request_reply_count(
 
 
 def require_tool_error_not_protocol(reply: Mapping[str, Any]) -> tuple[Any, str]:
-    """Tool-error channel: MCP tool error, not a JSON-RPC protocol error."""
+    """Tool-error channel: result ``isError`` true, not a JSON-RPC protocol error.
+
+    Returns the result object and the text of its first content item.
+    """
     if mcp_is_protocol_error(reply):
         raise AssertionError(
             "failure used a JSON-RPC protocol error instead of the MCP "
@@ -601,11 +505,14 @@ def require_tool_error_not_protocol(reply: Mapping[str, Any]) -> tuple[Any, str]
         "reply is not marked as a tool error; a JSON-RPC success (including "
         f"an empty result) is not this class; reply={reply!r}"
     )
-    return mcp_payload_and_text(reply)
+    return reply.get("result"), tool_result_text(reply)
 
 
 def require_tool_success(reply: Mapping[str, Any]) -> tuple[Any, str]:
-    """tools/call JSON-RPC result that is not a tool error and not a protocol error."""
+    """tools/call JSON-RPC result that is not a tool error and not a protocol error.
+
+    Returns the result object and the text of its first content item.
+    """
     if mcp_is_protocol_error(reply):
         raise AssertionError(
             f"tools/call returned a JSON-RPC protocol error; reply={reply!r}"
@@ -615,54 +522,72 @@ def require_tool_success(reply: Mapping[str, Any]) -> tuple[Any, str]:
             f"tools/call marked a tool error on a success path; reply={reply!r}"
         )
     if "result" not in reply:
-        raise HarnessError(
+        raise AssertionError(
             f"tools/call success reply has no result member: {reply!r}"
         )
-    return mcp_payload_and_text(reply)
+    return reply.get("result"), tool_result_text(reply)
 
 
-def tool_error_remainder(
-    reply: Mapping[str, Any],
-    strip_tokens: Sequence[str],
-) -> str:
-    """Tool-error payload/text after stripping named covariates. Raises if not."""
-    _payload, text = require_tool_error_not_protocol(reply)
-    if not isinstance(text, str):
-        raise HarnessError(
-            f"tool-error text is not a string; cannot strip: {text!r}"
-        )
-    remainder = text
-    ordered = sorted({tok for tok in strip_tokens if tok}, key=len, reverse=True)
-    for tok in ordered:
-        remainder = remainder.replace(tok, "")
-        escaped = json.dumps(tok)
-        if len(escaped) >= 2 and escaped[0] == '"' and escaped[-1] == '"':
-            inner = escaped[1:-1]
-            if inner:
-                remainder = remainder.replace(inner, "")
-    remainder = _WHITESPACE.sub(" ", remainder).strip()
-    print(f"[F09] tool-error remainder={remainder!r}", flush=True)
-    return remainder
+def tool_result_text(reply: Mapping[str, Any]) -> str:
+    """Text of the first content item of a ``tools/call`` result.
+
+    The result is an object whose ``content`` is an array; its first item
+    is an object with ``type`` ``text`` and a string ``text``.
+    """
+    result = reply.get("result")
+    assert isinstance(result, Mapping), (
+        f"tools/call reply has no result object: {reply!r}"
+    )
+    content = result.get("content")
+    assert isinstance(content, list) and content, (
+        f"tools/call result has no non-empty content array: {reply!r}"
+    )
+    first = content[0]
+    assert (
+        isinstance(first, Mapping)
+        and first.get("type") == "text"
+        and isinstance(first.get("text"), str)
+    ), f"tools/call first content item is not a text item: {reply!r}"
+    return first["text"]
+
+
+def tool_result_json(reply: Mapping[str, Any], *, what: str) -> Any:
+    """Parse the first content item text of a tools/call result as JSON."""
+    text = tool_result_text(reply)
+    try:
+        return json.loads(text)
+    except ValueError as exc:
+        raise AssertionError(
+            f"{what} tool result text is not JSON: {exc}; text={text!r}"
+        ) from None
+
+
+def require_tool_error_prefix(reply: Mapping[str, Any], prefix: str) -> str:
+    """Tool error whose first content text begins with *prefix*."""
+    _result, text = require_tool_error_not_protocol(reply)
+    print(f"[F09] tool-error text={text!r} wanted prefix={prefix!r}", flush=True)
+    assert text.startswith(prefix), (
+        f"tool-error text does not begin {prefix!r}; text={text!r}"
+    )
+    return text
 
 
 def assert_outside_root_remainder_distinct(
     outside_reply: Mapping[str, Any],
     unknown_reply: Mapping[str, Any],
     missing_reply: Mapping[str, Any],
-    strip_tokens: Sequence[str],
+    unknown_name: str,
 ) -> None:
-    """After strip, outside-root remainder differs from unknown-tool and load-failure."""
-    outside = tool_error_remainder(outside_reply, strip_tokens)
-    unknown = tool_error_remainder(unknown_reply, strip_tokens)
-    missing = tool_error_remainder(missing_reply, strip_tokens)
-    assert outside != unknown, (
-        "outside-root tool-error remainder matches the unknown-tool remainder "
-        f"after stripping covariates; remainder={outside!r}"
-    )
-    assert outside != missing, (
-        "outside-root tool-error remainder matches the missing-inside-root "
-        f"remainder after stripping covariates; remainder={outside!r}"
-    )
+    """Outside-root, unknown-tool, and missing-bundle tool errors carry their stated prefixes.
+
+    ``Path traversal denied: `` for the outside-root bundle,
+    ``Unknown tool: <name>`` for the unknown tool, and
+    ``Failed to load bundle from `` for the missing inside-root bundle, so
+    the outside-root failure is distinct from the other two classes.
+    """
+    require_tool_error_prefix(outside_reply, "Path traversal denied: ")
+    require_tool_error_prefix(unknown_reply, f"Unknown tool: {unknown_name}")
+    require_tool_error_prefix(missing_reply, "Failed to load bundle from ")
 
 
 def batch_blob(batch: McpBatchResult) -> str:
@@ -704,40 +629,139 @@ def assert_token_present_in_text(text: str, token: str) -> None:
     )
 
 
-def classify_search(batch: McpBatchResult, request_id: int | str) -> McpSearchOutcome:
-    """Wrap a ``tools/call`` membundle_search reply as the sealed F04 search outcome."""
+def mcp_search_hits(batch: McpBatchResult, request_id: int | str) -> list[dict[str, Any]]:
+    """``membundle_search`` success: the tool text is a JSON array of hit objects.
+
+    Not a protocol error and not a tool error. Each hit is an object with a
+    string ``concept_id``. Zero hits is ``[]``.
+    """
     reply = mcp_reply_for_id(batch, request_id)
-    payload, report_text = mcp_payload_and_text(reply)
-    return McpSearchOutcome(
-        batch=batch, reply=reply, payload=payload, report_text=report_text
+    if mcp_is_protocol_error(reply):
+        raise AssertionError(
+            f"membundle_search returned a protocol error instead of a hit list: "
+            f"{reply!r}"
+        )
+    if mcp_is_tool_error(reply):
+        raise AssertionError(
+            f"membundle_search marked a tool error on a successful search: {reply!r}"
+        )
+    hits = tool_result_json(reply, what="membundle_search")
+    assert isinstance(hits, list), (
+        f"membundle_search tool text is not a JSON array: {hits!r}"
     )
+    for hit in hits:
+        assert isinstance(hit, Mapping) and isinstance(hit.get("concept_id"), str), (
+            f"membundle_search hit is not an object with a string concept_id: {hit!r}"
+        )
+    print(
+        f"[F09] search id={request_id!r} hits={[h['concept_id'] for h in hits]!r}",
+        flush=True,
+    )
+    return hits
+
+
+def hit_ids(hits: Sequence[Mapping[str, Any]]) -> list[str]:
+    """``concept_id`` of each hit, in rank order."""
+    return [hit["concept_id"] for hit in hits]
+
+
+def ordered_fixture_hit_ids(
+    hits: Sequence[Mapping[str, Any]], expected: Sequence[str]
+) -> list[str]:
+    """Rank-ordered ``concept_id`` values; each is a fixture identity, none repeats."""
+    ids = hit_ids(hits)
+    for ident in ids:
+        assert ident in expected, (
+            f"hit concept_id {ident!r} is not one of the seeded identities"
+        )
+    assert len(ids) == len(set(ids)), f"a concept_id repeats among hits: {ids!r}"
+    return ids
+
+
+def require_empty_search(batch: McpBatchResult, request_id: int | str) -> list[Any]:
+    """``membundle_search`` success whose hit array is ``[]``."""
+    hits = mcp_search_hits(batch, request_id)
+    assert hits == [], f"membundle_search returned hits where none fit: {hits!r}"
+    return hits
 
 
 def require_search_hits_identity(
     batch: McpBatchResult, request_id: int | str, identity: str
 ) -> list[Any]:
-    """Classified membundle_search hit list whose records carry *identity*."""
-    records = require_mcp_search_success(classify_search(batch, request_id))
+    """membundle_search hit array has a hit whose ``concept_id`` is *identity*."""
+    hits = mcp_search_hits(batch, request_id)
+    assert identity in hit_ids(hits), (
+        "membundle_search success hit list has no hit whose concept_id is the "
+        f"seeded identity {identity!r}; hits={hits!r}"
+    )
+    return hits
+
+
+def mcp_validate_report(batch: McpBatchResult, request_id: int | str) -> dict[str, Any]:
+    """``membundle_validate`` report: the tool text is one JSON object.
+
+    Reads the stated members ``concept_count`` (integer), ``warnings``
+    (array of strings), ``orphans`` (array or null), ``is_conformant`` and
+    ``gate_passed`` (booleans). A protocol error is not a report.
+    """
+    reply = mcp_reply_for_id(batch, request_id)
+    if mcp_is_protocol_error(reply):
+        raise AssertionError(
+            "membundle_validate returned a JSON-RPC protocol error instead of a "
+            f"validate report; reply={reply!r}"
+        )
+    report = tool_result_json(reply, what="membundle_validate")
+    assert isinstance(report, dict), (
+        f"membundle_validate tool text is not a JSON object: {report!r}"
+    )
+    count = report.get("concept_count")
+    assert isinstance(count, int) and not isinstance(count, bool), (
+        f"validate report concept_count is not an integer: {report!r}"
+    )
+    for key in ("is_conformant", "gate_passed"):
+        assert isinstance(report.get(key), bool), (
+            f"validate report {key} is not a boolean: {report!r}"
+        )
+    warnings = report.get("warnings")
+    assert isinstance(warnings, list) and all(
+        isinstance(item, str) for item in warnings
+    ), f"validate report warnings is not an array of strings: {report!r}"
+    orphans = report.get("orphans")
+    assert orphans is None or (
+        isinstance(orphans, list) and all(isinstance(i, str) for i in orphans)
+    ), f"validate report orphans is not an array of strings or null: {report!r}"
     print(
-        f"[F09] search identity {identity!r} in_records="
-        f"{identity_in_records(records, identity)}",
+        f"[F09] validate id={request_id!r} concept_count={count} "
+        f"is_conformant={report['is_conformant']} gate_passed={report['gate_passed']} "
+        f"orphans={orphans!r} warnings={warnings!r}",
         flush=True,
     )
-    assert identity_in_records(records, identity), (
-        "membundle_search success hit list has no record carrying the seeded "
-        f"identity {identity!r}; records={records!r}"
+    return report
+
+
+def assert_report_conformant_gate_fail(report: Mapping[str, Any]) -> None:
+    """``is_conformant`` true and ``gate_passed`` false."""
+    assert report["is_conformant"] is True and report["gate_passed"] is False, (
+        "expected a conformant report whose producer gate failed; "
+        f"is_conformant={report['is_conformant']!r} "
+        f"gate_passed={report['gate_passed']!r}"
     )
-    return records
 
 
-def classify_validate(
-    batch: McpBatchResult, request_id: int | str
-) -> McpValidateOutcome:
-    """Wrap a ``tools/call`` membundle_validate reply as the sealed F08 validate outcome."""
-    reply = mcp_reply_for_id(batch, request_id)
-    payload, report_text = mcp_payload_and_text(reply)
-    return McpValidateOutcome(
-        batch=batch, reply=reply, payload=payload, report_text=report_text
+def assert_report_both_pass(report: Mapping[str, Any]) -> None:
+    """``is_conformant`` true and ``gate_passed`` true."""
+    assert report["is_conformant"] is True and report["gate_passed"] is True, (
+        "expected a conformant report whose producer gate passed; "
+        f"is_conformant={report['is_conformant']!r} "
+        f"gate_passed={report['gate_passed']!r}"
+    )
+
+
+def assert_orphan_listed(report: Mapping[str, Any], identity: str) -> None:
+    """*identity* is one of the report's ``orphans``."""
+    orphans = report.get("orphans") or []
+    assert identity in orphans, (
+        f"validate report orphans does not list {identity!r}; orphans={orphans!r}"
     )
 
 

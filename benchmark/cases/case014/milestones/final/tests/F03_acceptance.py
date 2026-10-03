@@ -334,7 +334,7 @@ def test_default_mag_rate_limit_not_every_100hz_sample():
     )
     t0 = base[-1].t_us
     none_scen = aiding_site(lat, lon, h, none, origin_ecef=origin, magnetic_n=mag_n)
-    # Zero delay field → built-in 1 s default (L78 / L175).
+    # Zero delay field → built-in 1 s default.
     def_scen = aiding_site(lat, lon, h, default, origin_ecef=origin, magnetic_n=mag_n)
     unl_scen = aiding_site(
         lat, lon, h, unlimited, origin_ecef=origin, magnetic_n=mag_n, mag_min_delay_ms=-1

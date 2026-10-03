@@ -44,7 +44,7 @@ from F02_helpers import (
 from F03_helpers import G_MPS2, still_level_acc
 from F08_helpers import MODE_FULL
 
-# Named 30 s mixed-unit pad (L386). Dump/series observation is an instrument
+# Named 30 s mixed-unit pad. Dump/series observation is an instrument
 # channel, not a stdout spelling contract.
 NAMED_PAD_S = 30.0
 PAD_NEAR_M = 25.0
@@ -52,7 +52,7 @@ OTHER_SITE_M = 5.0e4
 SERIES_MIN_FRAC = 0.08
 UNKNOWN_AIDING = "not-a-mode"
 DUMP_EVERY_EPOCH = ["--dump-solution-hz=0"]
-# Shared known-schema radio-link block (L382 / L392 / L398). Input schema
+# Shared known-schema radio-link block. Input schema
 # for the foreign section both harnesses accept and ignore; not a stdout
 # spelling contract. Original-world name; C0 rewrites identity.
 RADIO_LINK_SECTION = "crazyflie"
@@ -838,13 +838,10 @@ def finite_rpy(series: ReplaySeries, what: str) -> None:
     assert n > 2, f"{what}: ARS attitude was not published across the log"
 
 
-def _header_index(header: Sequence[str], *needles: str) -> int | None:
-    lowered = [h.strip().lower() for h in header]
-    for needle in needles:
-        for i, name in enumerate(lowered):
-            if needle in name:
-                return i
-    return None
+def _header_index(header: Sequence[str], name: str) -> int | None:
+    """Index of the column whose header is exactly *name* (Contract section 6)."""
+    names = [h.strip() for h in header]
+    return names.index(name) if name in names else None
 
 
 def _finite_cell(row: Sequence[str], index: int | None) -> float | None:
@@ -892,25 +889,23 @@ def parse_runner_solution(path: Path) -> tuple[RunnerEpoch, ...]:
             f"runner solution has no header naming mode/lat/lon/height: {path}"
         )
     i_mode = _header_index(header, "mode")
-    i_t = _header_index(header, "t_us", "time")
-    i_lat = _header_index(header, "lat")
-    i_lon = _header_index(header, "lon")
-    i_h = _header_index(header, "h_ell", "alt", "h_m")
-    if i_h is None:
-        i_h = _header_index(header, "height_ell")
-    i_n = _header_index(header, "pos_n", "north")
-    i_e = _header_index(header, "pos_e", "east")
-    i_d = _header_index(header, "pos_d", "down")
-    i_vn = _header_index(header, "vel_n")
-    i_ve = _header_index(header, "vel_e")
-    i_vd = _header_index(header, "vel_d")
-    i_roll = _header_index(header, "roll")
-    i_pitch = _header_index(header, "pitch")
-    i_yaw = _header_index(header, "yaw")
+    i_t = _header_index(header, "t_us")
+    i_lat = _header_index(header, "lat_deg")
+    i_lon = _header_index(header, "lon_deg")
+    i_h = _header_index(header, "h_ell_m")
+    i_n = _header_index(header, "pos_n_m")
+    i_e = _header_index(header, "pos_e_m")
+    i_d = _header_index(header, "pos_d_m")
+    i_vn = _header_index(header, "vel_n_mps")
+    i_ve = _header_index(header, "vel_e_mps")
+    i_vd = _header_index(header, "vel_d_mps")
+    i_roll = _header_index(header, "roll_deg")
+    i_pitch = _header_index(header, "pitch_deg")
+    i_yaw = _header_index(header, "yaw_deg")
     i_arb = _header_index(header, "height_m")
-    if i_arb is None:
-        i_arb = _header_index(header, "height")
     missing = []
+    if i_t is None:
+        missing.append("t_us")
     if i_mode is None:
         missing.append("mode")
     if i_lat is None or i_lon is None or i_h is None:
@@ -934,7 +929,7 @@ def parse_runner_solution(path: Path) -> tuple[RunnerEpoch, ...]:
         mode = raw[i_mode].strip() if i_mode < len(raw) else ""
         if not mode:
             note_product_issue("F10", f"runner row has no mode: {raw!r}")
-        t_raw = raw[i_t].strip() if i_t is not None and i_t < len(raw) else raw[0]
+        t_raw = raw[i_t].strip() if i_t < len(raw) else ""
         try:
             t_us = int(float(t_raw))
         except ValueError as exc:

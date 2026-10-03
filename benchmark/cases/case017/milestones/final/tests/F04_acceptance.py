@@ -732,12 +732,12 @@ def test_first_set_on_borrowed_3000_buffer_is_on_the_bitmap_and_second_open_omit
 # ---------------------------------------------------------------------------
 
 
-def test_own_open_set_that_keeps_the_allocation_mutates_those_bytes_and_release_frees():
+def test_own_open_emits_handed_allocation_then_same_prefix_set_is_present_and_release_frees():
     # Before any set, the emitted view is the allocation the caller handed
     # over. A later set must make the new value present and raise cardinality
-    # by one. Whether that value fits in the original allocation is not
-    # scored: the handed bytes are not compared, and that pointer is not
-    # reopened. Release returns the allocator to the pre-open baseline.
+    # by one, and keep every original value. Whether that value fits in the
+    # original allocation is the implementer's choice, so the handed bytes are
+    # not compared and that pointer is not reopened. Release returns the allocator to the pre-open baseline.
     prefix, seed = prefix_seed_f04()
     extra = same_prefix_candidates_f04(prefix, seed, limit=1)[0]
     ordered = sorted(seed)

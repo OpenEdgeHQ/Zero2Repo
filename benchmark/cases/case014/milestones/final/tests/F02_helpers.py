@@ -29,7 +29,7 @@ from F01_helpers import (
 )
 
 # ---------------------------------------------------------------------------
-# Published numeric oracles (PRD L147, L154)
+# Fixed inputs and tolerances
 # ---------------------------------------------------------------------------
 
 ORIGIN_NORM_MIN_M = 1000.0
@@ -1030,7 +1030,6 @@ def _run_probe(kind: str, scen: InsScenario) -> InsRun:
         result = invoke(_C_PROBE, stdin=payload, timeout=LONG_TIMEOUT)
     elif kind == "py":
         ident = product_identity()
-        # TEST-FIX(F02): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config and Ins; python/INSLIB/_core.py:54 loads libINSLIB.so from that directory
         assert ident is not None, "python package directory was not found after make pylib"
         package = ident.package_name
         assert package.isidentifier(), f"discovered package name is not importable: {package!r}"

@@ -10,7 +10,7 @@ from F01_helpers import (
     assert_fired,
     assert_not_fired,
     assert_only_rule,
-    require_copy_success,
+    require_copied_layout,
     snippet_no_chained_type_assertions,
     snippet_no_known_value_widening,
     snippet_no_widen_then_assert,
@@ -141,7 +141,7 @@ from F03_helpers import (
 def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
-        specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
         print(f"F03 copied specifier={specifier}", flush=True)
         yield ws, specifier
 
@@ -1425,7 +1425,7 @@ def test_fix_mode_leaves_unjustified_assertion_in_place_and_still_reports(
     assert_only_rule(result, RULE_SAFE)
 
 
-def test_fix_mode_leaves_non_oracle_chained_widening_widen_and_safety_violators_in_place(
+def test_fix_mode_leaves_further_chained_widening_widen_and_safety_violators_in_place(
     copied_plugin,
 ):
     ws, specifier = copied_plugin

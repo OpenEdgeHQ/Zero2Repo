@@ -31,18 +31,16 @@ from F01_helpers import (
     assert_index_structure,
     combined_report,
     first_heading_text,
-    report_remainder_after_stripping_paths,
     split_yaml_frontmatter,
     stage_writable_sources,
-    strip_generated_covariates,
     utc_dates_spanning_invoke,
 )
 
-# Exact HTML delimiter comments named by the PRD (L36, L69, L109).
+# Exact HTML delimiter comments named by the PRD.
 BEGIN_MEMBUNDLE_COMMENT = "<!-- BEGIN MEMBUNDLE AGENT MEMORY -->"
 END_MEMBUNDLE_COMMENT = "<!-- END MEMBUNDLE AGENT MEMORY -->"
 
-# Six skill documents under .agents/skills/membundle-memory/ (L67, L108).
+# Six skill documents under .agents/skills/membundle-memory/.
 SKILL_FILENAMES = (
     "SKILL.md",
     "discovery.md",
@@ -52,7 +50,7 @@ SKILL_FILENAMES = (
     "examples.md",
 )
 
-# Success-report identities for the four bootstrap components (L112).
+# Success-report identities for the four bootstrap components.
 COMPONENT_KNOWLEDGE = "knowledge"
 COMPONENT_SKILL = "membundle-memory"
 COMPONENT_AGENTS = "AGENTS.md"
@@ -81,12 +79,10 @@ _BUILT_BIN: Path | None = None
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _run_product_build(root: Path) -> None:
@@ -191,12 +187,12 @@ def run_bootstrap(
     print(f"[F02] bootstrap extra_args={list(extra_args)!r} cwd={cwd!r}", flush=True)
     binary = _workdir_membundle()
     if binary is None:
-        # TEST-FIX(F02): upstream _harness.py:620 shows FileNotFoundError before bootstrap when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        # TEST-FIX(F02): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
         return _bootstrap_without_executable(ws, args, cwd)
     try:
         return ws.invoke(args, env_updates=env_updates, cwd=cwd, binary=binary)
     except FileNotFoundError:
-        # TEST-FIX(F02): upstream _harness.py:620 shows FileNotFoundError before bootstrap when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+        # TEST-FIX(F02): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
         if binary.is_file() and os.access(binary, os.X_OK):
             raise
         return _bootstrap_without_executable(ws, args, cwd)
@@ -217,59 +213,118 @@ def run_bootstrap_with_dates(
     return result, utc_dates_spanning_invoke(before, after)
 
 
-def report_names_component(report: str, component: str) -> bool:
-    """True when *report* names one of the four component identities.
+# Contract Output forms, ``bootstrap``: component token printed after
+# two spaces and ``- `` on each component line, in the stated order.
+COMPONENT_TOKENS = {
+    COMPONENT_KNOWLEDGE: "knowledge/",
+    COMPONENT_SKILL: ".agents/skills/membundle-memory/",
+    COMPONENT_AGENTS: "AGENTS.md",
+    COMPONENT_MAKEFILE: "Makefile",
+}
+BOOTSTRAP_CREATED_LINE = "Created:"
+_COMPONENT_LINE_PREFIX = "  - "
 
-    Skill identity matches ``.agents/skills/membundle-memory`` or ``membundle-memory``.
-    Raises ``HarnessError`` on an empty report (cannot classify).
+
+def bootstrap_named_path(result: RunResult) -> str:
+    """The project path this test passed to ``bootstrap`` (``.`` when omitted).
+
+    Read from the test's own argument vector, not from product output.
     """
-    if not report:
-        raise HarnessError(
-            "cannot classify a component identity in an empty report"
+    args = list(result.argv[2:])
+    if args and not args[0].startswith("-"):
+        return args[0]
+    return "."
+
+
+def bootstrap_report_components(report: str, path: str) -> list[str]:
+    """Component identities listed by a ``bootstrap`` success report, in order.
+
+    Contract Output forms, ``bootstrap``: a first line that contains
+    ``'<path>'`` (other wording free), then
+    ``Created:``, then one line per not-skipped component: two spaces,
+    ``- ``, then the component token (rest of the line free). Later lines
+    never begin with two spaces and ``- ``. Raises ``AssertionError`` when
+    the report does not have that form.
+    """
+    lines = report.split("\n")
+    first = f"'{path}'"
+    if len(lines) < 2 or first not in lines[0] or lines[1] != BOOTSTRAP_CREATED_LINE:
+        raise AssertionError(
+            f"bootstrap success report does not begin with a line containing "
+            f"{first!r} and a {BOOTSTRAP_CREATED_LINE!r} line: {report!r}"
         )
-    if component in {COMPONENT_SKILL, ".agents/skills/membundle-memory"}:
-        present = (
-            ".agents/skills/membundle-memory" in report or COMPONENT_SKILL in report
+    found: list[str] = []
+    index = 2
+    while index < len(lines) and lines[index].startswith(_COMPONENT_LINE_PREFIX):
+        rest = lines[index][len(_COMPONENT_LINE_PREFIX):]
+        matched = [
+            component
+            for component, token in COMPONENT_TOKENS.items()
+            if rest.startswith(token)
+        ]
+        if len(matched) != 1:
+            raise AssertionError(
+                f"component line {lines[index]!r} does not begin with one of "
+                f"the component tokens {list(COMPONENT_TOKENS.values())!r}"
+            )
+        found.append(matched[0])
+        index += 1
+    trailing = [
+        line for line in lines[index:] if line.startswith(_COMPONENT_LINE_PREFIX)
+    ]
+    if trailing:
+        raise AssertionError(
+            f"bootstrap success report has component-shaped lines after the "
+            f"component list: {trailing!r}"
         )
-    else:
-        present = component in report
-    print(f"[F02] report names {component!r}: {present}", flush=True)
-    return present
+    print(f"[F02] report component lines={found!r}", flush=True)
+    return found
+
+
+def report_names_component(report: str, component: str, path: str = ".") -> bool:
+    """True when the report's ``Created:`` list has a line for *component*."""
+    return component in bootstrap_report_components(report, path)
 
 
 def require_bootstrap_success(
     result: RunResult,
     expected_components: Sequence[str],
 ) -> str:
-    """Success carrier: POSIX success plus a report of the not-skipped set."""
-    report = combined_report(result)
+    """Success carrier: status 0 and the stated report listing exactly the not-skipped set.
+
+    The component lines must be exactly *expected_components* in the stated
+    order (knowledge, skill, ``AGENTS.md``, ``Makefile``); a skipped component
+    has no line. Standard error is empty. Returns standard output.
+    """
+    report = result.stdout_text
+    stderr = result.stderr_text
     print(
-        f"[F02] success-carrier exit={result.returncode} report={report!r}",
+        f"[F02] success-carrier exit={result.returncode} stdout={report!r} "
+        f"stderr={stderr!r}",
         flush=True,
     )
     if result.returncode != 0:
         raise AssertionError(
             f"bootstrap did not end successfully (exit {result.returncode}); "
-            f"report={report!r}"
+            f"stdout={report!r} stderr={stderr!r}"
         )
-    if not report:
-        raise AssertionError("bootstrap succeeded but reported nothing")
-    missing = [
-        component
-        for component in expected_components
-        if not report_names_component(report, component)
-    ]
-    if missing:
+    if stderr:
         raise AssertionError(
-            "bootstrap success report does not name each not-skipped "
-            f"component {list(expected_components)!r}; missing {missing!r}; "
+            f"bootstrap success wrote on standard error: {stderr!r}"
+        )
+    listed = bootstrap_report_components(report, bootstrap_named_path(result))
+    expected = [c for c in ALL_COMPONENTS if c in set(expected_components)]
+    if listed != expected:
+        raise AssertionError(
+            "bootstrap success report component lines are not exactly the "
+            f"not-skipped components {expected!r} in order; listed {listed!r}; "
             f"report={report!r}"
         )
     return report
 
 
 def require_bootstrap_failure(result: RunResult) -> RunResult:
-    """Failure carrier: non-success status (L114). Streams are not required."""
+    """Failure carrier: non-success status. Streams are not required."""
     report = combined_report(result)
     print(
         f"[F02] failure-carrier exit={result.returncode} report={report!r}",
@@ -391,7 +446,7 @@ def _block_has_validation_before_exit(stripped: str) -> bool:
 
 
 def assert_delimited_block_contents(block: str) -> None:
-    """L109/L121: extracted inner holds the three named duties.
+    """extracted inner holds the three named duties.
 
     After Markdown markers are stripped, a search-before-write invariant,
     a governance guard clause, and a completion pipeline that requires
@@ -435,7 +490,7 @@ def assert_delimited_block_contents(block: str) -> None:
 
 
 def assert_agents_file_missing_write(path: str | Path, project_name: str) -> None:
-    """Missing-file / overwrite write: delimiters, name, L109 block contents."""
+    """Missing-file / overwrite write: delimiters, name, block contents."""
     agents_path = Path(path)
     if not path_is_file(agents_path):
         raise AssertionError(f"missing AGENTS.md at {agents_path}")
@@ -547,7 +602,7 @@ def assert_bootstrap_log(
     log_path: str | Path,
     allowed_dates: frozenset[str] | None = None,
 ) -> None:
-    """UTC ISO date heading plus a list item under that section (L107).
+    """UTC ISO date heading plus a list item under that section.
 
     The date heading is not required to be the first heading in the file.
     """
@@ -634,7 +689,7 @@ def _is_recipe_continuation(line: str) -> bool:
 
 
 def assert_makefile_has_recipes(makefile_path: str | Path) -> None:
-    """At least one command-bearing recipe line (L110)."""
+    """At least one command-bearing recipe line."""
     path = Path(makefile_path)
     if not path_is_file(path):
         raise AssertionError(f"missing Makefile at {path}")
@@ -725,7 +780,7 @@ def _recipes_have_search_of_bundle(observable: str) -> bool:
 
 
 def assert_makefile_convenience_tasks(makefile_path: str | Path) -> None:
-    """L110: written Makefile recipes include both named convenience duties.
+    """written Makefile recipes include both named convenience duties.
 
     Command-bearing recipes must include strict-and-drift validation on
     knowledge/ and search of that bundle. The two duties may share one
@@ -814,149 +869,30 @@ def run_agents_md_detection_contrast(
     return before, after, baseline_text
 
 
-_MAKEFILE_TOKEN = re.compile(r"[A-Za-z0-9_.+-]+")
-_DO_AUX = frozenset({"do", "does", "did"})
-_INSTALL_VERBS = frozenset({
-    "install",
-    "installed",
-    "installing",
-    "create",
-    "created",
-    "creating",
-    "write",
-    "wrote",
-    "written",
-    "writing",
-    "add",
-    "added",
-    "adding",
-    "present",
-    "presented",
-    "presenting",
-    "include",
-    "included",
-    "including",
-})
-_NEGATION_BEFORE = frozenset({
-    "not",
-    "no",
-    "never",
-    "without",
-    "skip",
-    "skips",
-    "skipped",
-    "skipping",
-    "omit",
-    "omits",
-    "omitted",
-    "omitting",
-    "absent",
-    "missing",
-    "uncreated",
-    "excluded",
-    "withheld",
-})
-_SKIP_ADJACENT = frozenset({
-    "skip",
-    "skips",
-    "skipped",
-    "skipping",
-    "omit",
-    "omits",
-    "omitted",
-    "omitting",
-    "absent",
-    "missing",
-    "uncreated",
-    "excluded",
-    "withheld",
-    "without",
-})
-
-
-def _makefile_mention_is_negated(tokens: list[str], index: int) -> bool:
-    """True when this Makefile token is a skip or a negation of the install.
-
-    A negation that merely contains the positive phrase ("not installed for
-    Makefile") is a negation. A later "not" that does not govern the install
-    ("Makefile is installed, not optional") is not.
-    """
-    for neighbor in (index - 1, index + 1):
-        if 0 <= neighbor < len(tokens) and tokens[neighbor].lower() in _SKIP_ADJACENT:
-            return True
-    for cursor in range(index + 1, min(len(tokens), index + 5)):
-        if tokens[cursor].lower() in {"not", "no", "never"}:
-            following = tokens[cursor + 1].lower() if cursor + 1 < len(tokens) else ""
-            if following in _INSTALL_VERBS:
-                return True
-    start = max(0, index - 6)
-    for cursor in range(start, index):
-        token = tokens[cursor].lower()
-        if token not in _NEGATION_BEFORE:
-            continue
-        if token in {"not", "no", "never"}:
-            previous = tokens[cursor - 1].lower() if cursor > 0 else ""
-            following = tokens[cursor + 1].lower() if cursor + 1 < len(tokens) else ""
-            if previous in _DO_AUX and following not in _INSTALL_VERBS:
-                continue
-        return True
-    return False
-
-
-def makefile_presented_as_installed(report: str) -> bool:
-    """True when some Makefile mention is an installed presentation.
-
-    Omitting the name, or mentioning it only as skipped or not installed,
-    is not an installed presentation. Field layout is not fixed.
-    """
-    if COMPONENT_MAKEFILE not in report:
-        print("[F02] Makefile install presentation: absent", flush=True)
-        return False
-    normalized = report.replace("n't", " not ")
-    clauses = re.split(r"[.!?\n;]+", normalized)
-    affirmative = False
-    for clause in clauses:
-        if COMPONENT_MAKEFILE not in clause:
-            continue
-        tokens = _MAKEFILE_TOKEN.findall(clause)
-        indexes = [i for i, token in enumerate(tokens) if token == COMPONENT_MAKEFILE]
-        if not indexes:
-            continue
-        if any(not _makefile_mention_is_negated(tokens, i) for i in indexes):
-            affirmative = True
-            break
-    print(
-        f"[F02] Makefile install presentation affirmative={affirmative}",
-        flush=True,
-    )
-    return affirmative
-
-
 def assert_skip_makefile_report_not_installed(
     full_report: str,
     skip_report: str,
     path_tokens: Sequence[str],
+    full_path: str | None = None,
+    skip_path: str | None = None,
 ) -> None:
-    """L119: full run presents Makefile as installed; the skip run does not.
+    """the full run lists ``Makefile`` as created; the skip run does not.
 
-    Live baseline is the full-run report. After stripping paths, dates,
-    wrapping, digit counters, and the skip-flag tokens, the full report
-    must still present Makefile as installed, and the skip report must
-    not. Omitting the name, or mentioning it only as skipped or not
-    installed, satisfies the skip arm. A character window around the name
-    is not the distinction, and Created: layout is not required.
+    Reads the ``Created:`` component lines of each report (Contract Output
+    forms, ``bootstrap``). *path_tokens* is accepted for call compatibility;
+    *full_path* / *skip_path* are the project paths the runs named (taken
+    from the first entry of *path_tokens* order ``(skip, full, ...)`` when
+    omitted).
     """
-    flag_tokens = ("--no-makefile", "no-makefile")
     tokens = [str(tok) for tok in path_tokens if tok]
-    full_stripped = report_remainder_after_stripping_paths(
-        strip_generated_covariates(full_report), tokens
-    )
-    skip_stripped = report_remainder_after_stripping_paths(
-        strip_generated_covariates(skip_report),
-        [*tokens, *flag_tokens],
-    )
-    full_installed = makefile_presented_as_installed(full_stripped)
-    skip_installed = makefile_presented_as_installed(skip_stripped)
+    if skip_path is None:
+        skip_path = tokens[0]
+    if full_path is None:
+        full_path = tokens[1]
+    full_listed = bootstrap_report_components(full_report, full_path)
+    skip_listed = bootstrap_report_components(skip_report, skip_path)
+    full_installed = COMPONENT_MAKEFILE in full_listed
+    skip_installed = COMPONENT_MAKEFILE in skip_listed
     print(
         f"[F02] skip-Makefile full_installed={full_installed} "
         f"skip_installed={skip_installed}",
@@ -964,11 +900,11 @@ def assert_skip_makefile_report_not_installed(
     )
     if not full_installed:
         raise AssertionError(
-            "full-run success report does not present Makefile as installed; "
+            "full-run success report has no Makefile component line; "
             f"report={full_report!r}"
         )
     if skip_installed:
         raise AssertionError(
-            "skip-Makefile success report still presents Makefile as "
-            f"installed; report={skip_report!r}"
+            "skip-Makefile success report still has a Makefile component "
+            f"line; report={skip_report!r}"
         )

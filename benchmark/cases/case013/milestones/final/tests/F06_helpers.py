@@ -47,6 +47,14 @@ from F03_helpers import (
 from F05_helpers import (
     SEED_LOG_DATE,
     _class_remainder,
+    _log_bullet_in_section,
+    mcp_first_content_text,
+    parent_index_listing_item,
+    require_cli_rejected_failure,
+    require_cli_usage_failure,
+    require_mcp_tool_error_prefix,
+    _INLINE_LINK,
+    _href_is_filename,
     _list_item_texts,
     _whole_token_present,
     assert_instant_in_invoke_window,
@@ -68,7 +76,14 @@ _KEY_LINE = re.compile(r"^[ \t]*([^:#\s][^:]*)[ \t]*:(.*)$")
 
 SEED_GENERATED_AT = "2020-01-01T00:00:00Z"
 SEED_GENERATED_BY = "seed/prior"
-PUBLIC_SAMPLE_DESC = "Use PKCE."
+# Generated one-sentence description ending with a period (fresh per process).
+def _gen_hex(n: int = 8) -> str:
+    """Runtime-unique lowercase hex (the suite's own generated sample material)."""
+    import uuid as _uuid
+
+    return _uuid.uuid4().hex[:n]
+
+SAMPLE_DESC = f"Use K{_gen_hex(6)}."
 
 # Recipe artifact name. The binary is built in a writable copy, not the judge cwd.
 _BIN_REL = Path("bin") / "membundle"
@@ -95,12 +110,10 @@ class McpUpdateOutcome:
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -215,7 +228,7 @@ def resolve_update_binary() -> Path:
     workspace.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so update never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it update never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -224,7 +237,7 @@ def _raise_if_update_binary_missing(binary: Path, exc: FileNotFoundError) -> NoR
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F06): upstream _harness.py:620 shows FileNotFoundError before update when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F06): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -330,61 +343,128 @@ def class_remainder_after_identity(
     )
 
 
+def require_update_report_line(result: RunResult, identity: str, bundle: str) -> str:
+    """Output forms, ``update`` (human): exactly one stdout line, wording free.
+
+    The line contains ``'<identity>.md'`` and ``'<bundle>'``, where
+    ``<bundle>`` is the bundle path as the caller named it (or the default
+    bundle path).
+    """
+    require_update_success(result)
+    expected = (f"'{identity}.md'", f"'{bundle}'")
+    lines = result.stdout_text.splitlines()
+    print(f"[F06] update stdout lines={lines!r} expected={expected!r}", flush=True)
+    assert len(lines) == 1 and all(part in lines[0] for part in expected), (
+        f"update human success is not one line containing {expected!r}; "
+        f"stdout={result.stdout_text!r}"
+    )
+    return lines[0]
+
+
+def require_update_not_found(result: RunResult, identity: str, what: str) -> str:
+    """Output forms, Not found: status 1, stderr line begins ``Concept '<identity>' not found``."""
+    lines = result.stderr_text.splitlines()
+    prefix = f"Concept '{identity}' not found"
+    print(
+        f"[F06] not-found {what} exit={result.returncode} stderr={lines!r} "
+        f"prefix={prefix!r}",
+        flush=True,
+    )
+    assert result.returncode == 1, (
+        f"{what}: not-found must end with status 1, got {result.returncode}; "
+        f"stderr={lines!r}"
+    )
+    assert any(line.startswith(prefix) for line in lines), (
+        f"{what}: standard error has no line that begins {prefix!r}; "
+        f"stderr={lines!r} stdout={result.stdout_text!r}"
+    )
+    return result.stderr_text
+
+
+def require_update_load_failure(result: RunResult, what: str) -> str:
+    """Output forms, Load failure: status 2, stderr line begins ``Error loading bundle: ``."""
+    lines = result.stderr_text.splitlines()
+    print(
+        f"[F06] load-failure {what} exit={result.returncode} stderr={lines!r}",
+        flush=True,
+    )
+    assert result.returncode == 2, (
+        f"{what}: load failure must end with status 2, got {result.returncode}; "
+        f"stderr={lines!r}"
+    )
+    assert any(line.startswith("Error loading bundle: ") for line in lines), (
+        f"{what}: standard error has no line that begins 'Error loading bundle: '; "
+        f"stderr={lines!r} stdout={result.stdout_text!r}"
+    )
+    return result.stderr_text
+
+
 def require_update_usage_failure(
-    result: RunResult,
-    empty_identity_report: str,
-    reserved_report: str,
-    not_found_report: str,
-    load_error_report: str,
-    success_report: str,
-    path_tokens: Sequence[str],
+    missing: RunResult,
+    empty_identity: RunResult,
+    reserved: RunResult,
+    not_found: RunResult,
+    load_error: RunResult,
+    success: RunResult,
+    *,
+    not_found_identity: str,
+    success_identity: str,
+    success_bundle: str,
 ) -> str:
-    """Missing identity: non-success, non-empty, unlike the live report classes."""
-    report = combined_report(result)
-    print(
-        f"[F06] usage-failure exit={result.returncode} report={report!r}",
-        flush=True,
-    )
-    assert result.returncode != 0, (
-        f"update with a missing identity argument succeeded; report={report!r}"
-    )
-    assert report, (
-        "update with a missing identity argument produced empty combined streams"
-    )
-    usage_rem = _class_remainder(report, path_tokens)
-    empty_rem = _class_remainder(empty_identity_report, path_tokens)
-    reserved_rem = _class_remainder(reserved_report, path_tokens)
-    not_found_rem = _class_remainder(not_found_report, path_tokens)
-    load_rem = _class_remainder(load_error_report, path_tokens)
-    success_rem = _class_remainder(success_report, path_tokens)
-    print(
-        f"[F06] usage remainder={usage_rem!r} empty={empty_rem!r} "
-        f"reserved={reserved_rem!r} not_found={not_found_rem!r} "
-        f"load={load_rem!r} success={success_rem!r}",
-        flush=True,
-    )
-    assert usage_rem != empty_rem, (
-        "missing-identity report is not distinguishable from empty-identity "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-    )
-    assert usage_rem != reserved_rem, (
-        "missing-identity report is not distinguishable from reserved-index "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-    )
-    assert usage_rem != not_found_rem, (
-        "missing-identity report is not distinguishable from not-found "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-    )
-    assert usage_rem != load_rem, (
-        "missing-identity report is not distinguishable from a load error "
-        f"after stripping paths and generated covariates; remainder={usage_rem!r}"
-    )
-    assert usage_rem != success_rem, (
-        "missing-identity report is not distinguishable from a live success "
-        f"report after stripping paths and generated covariates; "
-        f"remainder={usage_rem!r}"
-    )
+    """Missing identity is the Usage failure class; the others are their own classes.
+
+    Each outcome is read in the class the Output forms section states for
+    it: missing identity argument = Usage failure; empty and reserved
+    identity = Rejected input; absent identity = Not found; missing bundle
+    directory = Load failure; live update = the ``update`` success line.
+    """
+    report = require_cli_usage_failure(missing, "update with no identity argument")
+    require_cli_rejected_failure(empty_identity, "update of the empty identity")
+    require_cli_rejected_failure(reserved, "update of the reserved identity index")
+    require_update_not_found(not_found, not_found_identity, "update of an absent identity")
+    require_update_load_failure(load_error, "update in a missing bundle directory")
+    require_update_report_line(success, success_identity, success_bundle)
     return report
+
+
+def require_mcp_update_not_found(outcome: "McpUpdateOutcome", identity: str, what: str) -> str:
+    """Tool-level failure ``Concept '<identity>' not found``."""
+    return require_mcp_tool_error_prefix(
+        outcome.reply, f"Concept '{identity}' not found", what
+    )
+
+
+def require_mcp_update_load_failure(outcome: "McpUpdateOutcome", what: str) -> str:
+    """Tool-level failure ``Failed to load bundle from ``."""
+    return require_mcp_tool_error_prefix(
+        outcome.reply, "Failed to load bundle from ", what
+    )
+
+
+def require_mcp_update_report(
+    outcome: "McpUpdateOutcome", identity: str, bundle_dir: str
+) -> str:
+    """Output forms, ``membundle_update`` result: exactly one line, wording free.
+
+    The line contains ``<identity>.md`` and ends with `` <bundle>``, where
+    ``<bundle>`` is the absolute bundle directory (symbolic links resolved).
+    """
+    require_mcp_update_success(outcome)
+    text = mcp_first_content_text(outcome.reply)
+    line = text[:-1] if text.endswith("\n") else text
+    print(
+        f"[F06] mcp update text={text!r} identity={identity!r} bundle={bundle_dir!r}",
+        flush=True,
+    )
+    assert (
+        "\n" not in line
+        and f"{identity}.md" in line
+        and line.endswith(f" {bundle_dir}")
+    ), (
+        f"membundle_update success text is not one line containing "
+        f"{identity + '.md'!r} and ending with {' ' + bundle_dir!r}; text={text!r}"
+    )
+    return text
 
 
 def mcp_membundle_update(
@@ -496,13 +576,13 @@ def require_mcp_update_success(outcome: McpUpdateOutcome) -> str:
 
 
 def require_mcp_update_tool_error(outcome: McpUpdateOutcome) -> str:
-    """MCP update without identity: tool-error channel, not a protocol error (L196)."""
+    """MCP update without identity: tool-error channel, not a protocol error."""
     if not outcome.batch.stdout and not outcome.batch.stderr:
         raise HarnessError("membundle_update produced a silent empty transcript")
     if mcp_is_protocol_error(outcome.reply):
         raise AssertionError(
             "membundle_update without identity rejected the call as a JSON-RPC "
-            "protocol error; L196 requires that missing-identity MCP update "
+            "protocol error; the PRD requires that missing-identity MCP update "
             f"as a tool error, not a protocol error; reply={outcome.reply!r}"
         )
     assert mcp_is_tool_error(outcome.reply), (
@@ -514,7 +594,7 @@ def require_mcp_update_tool_error(outcome: McpUpdateOutcome) -> str:
 
 
 def require_mcp_update_non_success(outcome: McpUpdateOutcome) -> str:
-    """MCP update did not succeed. Tool-error vs JSON-RPC channel is not scored."""
+    """MCP update did not succeed. Tool-error vs JSON-RPC channel is not distinguished here."""
     if not outcome.batch.stdout and not outcome.batch.stderr:
         raise HarnessError("membundle_update produced a silent empty transcript")
     if mcp_is_protocol_error(outcome.reply) or mcp_is_tool_error(outcome.reply):
@@ -835,29 +915,26 @@ def listing_item_naming_concept(
     *,
     must_contain: str | None = None,
 ) -> str:
-    """The list item that names the concept. Raises if none exists."""
-    if not path_is_file(index_path):
-        raise HarnessError(f"parent index is not a file: {index_path}")
+    """The parent-index list item whose inline link target is *filename*.
+
+    Full_PRD create/update: the parent listing is a Markdown bullet whose
+    link target is the concept filename. *identity* is kept for call
+    compatibility. With *must_contain*, that item must contain it.
+    """
+    first = parent_index_listing_item(index_path, filename)
+    if must_contain is None:
+        return first
     text = read_file(index_path)
-    matches: list[str] = []
     for item in _list_item_texts(text):
-        if not _item_names_concept(item, identity, filename):
+        if must_contain not in item:
             continue
-        if must_contain is not None and must_contain not in item:
-            continue
-        matches.append(item)
-    if not matches:
-        raise AssertionError(
-            f"parent index has no list item that names {identity!r}/"
-            f"{filename!r}"
-            + (
-                f" and contains {must_contain!r}"
-                if must_contain is not None
-                else ""
-            )
-            + f"; index={text!r}"
-        )
-    return matches[0]
+        for _visible, href in _INLINE_LINK.findall(item):
+            if _href_is_filename(href, filename):
+                return item
+    raise AssertionError(
+        f"parent index has no list item linking {filename!r} that contains "
+        f"{must_contain!r}; index={text!r}"
+    )
 
 
 def _strip_listing_identity(
@@ -970,15 +1047,13 @@ def _update_item_in_section(
     title: str | None,
     path_tokens: Sequence[str],
 ) -> str | None:
-    for item in _list_item_texts(section):
-        if not _item_names_concept(item, identity, filename):
-            continue
-        remainder = _update_item_remainder(
-            item, identity, filename, title, path_tokens
-        )
-        if _whole_token_present(remainder, "Update"):
-            return item
-    return None
+    """List item in the stated Update bullet form for *identity*.
+
+    Proposed log-bullet form: the item text (after the list marker) begins
+    ``**Update**: `` and contains ``<identity>.md``. *filename*, *title*,
+    and *path_tokens* are kept for call compatibility and are not read.
+    """
+    return _log_bullet_in_section(section, "Update", identity)
 
 
 def assert_update_bullet(

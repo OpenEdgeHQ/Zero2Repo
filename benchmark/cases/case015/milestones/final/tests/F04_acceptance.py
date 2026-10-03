@@ -543,8 +543,8 @@ def test_effort_nine_archive_of_each_ordinary_file_is_smaller_than_the_file():
                 flush=True,
             )
             assert len(archive) < len(src_bytes), (
-                "At effort 9, compress of an ordinary accepted "
-                f"{codec} file writes an archive smaller than the file: "
+                f"I: the effort-9 archive of an ordinary {codec} input is not "
+                "smaller than its input: "
                 f"{src!r} is {len(src_bytes)} bytes, archive {len(archive)}"
             )
 
@@ -573,9 +573,8 @@ def test_no_effort_carries_the_audio_packets_as_stored_copies():
                     continue
                 measured_any[codec] += measured
                 assert 2 * found < measured, (
-                    "Compress at any effort does not carry the input's audio "
-                    "packets as stored copies: counted by bytes, most audio "
-                    "packets must not appear byte-for-byte in the archive; "
+                    "J: the archive holds at least half of the measured audio "
+                    "bytes verbatim; "
                     f"{src!r} at {effort}: {found} of {measured} bytes verbatim"
                 )
         assert all(measured_any.values()), (

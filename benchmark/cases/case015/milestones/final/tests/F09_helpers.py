@@ -2,23 +2,15 @@
 """Feature-local helpers for archive dump and Ogg page listing.
 
 These helpers drive the public ``dump`` / ``pages`` verbs and read
-standard output. They are not a substitute public entry. A dedicated
-stored-stage field is the leftover token set two effort-1 dumps share
-and an effort-3 dump lacks, after paths and byte sizes are stripped.
-A leftover token that occurs once per independently counted page is
-the listing-completeness observer. A dedicated reconstruction-status
-field is the leftover that two well-formed listings share on every
-listed page and a one-page checksum-flipped sibling does not share at
-that multiplicity (success), and that two such siblings share and a
-well-formed listing lacks (mismatch). Numbers and hex-like runs are
-kept. An empty set is a real observation (the field was silent), not a
-lookup failure.
+standard output in the forms the Interface Contract states: the dump
+``level <stage>`` field and ``Ogg Opus mode`` line, and one ``pages`` line
+per page beginning ``page <index>`` and ending in ``reframes`` or
+``REFRAME MISMATCH``.
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from typing import Sequence
+import re
 
 from F01_helpers import require_ok, require_stdout_text, run_product, unique_name
 from F02_helpers import (
@@ -28,7 +20,6 @@ from F02_helpers import (
     ogg_crc_page,
     parse_ogg_pages,
 )
-from F03_helpers import shared_remainder_lacking_in, strip_paths_and_sizes
 from F04_helpers import (
     archive_bytes,
     compress_to,
@@ -68,30 +59,6 @@ def pages_stdout(ws: Workspace, path: str) -> str:
     )
     assert text, f"pages expected non-empty stdout; stderr={result.stderr!r}"
     return text
-
-
-def dedicated_stored_stage_field(
-    e1_a: str,
-    e1_b: str,
-    e3: str,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Dedicated dump-stdout stored-stage payloads shared by two effort-1 dumps.
-
-    After stripping archive paths and per-file byte sizes, two effort-1
-    Vorbis dumps share a dedicated stored-stage field payload that an
-    effort-3 dump lacks. A number or a hex value is a valid payload.
-    Exact wording is the implementer's. Empty means the field was silent
-    or answered only by path or size. Type errors raise.
-    """
-    for name, value in (("e1_a", e1_a), ("e1_b", e1_b), ("e3", e3)):
-        if not isinstance(value, str):
-            raise HarnessError(f"{name} expected str, got {type(value)!r}")
-    left_a = strip_paths_and_sizes(e1_a, paths, sizes)
-    left_b = strip_paths_and_sizes(e1_b, paths, sizes)
-    left_3 = strip_paths_and_sizes(e3, paths, sizes)
-    return shared_remainder_lacking_in(left_a, left_b, left_3)
 
 
 def reconstructed_from_parsed_header_and_body(page: OggPage) -> bytes:
@@ -134,30 +101,49 @@ def require_every_page_reconstructs(data: bytes) -> None:
             )
 
 
-def per_page_listing_tokens(
-    text: str,
-    n_pages: int,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Leftover tokens that occur once per independently counted page.
+_PAGE_LINE = re.compile(r"^ *page (\d+)(?![0-9]).*?(reframes|REFRAME MISMATCH)\s*$")
+_PAGE_START = re.compile(r"^ *page \d+(?![0-9])")
 
-    After stripping paths and per-file byte sizes, a leftover token whose
-    multiplicity equals the independent RFC 3533 page count is the
-    listing-completeness observer: the listing is per-page. Exact wording
-    is the implementer's. Empty means the listing did not mark every page.
-    Type errors raise. Page counts that are not positive integers raise.
+
+def page_statuses(text: str) -> list[tuple[int, str]]:
+    """``(index, status)`` of every page line of ``pages`` stdout, in order.
+
+    Status is ``"ok"`` for ``reframes`` and ``"mismatch"`` for
+    ``REFRAME MISMATCH``. A line that starts like a page line but does not
+    end in a stated status asserts.
     """
     if not isinstance(text, str):
         raise HarnessError(f"text expected str, got {type(text)!r}")
-    if isinstance(n_pages, bool) or not isinstance(n_pages, int) or n_pages < 1:
-        raise HarnessError(
-            f"n_pages expected a positive int, got {n_pages!r}"
+    out: list[tuple[int, str]] = []
+    for line in text.splitlines():
+        if not _PAGE_START.match(line):
+            continue
+        m = _PAGE_LINE.match(line)
+        assert m, (
+            "a pages line does not end in the reconstruction status "
+            f"`reframes` or `REFRAME MISMATCH`: {line!r}"
         )
-    leftover = strip_paths_and_sizes(text, paths, sizes)
-    return frozenset(
-        tok for tok, count in Counter(leftover.split()).items() if count == n_pages
+        out.append((int(m.group(1)), "ok" if m.group(2) == "reframes" else "mismatch"))
+    return out
+
+
+def require_page_listing(text: str, n_pages: int, mismatched: frozenset[int], *, what: str) -> None:
+    """One line per page, indexes 0..n-1 in order, statuses as expected."""
+    if isinstance(n_pages, bool) or not isinstance(n_pages, int) or n_pages < 1:
+        raise HarnessError(f"n_pages expected a positive int, got {n_pages!r}")
+    got = page_statuses(text)
+    print(f"[F09] {what} pages={got!r}", flush=True)
+    assert [i for i, _ in got] == list(range(n_pages)), (
+        f"{what}: pages lists every page once, in order, as `page <index>` "
+        f"lines; expected {n_pages} pages, got indexes {[i for i, _ in got]!r}"
     )
+    for index, status in got:
+        want = "mismatch" if index in mismatched else "ok"
+        assert status == want, (
+            f"{what}: page {index} reports {status!r}, expected {want!r} "
+            "(reconstruction as RFC 3533 serialization of its parsed header "
+            "and body, CRC computed with the checksum field zero)"
+        )
 
 
 def still_parseable_one_page_checksum_sibling(data: bytes) -> bytes:
@@ -178,67 +164,3 @@ def still_parseable_one_page_checksum_sibling(data: bytes) -> bytes:
     out = corrupt_stored_page_checksum(host, 0)
     prove_checksum_mismatch(out, 0)
     return out
-
-
-def dedicated_reconstruction_success_field(
-    well_a: str,
-    n_a: int,
-    well_b: str,
-    n_b: int,
-    sibling_a: str,
-    sibling_b: str,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Dedicated pages-stdout reconstruction-status success payload.
-
-    After stripping paths and per-file byte sizes, a leftover token that
-    occurs once per independently counted page on two well-formed listings
-    and does not occur once per page on either one-page checksum-flipped
-    sibling is the success payload of the dedicated reconstruction-status
-    field. Exact wording is the implementer's. Empty means the field was
-    silent, answered only by path or size, or was not carried on every
-    listed well-formed page. Type errors raise.
-    """
-    for name, value in (
-        ("well_a", well_a),
-        ("well_b", well_b),
-        ("sibling_a", sibling_a),
-        ("sibling_b", sibling_b),
-    ):
-        if not isinstance(value, str):
-            raise HarnessError(f"{name} expected str, got {type(value)!r}")
-    per_a = per_page_listing_tokens(well_a, n_a, paths, sizes)
-    per_b = per_page_listing_tokens(well_b, n_b, paths, sizes)
-    per_sa = per_page_listing_tokens(sibling_a, n_a, paths, sizes)
-    per_sb = per_page_listing_tokens(sibling_b, n_b, paths, sizes)
-    return (per_a & per_b) - per_sa - per_sb
-
-
-def dedicated_reconstruction_mismatch_field(
-    sibling_a: str,
-    sibling_b: str,
-    well: str,
-    paths: Sequence[str],
-    sizes: Sequence[int],
-) -> frozenset[str]:
-    """Dedicated pages-stdout reconstruction-status mismatch payload.
-
-    After stripping paths and per-file byte sizes, two one-page
-    checksum-flipped siblings share a leftover that a well-formed listing
-    lacks. That remainder is the mismatch payload of the same dedicated
-    reconstruction-status field. Exact wording is the implementer's.
-    Empty means the field was silent or answered only by path or size.
-    Type errors raise.
-    """
-    for name, value in (
-        ("sibling_a", sibling_a),
-        ("sibling_b", sibling_b),
-        ("well", well),
-    ):
-        if not isinstance(value, str):
-            raise HarnessError(f"{name} expected str, got {type(value)!r}")
-    left_a = strip_paths_and_sizes(sibling_a, paths, sizes)
-    left_b = strip_paths_and_sizes(sibling_b, paths, sizes)
-    left_w = strip_paths_and_sizes(well, paths, sizes)
-    return shared_remainder_lacking_in(left_a, left_b, left_w)

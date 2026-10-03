@@ -45,8 +45,6 @@ from F03_helpers import (
     mcp_is_tool_error,
     mcp_payload_and_text,
     mcp_reply_for_id,
-    path_tokens_for,
-    record_string_values,
     unique_tokens,
 )
 from F05_helpers import SEED_LOG_DATE
@@ -80,12 +78,10 @@ _NEVER_EXECUTED = (
 
 
 def _workdir_has_product_sources(root: Path) -> bool:
-    """True when *root* is a product tree whose Makefile writes ``bin/membundle``."""
-    makefile = root / "Makefile"
-    if not makefile.is_file() or not (root / "go.mod").is_file():
-        return False
-    text = makefile.read_text(encoding="utf-8")
-    return "bin/membundle" in text
+    """True when *root* is a product tree: a Go module (``go.mod``) with a root
+    ``Makefile`` (Contract "Build": ``make build`` at the root writes
+    ``bin/membundle``). The Makefile's text is not read."""
+    return (root / "Makefile").is_file() and (root / "go.mod").is_file()
 
 
 def _stage_writable_sources(root: Path) -> Path:
@@ -199,7 +195,7 @@ def resolve_validate_binary() -> Path:
     empty workspace would then look like a failed gate or a load failure.
     """
     binary = _workdir_membundle()
-    # TEST-FIX((none)): upstream Makefile:78 shows go build opens bin/membundle in the working directory and fails with "open bin/membundle: read-only file system" when that directory cannot accept the write, so validate never runs and its results are missing.
+    # TEST-FIX((none)): the build writes bin/membundle under the tree it runs in, which fails in a read-only working directory (hence the writable staging copy); without it validate never runs and its results are missing.
     assert binary is not None, _NEVER_EXECUTED
     return binary
 
@@ -208,7 +204,7 @@ def _raise_if_validate_binary_missing(binary: Path, exc: FileNotFoundError) -> N
     """Turn a vanished workdir binary into the never-executed assertion."""
     if binary.is_file() and os.access(binary, os.X_OK):
         raise exc
-    # TEST-FIX(F08): upstream _harness.py:620 shows FileNotFoundError before validate when bin/membundle is absent; Makefile:78 writes that binary only after GOFLAGS=-buildvcs=false make build.
+    # TEST-FIX(F08): with no bin/membundle there is no product to run; per the Contract "Build" form, make build at the repository root writes that binary.
     raise AssertionError(_NEVER_EXECUTED) from None
 
 
@@ -324,7 +320,7 @@ def render_index_markdown(
 
 
 def default_validatable_log(log_date: str = SEED_LOG_DATE) -> str:
-    """Two-hash ISO log heading that is not today (L46 / L236)."""
+    """Two-hash ISO log heading that is not today."""
     return f"## {log_date}\n\n- seed\n"
 
 
@@ -388,7 +384,7 @@ def fact_concept(
     body: str = "body\n",
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Type Fact with no other required fields (L256)."""
+    """Type Fact with no other required fields."""
     frontmatter: dict[str, Any] = {"type": "Fact"}
     if extra:
         frontmatter.update(dict(extra))
@@ -554,6 +550,8 @@ def require_cli_status_2(result: RunResult) -> str:
 
 
 def _walk_values(obj: Any, *, want: type) -> list[Any]:
+    """Generic JSON walker. Kept only because ``F10_helpers`` imports it;
+    no F08 reader uses it."""
     found: list[Any] = []
 
     def _walk(value: Any) -> None:
@@ -585,149 +583,325 @@ def _walk_values(obj: Any, *, want: type) -> list[Any]:
     return found
 
 
-def walk_booleans(obj: Any) -> list[bool]:
-    """Every boolean value in a structured report. Raises if none exist."""
-    found = [bool(v) for v in _walk_values(obj, want=bool)]
-    print(f"[F08] walked booleans={found!r}", flush=True)
-    if not found:
-        raise HarnessError(
-            f"structured validate report has no boolean values; payload={obj!r}"
+# ---------------------------------------------------------------------------
+# Structured validate report (``validate --json`` / ``membundle_validate``).
+# Contract "Output forms": one JSON object with ``bundle_path``,
+# ``declared_version`` (absent when none), ``concept_count``, ``errors``,
+# ``warnings``, ``gate_findings`` (strings beginning ``<bundle-relative path>: ``),
+# ``broken_links`` (objects ``source_concept`` / ``target_href`` / ``reason``;
+# null or [] when none), ``orphans`` (identity strings; null or [] when none),
+# ``stale_count``, ``is_conformant``, ``gate_passed``.
+# ---------------------------------------------------------------------------
+
+FINDING_KEYS = ("errors", "warnings", "gate_findings")
+
+
+def _report_object(payload: Any) -> Mapping[str, Any]:
+    if isinstance(payload, McpValidateOutcome):
+        payload = _mcp_report_payload(payload)
+    if not isinstance(payload, Mapping):
+        raise AssertionError(
+            "validate report is not one JSON object; "
+            f"payload={payload!r}"
         )
+    return payload
+
+
+def report_bool(payload: Any, key: str) -> bool:
+    """The boolean report field *key* (``is_conformant`` / ``gate_passed``)."""
+    report = _report_object(payload)
+    assert key in report, f"validate report has no {key!r}; payload={report!r}"
+    value = report[key]
+    assert isinstance(value, bool), (
+        f"validate report {key!r} is not a boolean: {value!r}; payload={report!r}"
+    )
+    return value
+
+
+def report_int(payload: Any, key: str) -> int:
+    """The integer report field *key* (``concept_count`` / ``stale_count``)."""
+    report = _report_object(payload)
+    assert key in report, f"validate report has no {key!r}; payload={report!r}"
+    value = report[key]
+    assert isinstance(value, int) and not isinstance(value, bool), (
+        f"validate report {key!r} is not an integer: {value!r}; payload={report!r}"
+    )
+    return value
+
+
+def report_strings(payload: Any, key: str) -> list[str]:
+    """The string array *key* (``errors`` / ``warnings`` / ``gate_findings``)."""
+    report = _report_object(payload)
+    assert key in report, f"validate report has no {key!r}; payload={report!r}"
+    value = report[key]
+    assert isinstance(value, list) and all(isinstance(v, str) for v in value), (
+        f"validate report {key!r} is not an array of strings: {value!r}"
+    )
+    return list(value)
+
+
+def report_orphans(payload: Any) -> list[str]:
+    """``orphans``: identity strings; ``null`` or ``[]`` when there are none."""
+    report = _report_object(payload)
+    assert "orphans" in report, f"validate report has no 'orphans'; payload={report!r}"
+    value = report["orphans"]
+    if value is None:
+        return []
+    assert isinstance(value, list) and all(isinstance(v, str) for v in value), (
+        f"validate report 'orphans' is not an array of strings: {value!r}"
+    )
+    return list(value)
+
+
+def report_broken_links(payload: Any) -> list[Mapping[str, Any]]:
+    """``broken_links``: objects; ``null`` or ``[]`` when there are none."""
+    report = _report_object(payload)
+    assert "broken_links" in report, (
+        f"validate report has no 'broken_links'; payload={report!r}"
+    )
+    value = report["broken_links"]
+    if value is None:
+        return []
+    assert isinstance(value, list) and all(isinstance(v, Mapping) for v in value), (
+        f"validate report 'broken_links' is not an array of objects: {value!r}"
+    )
+    for entry in value:
+        for key in ("source_concept", "target_href"):
+            assert isinstance(entry.get(key), str), (
+                f"broken_links entry has no string {key!r}: {entry!r}"
+            )
+    return list(value)
+
+
+def findings_concerning(payload: Any, key: str, concerns: str) -> list[str]:
+    """Entries of *key* that begin with the bundle-relative path *concerns* + ``: ``."""
+    if not concerns:
+        raise HarnessError("concerned path is empty")
+    prefix = f"{concerns}: "
+    found = [s for s in report_strings(payload, key) if s.startswith(prefix)]
+    print(f"[F08] {key} concerning {concerns!r}: {found!r}", flush=True)
     return found
 
 
-def walk_numbers(obj: Any) -> list[float]:
-    """Every numeric (non-bool) value in a structured report. Raises if none exist."""
-    found = [float(v) for v in _walk_values(obj, want=int)]
-    print(f"[F08] walked numbers={found!r}", flush=True)
-    if not found:
-        raise HarnessError(
-            f"structured validate report has no numeric values; payload={obj!r}"
-        )
-    return found
+def assert_finding_concerns(payload: Any, key: str, concerns: str) -> None:
+    """*key* has at least one entry about the file *concerns*."""
+    found = findings_concerning(payload, key, concerns)
+    assert found, (
+        f"validate report {key!r} has no entry beginning {concerns + ': '!r}; "
+        f"{key}={report_strings(payload, key)!r}"
+    )
 
 
-def _sorted_desc(nums: Sequence[float]) -> list[float]:
-    return sorted((float(n) for n in nums), reverse=True)
+def assert_more_findings(
+    defective: Any, repaired: Any, key: str, concerns: str
+) -> None:
+    """Relational: the defective arm's *key* has more entries about *concerns*."""
+    bad = findings_concerning(defective, key, concerns)
+    ok = findings_concerning(repaired, key, concerns)
+    assert len(bad) > len(ok), (
+        f"defective report has no additional {key!r} entry about {concerns!r}; "
+        f"defective={report_strings(defective, key)!r} "
+        f"repaired={report_strings(repaired, key)!r}"
+    )
 
 
-def assert_numbers_later_greater(earlier: Any, later: Any) -> None:
-    """Relative order: later arm's walked numbers exceed the earlier arm's."""
-    left = _sorted_desc(walk_numbers(earlier))
-    right = _sorted_desc(walk_numbers(later))
-    width = max(len(left), len(right))
-    left = left + [0.0] * (width - len(left))
-    right = right + [0.0] * (width - len(right))
-    print(f"[F08] number order earlier={left!r} later={right!r}", flush=True)
+def _count_field(payload: Any, field: str) -> int:
+    if field not in ("concept_count", "stale_count"):
+        raise HarnessError(f"not a count field: {field!r}")
+    return report_int(payload, field)
+
+
+def assert_numbers_later_greater(
+    earlier: Any, later: Any, field: str = "concept_count"
+) -> None:
+    """Relative order: the later arm's *field* exceeds the earlier arm's."""
+    left = _count_field(earlier, field)
+    right = _count_field(later, field)
+    print(f"[F08] {field} earlier={left} later={right}", flush=True)
     assert right > left, (
-        "later-count arm's walked numbers are not greater than the earlier "
-        f"arm's (relative order); earlier={left!r} later={right!r}"
+        f"later arm's {field} ({right}) is not greater than the earlier arm's "
+        f"({left})"
     )
 
 
-def assert_numbers_not_greater(baseline: Any, other: Any) -> None:
-    """Adding a reserved/non-concept file must not make any walked integer greater."""
-    left = _sorted_desc(walk_numbers(baseline))
-    right = _sorted_desc(walk_numbers(other))
-    width = max(len(left), len(right))
-    left = left + [0.0] * (width - len(left))
-    right = right + [0.0] * (width - len(right))
-    print(f"[F08] number not-greater baseline={left!r} other={right!r}", flush=True)
+def assert_numbers_not_greater(
+    baseline: Any, other: Any, field: str = "concept_count"
+) -> None:
+    """Adding a reserved/non-concept file must not increase *field*."""
+    left = _count_field(baseline, field)
+    right = _count_field(other, field)
+    print(f"[F08] {field} baseline={left} other={right}", flush=True)
     assert right <= left, (
-        "walked integers increased after adding a reserved or skipped file; "
-        f"baseline={left!r} other={right!r}"
+        f"{field} increased after adding a reserved or skipped file; "
+        f"baseline={left} other={right}"
     )
 
 
-def _is_mcp_envelope(obj: Any) -> bool:
-    """True when *obj* is a tools/call result wrapper, not a validate report."""
-    return isinstance(obj, Mapping) and "content" in obj
-
-
-def assert_both_pass(obj: Any) -> list[bool]:
-    """Conformant gate-pass: at least two walked booleans, all true.
-
-    A single envelope flag such as MCP ``isError`` is not this pair.
-    """
-    flags = walk_booleans(obj)
-    assert len(flags) >= 2 and all(flags), (
-        "expected both-pass (every walked boolean true, at least the two "
-        "conformance/gate properties); "
-        f"booleans={flags!r} payload={obj!r}"
+def assert_both_pass(obj: Any) -> None:
+    """Conformant gate-pass: ``is_conformant`` and ``gate_passed`` both true."""
+    conformant = report_bool(obj, "is_conformant")
+    gate = report_bool(obj, "gate_passed")
+    assert conformant and gate, (
+        f"expected is_conformant=true gate_passed=true, got "
+        f"is_conformant={conformant} gate_passed={gate}; payload={obj!r}"
     )
-    return flags
 
 
-def assert_conformant_gate_fail(obj: Any) -> list[bool]:
-    """Conformant but failed producer gate: mixed true and false booleans."""
-    flags = walk_booleans(obj)
-    has_true = any(flags)
-    has_false = any(not flag for flag in flags)
-    assert has_true and has_false, (
-        "expected mixed booleans (a true remains and a false remains) for a "
-        f"conformant gate-fail; booleans={flags!r} payload={obj!r}"
+def assert_conformant_gate_fail(obj: Any) -> None:
+    """Conformant but failed producer gate."""
+    conformant = report_bool(obj, "is_conformant")
+    gate = report_bool(obj, "gate_passed")
+    assert conformant and not gate, (
+        f"expected is_conformant=true gate_passed=false, got "
+        f"is_conformant={conformant} gate_passed={gate}; payload={obj!r}"
     )
-    return flags
 
 
-def assert_nonconformant(obj: Any) -> list[bool]:
-    """Hard non-conformance: not the mixed conformant-gate-fail pattern."""
-    flags = walk_booleans(obj)
-    mixed = any(flags) and any(not flag for flag in flags)
-    assert not mixed, (
-        "non-conformant report uses the mixed true/false pattern of a "
-        f"conformant gate-fail; booleans={flags!r} payload={obj!r}"
+def assert_nonconformant(obj: Any, *, concerns: str | None = None) -> None:
+    """Hard non-conformance: both booleans false and a hard error is listed."""
+    conformant = report_bool(obj, "is_conformant")
+    gate = report_bool(obj, "gate_passed")
+    assert not conformant and not gate, (
+        f"expected is_conformant=false gate_passed=false, got "
+        f"is_conformant={conformant} gate_passed={gate}; payload={obj!r}"
     )
-    assert not any(flags), (
-        "non-conformant report still has a true boolean (both-pass or extra "
-        f"ok bit); booleans={flags!r} payload={obj!r}"
+    assert report_strings(obj, "errors"), (
+        f"non-conformant report lists no hard error; payload={obj!r}"
     )
-    return flags
+    if concerns is not None:
+        assert_finding_concerns(obj, "errors", concerns)
 
 
-def observation_blob(obj: Any) -> str:
-    """Text a listing assertion can search: report string or JSON encoding."""
-    if isinstance(obj, str):
-        return obj
-    if isinstance(obj, RunResult):
-        return combined_report(obj)
-    if isinstance(obj, McpValidateOutcome):
-        return obj.report_text
-    try:
-        return json.dumps(obj)
-    except (TypeError, ValueError) as exc:
-        raise HarnessError(f"cannot encode observation as text: {exc}") from exc
+# ---------------------------------------------------------------------------
+# Human validate report. Contract "Output forms": finding lines
+# ``warn  <warning>``, ``<label>  <finding>``, ``<label>  <identity>.md: `` then
+# free text for a broken link, ``<label>  <identity>.md: `` then free text
+# containing ``orphan`` for an orphan, ``error <error>``; ``<label>`` is ``gate``
+# under ``--strict`` and ``warn`` otherwise; then an empty line and the summary
+# line (free text).
+# ---------------------------------------------------------------------------
+
+_LINE_PREFIX = {"warn": "warn  ", "gate": "gate  ", "error": "error "}
+
+
+def human_finding_lines(result: RunResult, label: str) -> list[str]:
+    """Text after the ``<label>`` prefix of each finding line on stdout."""
+    if label not in _LINE_PREFIX:
+        raise HarnessError(f"unknown finding label {label!r}")
+    prefix = _LINE_PREFIX[label]
+    if "--json" in result.argv:
+        raise HarnessError("human finding lines requested from a --json run")
+    return [
+        line[len(prefix):]
+        for line in result.stdout_text.splitlines()
+        if line.startswith(prefix)
+    ]
+
+
+def _strict_label(result: RunResult) -> str:
+    return "gate" if "--strict" in result.argv else "warn"
+
+
+def human_lines_concerning(
+    result: RunResult, concerns: str, labels: Sequence[str]
+) -> list[str]:
+    """Finding lines under *labels* whose finding begins ``<concerns>: ``."""
+    prefix = f"{concerns}: "
+    found: list[str] = []
+    for label in labels:
+        found.extend(
+            f"{label}: {text}"
+            for text in human_finding_lines(result, label)
+            if text.startswith(prefix)
+        )
+    print(f"[F08] human {labels} lines concerning {concerns!r}: {found!r}", flush=True)
+    return found
+
+
+def assert_human_more_lines(
+    defective: RunResult,
+    repaired: RunResult,
+    concerns: str,
+    *,
+    labels: Sequence[str],
+    repaired_labels: Sequence[str] | None = None,
+) -> None:
+    """Relational: the defective report has more *labels* lines about *concerns*."""
+    bad = human_lines_concerning(defective, concerns, labels)
+    ok = human_lines_concerning(
+        repaired, concerns, labels if repaired_labels is None else repaired_labels
+    )
+    assert len(bad) > len(ok), (
+        f"defective human report has no additional {labels} line about "
+        f"{concerns!r}; defective={defective.stdout_text!r} "
+        f"repaired={repaired.stdout_text!r}"
+    )
+
+
+def assert_human_orphan_line(result: RunResult, identity: str) -> None:
+    """A line ``<label>  <identity>.md: `` then text containing ``orphan`` is present."""
+    label = _strict_label(result)
+    expected = f"{_LINE_PREFIX[label]}{identity}.md: "
+    lines = result.stdout_text.splitlines()
+    print(f"[F08] human orphan line? {expected!r} + 'orphan'", flush=True)
+    assert any(
+        line.startswith(expected) and "orphan" in line[len(expected):]
+        for line in lines
+    ), (
+        f"human validate report has no orphan line beginning {expected!r} "
+        f"whose text names 'orphan': {result.stdout_text!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Identity / href listing reads.
+# ---------------------------------------------------------------------------
 
 
 def assert_identity_listed(obs: Any, identity: str) -> None:
-    """The concept identity (path without ``.md``) appears in the report."""
+    """The concept identity is an orphan of the report.
+
+    Structured: an exact entry of ``orphans``. Human: the orphan line for
+    ``<identity>.md`` with the label the run's ``--strict`` selects. The
+    bundles this is used on hold two or more unlinked concepts, so every
+    loaded concept is an orphan.
+    """
     if not identity:
         raise HarnessError("identity is empty; cannot assert it is listed")
-    blob = observation_blob(obs)
-    print(f"[F08] identity listed? {identity!r} in blob_len={len(blob)}", flush=True)
-    if isinstance(obs, (dict, list)):
-        values = record_string_values(obs)
-        if identity in values:
-            return
-    assert identity in blob, (
-        f"report does not list concept identity {identity!r}: {blob!r}"
+    if isinstance(obs, RunResult):
+        assert_human_orphan_line(obs, identity)
+        return
+    orphans = report_orphans(obs)
+    print(f"[F08] orphans={orphans!r} want {identity!r}", flush=True)
+    assert identity in orphans, (
+        f"validate report 'orphans' does not list {identity!r}; orphans={orphans!r}"
     )
 
 
 def assert_identity_not_listed(obs: Any, identity: str) -> None:
-    """The concept identity is absent after the same listing observation."""
+    """The identity is not a loaded concept the report names: not an
+    ``orphans`` entry and not the ``source_concept`` of a broken link."""
     if not identity:
         raise HarnessError("identity is empty; cannot assert it is unlisted")
-    blob = observation_blob(obs)
-    if isinstance(obs, (dict, list)):
-        values = record_string_values(obs)
-        assert identity not in values, (
-            f"structured report lists identity {identity!r} as a string value; "
-            f"values={sorted(values)!r}"
-        )
-    assert identity not in blob, (
-        f"report lists identity {identity!r} that should be unlisted: {blob!r}"
+    orphans = report_orphans(obs)
+    sources = [bl["source_concept"] for bl in report_broken_links(obs)]
+    print(
+        f"[F08] identity {identity!r} unlisted? orphans={orphans!r} "
+        f"broken sources={sources!r}",
+        flush=True,
     )
+    assert identity not in orphans, (
+        f"validate report 'orphans' lists {identity!r}; orphans={orphans!r}"
+    )
+    assert f"{identity}.md" not in sources, (
+        f"validate report has a broken link from {identity!r}; sources={sources!r}"
+    )
+
+
+def assert_identity_absent_from_string_values(payload: Any, identity: str) -> None:
+    """A reserved file is not a concept the report names (see
+    ``assert_identity_not_listed``)."""
+    assert_identity_not_listed(payload, identity)
 
 
 def assert_absent_from_loaded_concept_set(
@@ -736,13 +910,8 @@ def assert_absent_from_loaded_concept_set(
     *,
     markdown_only: Any,
 ) -> None:
-    """A skipped file is not in the loaded concept set (L51).
-
-    The validate report names identities and a concept count (L232), not
-    concept bodies. Identity is not listed, and walked numbers are not
-    greater than a markdown-only twin. Does not require a body token to
-    be absent from the report.
-    """
+    """A skipped file is not in the loaded concept set: not named as a
+    concept, and ``concept_count`` is not greater than the markdown-only twin."""
     if not identity:
         raise HarnessError("identity is empty; cannot assert it is absent")
     print(
@@ -753,115 +922,54 @@ def assert_absent_from_loaded_concept_set(
     assert_numbers_not_greater(markdown_only, payload)
 
 
-def assert_identity_absent_from_string_values(payload: Any, identity: str) -> None:
-    """Identity is not an exact walked string value in a structured report.
-
-    Does not require the identity to be omitted from every concatenated blob
-    (L232 may still name paths that contain a reserved basename).
-    """
-    if not identity:
-        raise HarnessError("identity is empty; cannot assert it is absent")
-    if not isinstance(payload, (dict, list)):
-        raise HarnessError(
-            "reserved-identity check requires a structured payload, got "
-            f"{type(payload).__name__}"
-        )
-    values = record_string_values(payload)
-    print(
-        f"[F08] identity absent from string values? {identity!r} "
-        f"n={len(values)}",
-        flush=True,
-    )
-    assert identity not in values, (
-        f"structured report lists identity {identity!r} as a string value; "
-        f"values={sorted(values)!r}"
-    )
-
-
 def assert_report_includes_path_token(payload: Any, token: str) -> None:
-    """Some walked string value contains the bundle-path token (L232).
-
-    Does not pin a JSON key or require the caller argv spelling to match
-    bytes; an absolute or relative rendering that names this bundle is enough.
-    """
+    """``bundle_path`` is the bundle path as the caller named it."""
     if not token:
         raise HarnessError("bundle path token is empty")
-    if not isinstance(payload, (dict, list)):
-        raise HarnessError(
-            "bundle-path check requires a structured payload, got "
-            f"{type(payload).__name__}"
-        )
-    values = record_string_values(payload)
-    print(
-        f"[F08] bundle path token {token!r} in {len(values)} string values",
-        flush=True,
-    )
-    assert any(token in value for value in values), (
-        f"structured validate report does not include bundle path token "
-        f"{token!r}; string values={sorted(values)!r}"
+    report = _report_object(payload)
+    value = report.get("bundle_path")
+    print(f"[F08] bundle_path={value!r} want {token!r}", flush=True)
+    assert value == token, (
+        f"validate report bundle_path is {value!r}, not the named path {token!r}"
     )
 
 
-def assert_string_values_differ_after_strip(
-    left: Any,
-    right: Any,
-    *,
-    path_tokens: Sequence[str] = (),
-    extra_tokens: Sequence[str] = (),
-) -> None:
-    """Walked string values differ after stripping paths and fixture scalars.
-
-    Holds an implementation to L232 hard-error / warning report fields
-    without pinning key names or message wording.
-    """
-    if not isinstance(left, (dict, list)) or not isinstance(right, (dict, list)):
-        raise HarnessError(
-            "string-value contrast requires structured payloads, got "
-            f"{type(left).__name__} and {type(right).__name__}"
-        )
-
-    def _remainders(obj: Any) -> set[str]:
-        found: set[str] = set()
-        for value in record_string_values(obj):
-            rem = report_remainder(
-                value, path_tokens=path_tokens, extra_tokens=extra_tokens
-            )
-            if rem:
-                found.add(rem)
-        return found
-
-    left_rem = _remainders(left)
-    right_rem = _remainders(right)
-    print(
-        f"[F08] string-value remainders left={sorted(left_rem)!r} "
-        f"right={sorted(right_rem)!r}",
-        flush=True,
-    )
-    assert left_rem != right_rem, (
-        "structured string values do not differ after stripping paths and "
-        f"fixture scalars; remainder={sorted(left_rem)!r}"
-    )
+def _broken_with_href(obs: Any, href: str) -> list[Mapping[str, Any]]:
+    return [bl for bl in report_broken_links(obs) if bl["target_href"] == href]
 
 
-def assert_href_listed(obs: Any, href: str) -> None:
-    """The missing / reserved href remains in the report."""
+def assert_href_listed(obs: Any, href: str, *, source: str | None = None) -> None:
+    """A ``broken_links`` entry has ``target_href`` *href* (and, when given,
+    ``source_concept`` *source*)."""
     if not href:
         raise HarnessError("href is empty; cannot assert it is listed")
-    blob = observation_blob(obs)
-    print(f"[F08] href listed? {href!r} in blob_len={len(blob)}", flush=True)
-    assert href in blob, (
-        f"report does not list href {href!r}: {blob!r}"
+    matches = _broken_with_href(obs, href)
+    print(f"[F08] broken links with href {href!r}: {matches!r}", flush=True)
+    assert matches, (
+        f"validate report has no broken link to {href!r}; "
+        f"broken_links={report_broken_links(obs)!r}"
     )
+    if source is not None:
+        assert any(bl["source_concept"] == source for bl in matches), (
+            f"no broken link to {href!r} has source_concept {source!r}; "
+            f"matches={matches!r}"
+        )
 
 
 def assert_href_not_listed(obs: Any, href: str) -> None:
-    """The href is absent from the report."""
+    """No ``broken_links`` entry has ``target_href`` *href*."""
     if not href:
         raise HarnessError("href is empty; cannot assert it is unlisted")
-    blob = observation_blob(obs)
-    assert href not in blob, (
-        f"report lists href {href!r} that should not be a broken link: {blob!r}"
+    matches = _broken_with_href(obs, href)
+    assert not matches, (
+        f"validate report lists {href!r} as a broken link: {matches!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Remainder comparison. No F08 test uses these; kept because F09_acceptance
+# imports ``assert_report_differs_after_strip``.
+# ---------------------------------------------------------------------------
 
 
 def strip_tokens_from(text: str, tokens: Sequence[str]) -> str:
@@ -913,48 +1021,40 @@ def assert_report_differs_after_strip(
     )
 
 
-def assert_warning_absent_after_strip(
-    actual: str,
-    baseline: str,
-    *,
-    path_tokens: Sequence[str] = (),
-    extra_tokens: Sequence[str] = (),
-) -> None:
-    """Negative arm: stripped remainder matches a no-warning baseline.
-
-    Status 0 is not treated as proof the warning is absent.
-    """
-    actual_rem = report_remainder(
-        actual, path_tokens=path_tokens, extra_tokens=extra_tokens
-    )
-    baseline_rem = report_remainder(
-        baseline, path_tokens=path_tokens, extra_tokens=extra_tokens
-    )
-    print(
-        f"[F08] warning-absent actual={actual_rem!r} baseline={baseline_rem!r}",
-        flush=True,
-    )
-    assert actual_rem == baseline_rem, (
-        "stripped remainder does not match the no-warning baseline; "
-        f"actual={actual_rem!r} baseline={baseline_rem!r}"
-    )
+# ---------------------------------------------------------------------------
+# Finding classes.
+# ---------------------------------------------------------------------------
 
 
 def require_warning_class(
     defective: RunResult,
     repaired: RunResult,
     *,
-    path_tokens: Sequence[str] = (),
-    extra_tokens: Sequence[str] = (),
+    concerns: str,
 ) -> None:
-    """Advisory warning: both arms status 0; stripped reports differ."""
+    """Advisory warning about the file *concerns*: both arms status 0; the
+    defective human report has more ``warn  <concerns>: `` lines than the
+    repaired one. Under ``--strict`` the ``warn`` label is only a warning."""
     require_cli_status_0(defective)
     require_cli_status_0(repaired)
-    assert_report_differs_after_strip(
-        combined_report(defective),
-        combined_report(repaired),
-        path_tokens=path_tokens,
-        extra_tokens=extra_tokens,
+    assert_human_more_lines(defective, repaired, concerns, labels=("warn",))
+
+
+def assert_warning_absent(
+    actual: RunResult,
+    baseline: RunResult,
+    *,
+    concerns: str,
+) -> None:
+    """Negative arm: as many ``warn`` lines in total, and about *concerns*, as
+    the no-warning baseline. Status 0 is not treated as proof."""
+    actual_all = human_finding_lines(actual, "warn")
+    base_all = human_finding_lines(baseline, "warn")
+    actual_c = human_lines_concerning(actual, concerns, ("warn",))
+    base_c = human_lines_concerning(baseline, concerns, ("warn",))
+    assert len(actual_c) == len(base_c) and len(actual_all) == len(base_all), (
+        "warn lines do not match the no-warning baseline; "
+        f"actual={actual_all!r} baseline={base_all!r}"
     )
 
 
@@ -963,31 +1063,42 @@ def require_gate_finding_class(
     with_strict: RunResult,
     repaired_strict: RunResult,
     *,
+    concerns: str,
     structured_strict: Any | None = None,
-    path_tokens: Sequence[str] = (),
-    extra_tokens: Sequence[str] = (),
 ) -> None:
-    """Gate finding on declared 0.2: appears without strict (status 0);
-    ``--strict`` is status 1 mixed; repaired ``--strict`` is status 0.
+    """Gate finding on declared 0.2 about the file *concerns*.
+
+    Without ``--strict`` (human run): status 0 and a ``warn  <concerns>: ``
+    line. With ``--strict``: status 1, conformant gate-fail, and more
+    ``gate_findings`` entries (or ``gate`` lines) about *concerns* than the
+    repaired ``--strict`` twin, which is status 0.
     """
     require_cli_status_0(without_strict)
     require_cli_status_1(with_strict)
     require_cli_status_0(repaired_strict)
+    strict_json = "--json" in with_strict.argv
+    repaired_json = "--json" in repaired_strict.argv
+    if structured_strict is None and strict_json:
+        structured_strict = json_stdout(with_strict, what="validate --strict --json")
     if structured_strict is not None:
         assert_conformant_gate_fail(structured_strict)
-    defective_report = combined_report(with_strict)
-    repaired_report = combined_report(repaired_strict)
-    assert_report_differs_after_strip(
-        defective_report,
-        repaired_report,
-        path_tokens=path_tokens,
-        extra_tokens=extra_tokens,
-    )
-    assert_report_differs_after_strip(
-        combined_report(without_strict),
-        repaired_report,
-        path_tokens=path_tokens,
-        extra_tokens=extra_tokens,
+    if strict_json and repaired_json:
+        assert_more_findings(
+            structured_strict,
+            json_stdout(repaired_strict, what="repaired validate --json"),
+            "gate_findings",
+            concerns,
+        )
+    elif not strict_json and not repaired_json:
+        assert_human_more_lines(
+            with_strict, repaired_strict, concerns, labels=("gate",)
+        )
+    else:
+        raise HarnessError("strict and repaired arms must use the same output form")
+    lines = human_lines_concerning(without_strict, concerns, ("warn",))
+    assert lines, (
+        f"human report without --strict has no 'warn  {concerns}: ' line; "
+        f"stdout={without_strict.stdout_text!r}"
     )
 
 
@@ -996,62 +1107,62 @@ def require_hard_error_class(
     repaired: RunResult,
     *,
     structured_defective: Any | None = None,
+    concerns: str | None = None,
 ) -> None:
-    """Hard error without promoting modes: status 1, not mixed; repaired status 0."""
+    """Hard error: status 1, non-conformant with an ``errors`` entry (about
+    *concerns* when given); repaired status 0."""
     require_cli_status_1(defective)
     require_cli_status_0(repaired)
     if structured_defective is not None:
-        assert_nonconformant(structured_defective)
+        assert_nonconformant(structured_defective, concerns=concerns)
 
 
-def _parse_validate_report_text(text: str, *, reply: Mapping[str, Any]) -> Any:
-    stripped = text.strip()
-    if not stripped:
-        raise HarnessError(
-            f"MCP validate reply has no walkable payload; reply={reply!r}"
+# ---------------------------------------------------------------------------
+# MCP membundle_validate.
+# ---------------------------------------------------------------------------
+
+
+def _first_content_text(reply: Mapping[str, Any]) -> str:
+    result = reply.get("result")
+    if not isinstance(result, Mapping):
+        raise AssertionError(f"tools/call reply has no result object; reply={reply!r}")
+    content = result.get("content")
+    if not isinstance(content, list) or not content:
+        raise AssertionError(f"tools/call result has no content; reply={reply!r}")
+    first = content[0]
+    if not isinstance(first, Mapping) or not isinstance(first.get("text"), str):
+        raise AssertionError(
+            f"first content item has no text; reply={reply!r}"
         )
+    return first["text"]
+
+
+def _mcp_report_payload(outcome: McpValidateOutcome) -> Mapping[str, Any]:
+    """The tool result text, parsed as the one JSON report object."""
+    text = _first_content_text(outcome.reply)
     try:
-        parsed = parse_json(stripped, what="mcp validate report")
+        parsed = parse_json(text, what="membundle_validate result text")
     except HarnessError as exc:
-        raise HarnessError(
-            "MCP validate reply is not a walkable report payload; "
-            f"reply={reply!r} text={text!r}"
+        raise AssertionError(
+            f"membundle_validate result text is not JSON; text={text!r}"
         ) from exc
-    if not isinstance(parsed, (dict, list)):
-        raise HarnessError(
-            "MCP validate reply parsed but is not an object/array report; "
-            f"payload={parsed!r}"
-        )
-    if _is_mcp_envelope(parsed):
-        raise HarnessError(
-            "MCP validate reply is the tools/call envelope, not a validate "
-            f"report; payload={parsed!r}"
+    if not isinstance(parsed, Mapping):
+        raise AssertionError(
+            f"membundle_validate result text is not one JSON object; text={text!r}"
         )
     return parsed
 
 
-def _mcp_report_payload(outcome: McpValidateOutcome) -> Any:
-    payload = outcome.payload
-    if isinstance(payload, (dict, list)) and not _is_mcp_envelope(payload):
-        return payload
-    return _parse_validate_report_text(
-        outcome.report_text, reply=outcome.reply
-    )
-
-
 def require_mcp_validate_report(outcome: McpValidateOutcome) -> Any:
-    """Present-bundle MCP carrier: a report payload, not a protocol error.
-
-    A tool-error flag is allowed when the payload still carries the report
-    (L230 returns a report). A protocol error is not a report.
-    """
+    """Present-bundle MCP carrier: the result text is the validate report."""
     if mcp_is_protocol_error(outcome.reply):
         raise AssertionError(
             "membundle_validate returned a JSON-RPC protocol error instead of a "
             f"validate report; reply={outcome.reply!r}"
         )
     payload = _mcp_report_payload(outcome)
-    walk_booleans(payload)
+    report_bool(payload, "is_conformant")
+    report_bool(payload, "gate_passed")
     print(
         f"[F08] mcp report tool_error={mcp_is_tool_error(outcome.reply)}",
         flush=True,
@@ -1060,15 +1171,8 @@ def require_mcp_validate_report(outcome: McpValidateOutcome) -> Any:
 
 
 def require_mcp_validate_tool_error(outcome: McpValidateOutcome) -> str:
-    """Named-bundle load failure: not a protocol error and not a validate report.
-
-    A walkable both-pass, mixed conformant-gate-fail, or all-false
-    nonconformant payload is a present-bundle report of another class, not
-    this failure. A JSON-RPC protocol error is not this failure. Empty tool
-    text is not a classified load failure. Does not require MCP ``isError``
-    wrapping (history #10 / FP-09). Pair with a present-bundle twin that is
-    both-pass.
-    """
+    """Named-bundle load failure: ``isError`` true and the first content text
+    begins ``Failed to load bundle from ``."""
     print(
         f"[F08] mcp named-bundle load-failure protocol_error="
         f"{mcp_is_protocol_error(outcome.reply)} "
@@ -1081,33 +1185,16 @@ def require_mcp_validate_tool_error(outcome: McpValidateOutcome) -> str:
             "protocol error instead of a tool-level load failure; "
             f"reply={outcome.reply!r}"
         )
-    result = outcome.reply.get("result")
-    if not isinstance(result, Mapping):
-        raise AssertionError(
-            "membundle_validate named-bundle load failure is not a tools/call "
-            f"result; reply={outcome.reply!r}"
-        )
-    try:
-        payload = _mcp_report_payload(outcome)
-        flags = walk_booleans(payload)
-    except HarnessError as exc:
-        if not (outcome.report_text or "").strip():
-            raise AssertionError(
-                "membundle_validate named-bundle load failure produced empty "
-                "tool text; that is not a classified load failure; "
-                f"reply={outcome.reply!r}"
-            ) from exc
-        print(
-            f"[F08] mcp named-bundle load failure text={outcome.report_text!r}",
-            flush=True,
-        )
-        return outcome.report_text
-    raise AssertionError(
-        "membundle_validate named-bundle load failure returned a walkable "
-        "validate report of another class (both-pass, mixed gate-fail, or "
-        "all-false nonconformant); "
-        f"booleans={flags!r} payload={payload!r}"
+    assert mcp_is_tool_error(outcome.reply), (
+        "membundle_validate named-bundle load failure is not isError true; "
+        f"reply={outcome.reply!r}"
     )
+    text = _first_content_text(outcome.reply)
+    assert text.startswith("Failed to load bundle from "), (
+        "membundle_validate load failure text does not begin "
+        f"'Failed to load bundle from '; text={text!r}"
+    )
+    return text
 
 
 def assert_mcp_validate_not_both_pass(outcome: McpValidateOutcome) -> None:
@@ -1116,32 +1203,27 @@ def assert_mcp_validate_not_both_pass(outcome: McpValidateOutcome) -> None:
 
 
 def require_mcp_validate_both_pass(outcome: McpValidateOutcome) -> Any:
-    """Present-bundle MCP carrier: walkable report whose booleans are both-pass."""
+    """Present-bundle MCP carrier whose report is conformant gate-pass."""
     payload = require_mcp_validate_report(outcome)
     assert_both_pass(payload)
     return payload
 
 
 def assert_requested_structured_validate_is_machine_readable(result: RunResult) -> Any:
-    """L230 optional structured output: requested validate is machine-readable.
-
-    Does not pin JSON keys, field names, or human-mode stream split.
-    """
+    """``validate --json`` stdout is one JSON object (the validate report)."""
     payload = json_stdout(result, what="requested structured validate")
-    if not isinstance(payload, (dict, list)):
+    if not isinstance(payload, Mapping):
         raise AssertionError(
-            "requested structured validate is not machine-readable JSON "
-            f"(object or array); payload={payload!r}"
+            "requested structured validate is not one JSON object; "
+            f"payload={payload!r}"
         )
-    print(
-        f"[F08] structured output type={type(payload).__name__}",
-        flush=True,
-    )
+    report_bool(payload, "is_conformant")
+    report_bool(payload, "gate_passed")
     return payload
 
 
 def plant_ssot_links(root: str | Path, *, omit: str | None = None, regular: str | None = None) -> None:
-    """Create the four L69 SSoT mappings under *root*. Does not call the product."""
+    """Create the four SSoT mappings under *root*. Does not call the product."""
     base = Path(root)
     if not path_is_dir(base):
         raise HarnessError(f"cannot plant SSoT links; not a directory: {base}")
@@ -1177,48 +1259,6 @@ def seed_fact_identities(
     return seed_validatable_bundle(ws, rel, concepts, **kwargs)
 
 
-def require_at_warning_pair(
-    ws: Workspace,
-    ident: str,
-    bad_extra: Mapping[str, Any],
-    good_extra: Mapping[str, Any],
-) -> None:
-    """Present generated/verified ``at`` defect vs repaired twin under ``--strict``.
-
-    The helper itself asserts: both arms are status 0, and stripped reports
-    differ after identities, actor strings, timestamps, and unparseable
-    scalars are removed. Callers that only invoke this name are still a
-    check under the one-hop audit.
-    """
-    rel_bad, rel_ok = unique_tokens("bd", "ok")
-    seed_validatable_bundle(ws, rel_bad, [fact_concept(ident, extra=dict(bad_extra))])
-    seed_validatable_bundle(ws, rel_ok, [fact_concept(ident, extra=dict(good_extra))])
-    defective = run_validate(ws, rel_bad, strict=True)
-    repaired = run_validate(ws, rel_ok, strict=True)
-    extra = [
-        ident,
-        "agent/cli",
-        "human:alice",
-        "not-a-timestamp",
-        "2020-06-15T12:00:00Z",
-        "2020-06-16T12:00:00Z",
-    ]
-    tokens = path_tokens_for(ws.path, rel_bad, rel_ok)
-    require_warning_class(defective, repaired, path_tokens=tokens, extra_tokens=extra)
-    assert defective.returncode == 0, (
-        f"defective .at arm did not stay status 0 (exit {defective.returncode})"
-    )
-    assert repaired.returncode == 0, (
-        f"repaired .at arm did not stay status 0 (exit {repaired.returncode})"
-    )
-    assert_report_differs_after_strip(
-        combined_report(defective),
-        combined_report(repaired),
-        path_tokens=tokens,
-        extra_tokens=extra,
-    )
-
-
 def require_gate_finding_pair(
     ws: Workspace,
     ident: str,
@@ -1238,14 +1278,12 @@ def require_gate_finding_pair(
     without = run_validate(ws, rel_bad)
     with_strict, strict_payload = run_validate_structured(ws, rel_bad, strict=True)
     repaired, _repaired_payload = run_validate_structured(ws, rel_ok, strict=True)
-    tokens = path_tokens_for(ws.path, rel_bad, rel_ok)
     require_gate_finding_class(
         without,
         with_strict,
         repaired,
         structured_strict=strict_payload,
-        path_tokens=tokens,
-        extra_tokens=[ident],
+        concerns=f"{ident}.md",
     )
     return strict_payload
 

@@ -3,46 +3,33 @@
 
 from __future__ import annotations
 
-import os
 import secrets
-
-import pytest
 
 from _harness import workspace
 from F01_helpers import (
-    CORE_SLOTS,
-    bind_character_layer_slot,
-    binding,
     SHORT_FACTUAL,
-    SHORT_SLOP,
-    bind_core_metric_paths,
-    bind_invisible_count,
-    bind_mixed_script_count,
-    bind_nonstandard_space_count,
-    empty_input_identity,
-    error_points_toward_help,
     invisible_count_of,
     latin_homoglyph,
     mixed_script_count_of,
     nonstandard_space_count_of,
-    pad_human,
     proxy_sink,
     require_absent_finding,
     require_finding,
-    require_structured_failure,
     require_success_report,
     scan_path,
     scan_stdin,
-    stderr_states_one_file_at_a_time,
-    strip_error_covariates,
-    strip_paths_from_stderr,
     unicode_len,
-    usage_from_help,
 )
 from F02_helpers import (
+    CLEANUP_FLAG,
+    HELP_FLAG,
+    USAGE_SYNOPSIS,
     _stdout_is_report,
-    cleanup_flag_from_usage,
+    require_cannot_read_error,
+    require_empty_input_error,
+    require_unknown_option_error,
     runtime_token,
+    states_one_file_at_a_time,
     tokens_in_relative_order,
     write_docx,
     write_epub,
@@ -89,53 +76,6 @@ from F03_helpers import (
     stdout_is_zip_bytes,
     tag_payload,
 )
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _bind_f03_metrics():
-    """Bind core metrics and the three character-layer counts, step by step.
-
-    Each pair of contrast arms is the same prose; only one arm carries the
-    marks being counted. A failed step fails only the tests that read it.
-    """
-    with binding(*CORE_SLOTS):
-        fact = scan_stdin(SHORT_FACTUAL)
-        slop = scan_stdin(SHORT_SLOP)
-        if fact.returncode != 0:
-            raise AssertionError(
-                f"factual bind failed: exit {fact.returncode} stderr={fact.stderr_text!r}"
-            )
-        if slop.returncode != 0:
-            raise AssertionError(
-                f"slop bind failed: exit {slop.returncode} stderr={slop.stderr_text!r}"
-            )
-        _ff, f_metrics = require_success_report(
-            fact, input_chars=unicode_len(SHORT_FACTUAL)
-        )
-        _sf, s_metrics = require_success_report(
-            slop, input_chars=unicode_len(SHORT_SLOP)
-        )
-        none_text = " ".join(["lock"] * 39)
-        high_text = pad_human(300)
-        none_r = scan_stdin(none_text)
-        high_r = scan_stdin(high_text)
-        if none_r.returncode != 0 or high_r.returncode != 0:
-            raise AssertionError("confidence bind probes must succeed")
-        _nf, none_m = require_success_report(none_r, input_chars=unicode_len(none_text))
-        _hf, high_m = require_success_report(high_r, input_chars=unicode_len(high_text))
-        bind_core_metric_paths(
-            f_metrics,
-            s_metrics,
-            none_metrics=none_m,
-            high_conf_metrics=high_m,
-            scanned_metrics=f_metrics,
-            scanned_chars=unicode_len(SHORT_FACTUAL),
-            scanned_over_metrics=None,
-        )
-    for slot in ("invisible", "space", "mixed"):
-        with binding(slot):
-            bind_character_layer_slot(slot)
-    print("[F03] bound core metrics and character-layer counts", flush=True)
 
 
 # ===========================================================================
@@ -648,14 +588,17 @@ def test_cleanup_does_not_write_or_rebuild_the_document_file():
 
 
 def test_usage_warns_that_redirecting_cleanup_over_a_document_is_misuse():
-    """Help names the cleanup switch (L118). Graded L177 is extracted prose
-    on stdout and unchanged original-path bytes, not a usage-wording leftover.
+    """Help names the cleanup switch on the stated synopsis line. Graded L177 is
+    extracted prose on stdout and unchanged original-path bytes.
     """
-    usage = usage_from_help()
-    flag = cleanup_flag_from_usage(usage)
-    print(f"[F03] usage names cleanup switch {flag!r}", flush=True)
-    assert flag
-    assert flag in usage
+    with workspace() as ws:
+        help_r = ws.invoke([HELP_FLAG])
+    assert help_r.returncode == 0
+    usage = help_r.stdout_text
+    first = usage.splitlines()[0] if usage.splitlines() else ""
+    print(f"[F03] usage synopsis {first!r}", flush=True)
+    assert first == USAGE_SYNOPSIS
+    assert f"[{CLEANUP_FLAG}]" in first
 
     token, _planted, body = _planted_document_body()
     with workspace() as ws:
@@ -718,45 +661,29 @@ def test_cleanup_of_empty_input_still_fails_structured():
     flag = cleanup_switch()
     empty_plain = scan_stdin("")
     empty_clean = scan_stdin("", extra_args=(flag,))
-    err_plain = require_structured_failure(empty_plain)
-    err_clean = require_structured_failure(empty_clean)
-    assert empty_clean.returncode != 0
-    stripped_plain = strip_error_covariates(err_plain, flag)
-    stripped_clean = strip_error_covariates(err_clean, flag)
-    empty_input_identity([stripped_plain, stripped_clean], [])
+    require_empty_input_error(empty_plain)
+    require_empty_input_error(empty_clean)
     with workspace() as ws:
         ws.write("empty.txt", "")
         empty_file = scan_path(ws, "empty.txt", extra_args=(flag,))
-        path = str(ws.resolve("empty.txt"))
-        err_file = require_structured_failure(empty_file)
-        stripped_file = strip_error_covariates(
-            strip_paths_from_stderr(err_file, path, flag), flag, path
-        )
-    empty_input_identity([stripped_clean, stripped_file], [])
-    print("[F03] empty+cleanup shares empty-input kind", flush=True)
+        require_empty_input_error(empty_file)
+    print("[F03] empty+cleanup is the stated empty-input error", flush=True)
 
 
 def test_cleanup_of_unreadable_path_still_fails():
     flag = cleanup_switch()
     empty_clean = scan_stdin("", extra_args=(flag,))
-    err_empty = require_structured_failure(empty_clean)
+    require_empty_input_error(empty_clean)
     unknown_tok = "--zz" + secrets.token_hex(2)
     unknown = scan_stdin(SHORT_FACTUAL, extra_args=(flag, unknown_tok))
-    err_unknown = require_structured_failure(unknown)
+    require_unknown_option_error(unknown, unknown_tok)
     with workspace() as ws:
         missing = str(ws.resolve("missing.txt"))
         unread = ws.invoke([flag, missing])
-        err_unread = require_structured_failure(unread)
-        stripped_unread = strip_error_covariates(
-            strip_paths_from_stderr(err_unread, missing, flag), missing, flag
-        )
-    stripped_empty = strip_error_covariates(err_empty, flag, unknown_tok)
-    stripped_unknown = strip_error_covariates(err_unknown, flag, unknown_tok)
-    assert unread.returncode != 0
+        require_cannot_read_error(unread)
     assert unread.returncode == empty_clean.returncode
     assert unread.returncode != unknown.returncode
-    empty_input_identity([stripped_empty], [stripped_unread, stripped_unknown])
-    print("[F03] unreadable+cleanup kind differs from empty", flush=True)
+    print("[F03] unreadable+cleanup is the stated cannot-read error", flush=True)
 
 
 def test_cleanup_plus_unknown_option_still_fails_as_unknown_option():
@@ -764,14 +691,9 @@ def test_cleanup_plus_unknown_option_still_fails_as_unknown_option():
     token = "--zz" + secrets.token_hex(2)
     empty = scan_stdin("", extra_args=(flag,))
     unknown = scan_stdin(cellulose_probe(), extra_args=(flag, token))
-    eerr = require_structured_failure(empty)
-    uerr = require_structured_failure(unknown)
+    require_empty_input_error(empty)
+    require_unknown_option_error(unknown, token)
     assert empty.returncode != unknown.returncode
-    assert token in uerr
-    assert strip_error_covariates(eerr, token, flag) != strip_error_covariates(
-        uerr, token, flag
-    )
-    error_points_toward_help(uerr, usage_from_help())
     print(f"[F03] unknown+cleanup token={token!r} exit={unknown.returncode}", flush=True)
 
 
@@ -789,24 +711,14 @@ def test_cleanup_extra_operands_scrub_the_first_file_and_warn():
         only_first = ws.invoke([flag, first_path])
     text = require_scrubbed_stdout(multi)
     first_only = require_scrubbed_stdout(only_first)
-    print(f"[F03] extra-operand stdout={text!r}", flush=True)
+    print(f"[F03] extra-operand stdout={text!r} stderr={multi.stderr_text!r}", flush=True)
     assert multi.returncode == 0
     assert text == CELLULOSE_CLEAN + "\n"
     assert text == first_only
     assert second_token not in text
     assert named_file_in_stderr(multi.stderr_text, first_path)
-    names = (
-        first_path,
-        second_path,
-        os.path.basename(first_path),
-        os.path.basename(second_path),
-        flag,
-    )
-    left = strip_paths_from_stderr(only_first.stderr_text, *names)
-    right = strip_paths_from_stderr(multi.stderr_text, *names)
-    assert right
-    assert right != left
-    stderr_states_one_file_at_a_time(right)
+    assert states_one_file_at_a_time(multi.stderr_text, first_path)
+    assert multi.stderr_text != only_first.stderr_text
 
 
 # ===========================================================================

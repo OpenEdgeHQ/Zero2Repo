@@ -112,7 +112,7 @@ def _assert_modes_pairwise_different(values, labels):
 
 
 def test_python_navigator_pad_reports_full_matching_fix():
-    """L326 / L338: 100 Hz IMU + 1 Hz 2/2/2 m GNSS after dwell and 1.5 s ready is FULL."""
+    """100 Hz IMU + 1 Hz 2/2/2 m GNSS after dwell and 1.5 s ready is FULL."""
     for label, site in (("site-a", _site()), ("site-b", (*runtime_second_site(), None))):
         if site[3] is None:
             lat, lon, h = site[0], site[1], site[2]
@@ -131,8 +131,7 @@ def test_python_navigator_pad_reports_full_matching_fix():
                 f"ready={last.ready} pos={last.pos_ok}",
                 flush=True,
             )
-            if kind == "py":
-                _assert_py_mode(last, MODE_FULL, f"{kind} {label} pad")
+            _assert_py_mode(last, MODE_FULL, f"{kind} {label} pad")
             require_ready_full(last, f"{kind} {label} pad")
             err = ecef_err_m(last.ecef, origin)
             print(f"{kind} {label} |ecef-fix|={err} m", flush=True)
@@ -159,7 +158,7 @@ def test_python_navigator_pad_reports_full_matching_fix():
 
 
 def test_unified_solution_follows_later_gnss_not_first_fix():
-    """L89–L91 / L326: after FULL, a later fusion-usable GNSS is followed, not the first pad fix."""
+    """after FULL, a later fusion-usable GNSS is followed, not the first pad fix."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=True, mag=True)
     mag = mag_body(lat, lon, 0.0)
@@ -198,7 +197,7 @@ def test_unified_solution_follows_later_gnss_not_first_fix():
 
 
 def test_skipping_epoch_leaves_mode_none():
-    """L326 / L331 / L338: pushing IMU+GNSS+baro+mag without running the epoch stays NONE."""
+    """pushing IMU+GNSS+baro+mag without running the epoch stays NONE."""
     lat, lon, h, origin = _site()
     epochs = with_steps(pad_full(lat, lon, h, origin, baro=True, mag=True), False)
     scen = site_nav(lat, lon, h, epochs)
@@ -211,9 +210,8 @@ def test_skipping_epoch_leaves_mode_none():
             f"{kind} skip-epoch mode={last.mode} name={last.mode_name} ready={last.ready}",
             flush=True,
         )
-        if kind == "py":
-            _assert_py_mode(last, MODE_NONE, f"{kind} skip-epoch")
-        else:
+        _assert_py_mode(last, MODE_NONE, f"{kind} skip-epoch")
+        if kind == "c":
             assert last.mode == unused_none, (
                 f"C skip-epoch mode {last.mode} was not the unused NONE value {unused_none}"
             )
@@ -221,7 +219,7 @@ def test_skipping_epoch_leaves_mode_none():
 
 
 def test_solution_read_does_not_advance_filter():
-    """L326 / L339: reads-only after FULL stay FULL; the same IMU with epochs run is COASTING."""
+    """reads-only after FULL stay FULL; the same IMU with epochs run is COASTING."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=True, mag=True)
     reads = imu_only(list(pad), duration_s=3.2, step=False)
@@ -231,15 +229,13 @@ def test_solution_read_does_not_advance_filter():
         assert held.init_ok
         at_full = held.at_or_before(t_pad)
         last = held.last()
-        if kind == "py":
-            _assert_py_mode(at_full, MODE_FULL, f"{kind} pre-read")
-            _assert_py_mode(last, MODE_FULL, f"{kind} reads-only")
+        _assert_py_mode(at_full, MODE_FULL, f"{kind} pre-read")
+        _assert_py_mode(last, MODE_FULL, f"{kind} reads-only")
         require_ready_full(last, f"{kind} reads-only still ready")
         print(f"{kind} reads-only stayed mode={last.mode} name={last.mode_name}", flush=True)
     for kind, twin in nav_langs(site_nav(lat, lon, h, ran)):
         last = twin.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_COASTING, f"{kind} epoch-run twin")
+        _assert_py_mode(last, MODE_COASTING, f"{kind} epoch-run twin")
         assert last.ready, f"{kind}: 3 s IMU-only left INS not ready"
         print(f"{kind} epoch-run twin mode={last.mode} name={last.mode_name}", flush=True)
         if kind == "c":
@@ -250,15 +246,14 @@ def test_solution_read_does_not_advance_filter():
 
 
 def test_unused_or_null_instance_is_none():
-    """L331 / L338: unused and C NULL instances are NONE."""
+    """unused and C NULL instances are NONE."""
     lat, lon, h = runtime_site()
     unused = NavScenario(lat_deg=lat, lon_deg=lon, h_m=h, kind="unused")
     for kind, run in nav_langs(unused):
         assert run.init_ok, f"{kind} unused init failed"
         last = run.last()
         print(f"{kind} unused mode={last.mode} name={last.mode_name} ready={last.ready}", flush=True)
-        if kind == "py":
-            _assert_py_mode(last, MODE_NONE, f"{kind} unused")
+        _assert_py_mode(last, MODE_NONE, f"{kind} unused")
         assert not last.ready
     null = c_nav_run(NavScenario(lat_deg=lat, lon_deg=lon, h_m=h, kind="null"))
     assert null.init_ok
@@ -275,7 +270,7 @@ def test_unused_or_null_instance_is_none():
 
 
 def test_aiding_age_split_full_vs_coasting():
-    """L319–L320: 1.9 s and 2.0 s stay FULL; just over 2.0 s is COASTING, still ready."""
+    """1.9 s and 2.0 s stay FULL; just over 2.0 s is COASTING, still ready."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=True, mag=True)
     arms = {
@@ -292,9 +287,8 @@ def test_aiding_age_split_full_vs_coasting():
                 flush=True,
             )
             assert last.ready, f"{kind} {tag}s: INS ready became false"
-            if kind == "py":
-                want = MODE_COASTING if tag == "just-over" else MODE_FULL
-                _assert_py_mode(last, want, f"{kind} {tag}s")
+            want = MODE_COASTING if tag == "just-over" else MODE_FULL
+            _assert_py_mode(last, want, f"{kind} {tag}s")
             if kind == "c":
                 c_modes[tag] = last.mode
     assert c_modes["1.9"] == c_modes["2.0"], "C 1.9 s and 2.0 s were not the same FULL value"
@@ -304,7 +298,7 @@ def test_aiding_age_split_full_vs_coasting():
 
 
 def test_three_second_outage_inside_window_is_coasting():
-    """L324 / L338 / L339: 3 s GNSS gap is COASTING; not immediately NONE with no attitude."""
+    """3 s GNSS gap is COASTING; not immediately NONE with no attitude."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=True, mag=True)
     baro_pa = tropospheric_isa_pressure_pa(h)
@@ -320,12 +314,11 @@ def test_three_second_outage_inside_window_is_coasting():
                 f"ready={last.ready} h_ok={last.h_ok} best={last.best_ok}",
                 flush=True,
             )
-            if kind == "py":
-                _assert_py_mode(last, MODE_COASTING, f"{kind} 3s {tag}")
-                assert last.mode_name != MODE_NONE, (
-                    f"{kind} 3s {tag}: in-window GNSS outage was immediately NONE"
-                )
-            else:
+            _assert_py_mode(last, MODE_COASTING, f"{kind} 3s {tag}")
+            assert last.mode_name != MODE_NONE, (
+                f"{kind} 3s {tag}: in-window GNSS outage was immediately NONE"
+            )
+            if kind == "c":
                 assert last.mode != unused_none, (
                     f"C 3s {tag}: in-window GNSS outage was the unused NONE value"
                 )
@@ -335,7 +328,7 @@ def test_three_second_outage_inside_window_is_coasting():
 
 
 def test_expired_window_is_attitude_only_ins_frozen():
-    """L320 / L321 / L333 / L338: post-2 s COASTING still integrates; 11 s freeze holds."""
+    """post-2 s COASTING still integrates; 11 s freeze holds."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=False, mag=False)
     force_s = 3.0
@@ -354,9 +347,8 @@ def test_expired_window_is_attitude_only_ins_frozen():
             f"door_pos={door.pos_ok} last_pos={last.pos_ok}",
             flush=True,
         )
-        if kind == "py":
-            _assert_py_mode(door, MODE_COASTING, f"{kind} just-over-2 door")
-            _assert_py_mode(last, MODE_COASTING, f"{kind} in-window force")
+        _assert_py_mode(door, MODE_COASTING, f"{kind} just-over-2 door")
+        _assert_py_mode(last, MODE_COASTING, f"{kind} in-window force")
         assert door.ready and last.ready, f"{kind}: in-window INS ready became false"
         require_ready_full(door, f"{kind} door still publishes")
         require_ready_full(last, f"{kind} in-window still publishes")
@@ -371,9 +363,8 @@ def test_expired_window_is_attitude_only_ins_frozen():
             f"pos={fr.pos_ok}",
             flush=True,
         )
-        if kind == "py":
-            _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} expiry")
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} freeze extra")
+        _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} expiry")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} freeze extra")
         assert not fr.ready, f"{kind}: 11 s IMU-only left ready true"
         assert fr.pos_ok and fr.ecef is not None, f"{kind}: freeze unpublished INS positions"
         assert last.pos_ok and last.ecef is not None
@@ -390,7 +381,7 @@ def test_expired_window_is_attitude_only_ins_frozen():
 
 
 def test_pre_init_ars_is_attitude_only():
-    """L321 / L265: IMU-only after ARS starts, before any absolute position, is ATTITUDE_ONLY."""
+    """IMU-only after ARS starts, before any absolute position, is ATTITUDE_ONLY."""
     lat, lon, h, origin = _site()
     imu = imu_only([], duration_s=1.2)
     imu_mag = imu_only([], duration_s=1.2, mag=mag_body(lat, lon, 0.0))
@@ -406,8 +397,7 @@ def test_pre_init_ars_is_attitude_only():
                 f"best={last.best_ok} pos={last.pos_ok}",
                 flush=True,
             )
-            if kind == "py":
-                _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} pre-init {tag}")
+            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} pre-init {tag}")
             assert not last.ready, f"{kind} pre-init {tag}: ready before any 3D"
             require_best_attitude(last, f"{kind} pre-init {tag}")
             assert math.isfinite(last.best[0]) and math.isfinite(last.best[1])
@@ -427,7 +417,7 @@ def test_pre_init_ars_is_attitude_only():
 
 
 def test_first_usable_fix_after_expired_window_is_full_that_epoch():
-    """L338: next fusion-usable fix after freeze is FULL on that epoch; unfusable is ATTITUDE_ONLY."""
+    """next fusion-usable fix after freeze is FULL on that epoch; unfusable is ATTITUDE_ONLY."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=False, mag=False)
     frozen = imu_only(list(pad), duration_s=FREEZE_11S)
@@ -465,10 +455,9 @@ def test_first_usable_fix_after_expired_window_is_full_that_epoch():
             f"good={good.mode_name} good_ready={good.ready} good_t={good.t_us} want={t_good}",
             flush=True,
         )
-        if kind == "py":
-            _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} freeze")
-            _assert_py_mode(bad, MODE_ATTITUDE_ONLY, f"{kind} unfusable return")
-            _assert_py_mode(good, MODE_FULL, f"{kind} first usable")
+        _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} freeze")
+        _assert_py_mode(bad, MODE_ATTITUDE_ONLY, f"{kind} unfusable return")
+        _assert_py_mode(good, MODE_FULL, f"{kind} first usable")
         assert not fr.ready and not bad.ready
         require_best_attitude(bad, f"{kind} unfusable still has attitude")
         require_ready_full(good, f"{kind} first usable after freeze")
@@ -479,7 +468,7 @@ def test_first_usable_fix_after_expired_window_is_full_that_epoch():
 
 
 def test_quality_loss_unpublishes_ins_positions_attitude_continues():
-    """L332 / L338: 10 s of worse-than-exit GNSS is ATTITUDE_ONLY; positions fail; attitude remains."""
+    """10 s of worse-than-exit GNSS is ATTITUDE_ONLY; positions fail; attitude remains."""
     lat, lon, h, origin = _site()
     yaw = runtime_att_yaw_rad()
     mag = mag_body(lat, lon, yaw)
@@ -500,8 +489,7 @@ def test_quality_loss_unpublishes_ins_positions_attitude_continues():
             f"ready={last.ready} pos={last.pos_ok} best={last.best_ok} ahrs={last.ahrs_ok}",
             flush=True,
         )
-        if kind == "py":
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} quality-loss")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} quality-loss")
         assert not last.ready
         require_positions_fail(last, f"{kind} quality-loss")
         require_best_attitude(last, f"{kind} quality-loss attitude")
@@ -511,8 +499,7 @@ def test_quality_loss_unpublishes_ins_positions_attitude_continues():
         last = run.last()
         assert last.pos_ok, f"{kind}: freeze unpublished positions (must stay distinct)"
         assert last.ecef is not None
-        if kind == "py":
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} freeze")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} freeze")
         q = qloss[kind]
         print(
             f"{kind} freeze vs quality-loss pos_ok {last.pos_ok} vs {q.pos_ok} "
@@ -529,7 +516,7 @@ def test_quality_loss_unpublishes_ins_positions_attitude_continues():
 
 
 def test_best_attitude_is_ins_while_ready():
-    """L323: while INS is ready, best yaw is INS, not raw ARS — on FULL and on COASTING."""
+    """while INS is ready, best yaw is INS, not raw ARS — on FULL and on COASTING."""
     lat, lon, h, origin = _site()
     yaw = runtime_att_yaw_rad()
     ars_seed = yaw + runtime_mag_offset_rad()
@@ -557,15 +544,14 @@ def test_best_attitude_is_ins_while_ready():
     for kind, run in nav_langs(scen):
         full = run.at_or_before(t_full)
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(full, MODE_FULL, f"{kind} INS-ready FULL")
-            _assert_py_mode(last, MODE_COASTING, f"{kind} INS-ready COASTING")
+        _assert_py_mode(full, MODE_FULL, f"{kind} INS-ready FULL")
+        _assert_py_mode(last, MODE_COASTING, f"{kind} INS-ready COASTING")
         _ins_not_ars(full, kind, "FULL")
         _ins_not_ars(last, kind, "COASTING")
 
 
 def test_best_attitude_falls_back_to_ahrs_then_ars():
-    """L323 / L332: when INS is not ready, best is mag AHRS; without mag, live ARS vs frozen INS."""
+    """when INS is not ready, best is mag AHRS; without mag, live ARS vs frozen INS."""
     lat, lon, h, origin = _site()
     y_ins = runtime_att_yaw_rad()
     y_mag = y_ins + runtime_mag_offset_rad()
@@ -579,8 +565,7 @@ def test_best_attitude_falls_back_to_ahrs_then_ars():
     ars_only = imu_only(list(to_freeze), duration_s=2.5, gyr=(0.0, 0.0, rate))
     for kind, run in nav_langs(site_nav(lat, lon, h, with_mag, yaw_hint=y_ins, yaw_std=HINT_YAW_STD)):
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} AHRS fallback")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} AHRS fallback")
         assert not last.ready
         best = require_best_attitude(last, f"{kind} AHRS fallback")
         ahrs = require_ahrs_attitude(last, f"{kind} AHRS fallback")
@@ -601,8 +586,7 @@ def test_best_attitude_falls_back_to_ahrs_then_ars():
     for kind, run in nav_langs(site_nav(lat, lon, h, ars_only, yaw_hint=y_ins, yaw_std=HINT_YAW_STD)):
         frozen = run.at_or_before(t_fr)
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} ARS-only")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} ARS-only")
         assert not last.ready
         best = require_best_attitude(last, f"{kind} ARS-only")
         assert last.ars_ok and last.ars_att is not None
@@ -626,7 +610,7 @@ def test_best_attitude_falls_back_to_ahrs_then_ars():
 
 
 def test_ars_fallback_yaw_is_last_ins_plus_ars_change():
-    """L323: after INS once converged, fallback yaw is last INS + ARS change, not ARS raw or 0."""
+    """after INS once converged, fallback yaw is last INS + ARS change, not ARS raw or 0."""
     lat, lon, h, origin = _site()
     y_ins = runtime_att_yaw_rad()
     ars_seed = y_ins + runtime_mag_offset_rad()
@@ -644,8 +628,7 @@ def test_ars_fallback_yaw_is_last_ins_plus_ars_change():
         split_snap = run.last_ready()
         last = run.last()
         require_ready_full(split_snap, f"{kind} last-ready")
-        if kind == "py":
-            _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} ARS fallback")
+        _assert_py_mode(last, MODE_ATTITUDE_ONLY, f"{kind} ARS fallback")
         assert not last.ready, (
             f"{kind}: fallback snapshot was still INS-ready; carry was never a fallback"
         )
@@ -700,7 +683,7 @@ def test_ars_fallback_yaw_is_last_ins_plus_ars_change():
 
 
 def test_local_height_continuous_when_second_source_arrives():
-    """L324 / L339: first source fixes the datum; a later source conforms, no jump."""
+    """first source fixes the datum; a later source conforms, no jump."""
     lat, lon, h, origin = _site()
     climb = runtime_climb_m()
     p0 = tropospheric_isa_pressure_pa(h)
@@ -774,7 +757,7 @@ def test_local_height_continuous_when_second_source_arrives():
 
 
 def test_baro_is_outage_surviving_local_height_when_both_present():
-    """L7 / L324 / L338: with GNSS+baro, outage local height follows a baro step; GNSS return does not yank it."""
+    """PRD: with GNSS+baro, outage local height follows a baro step; GNSS return does not yank it."""
     lat, lon, h, origin = _site()
     climb = runtime_climb_m()
     if climb > 3.2:
@@ -815,8 +798,7 @@ def test_baro_is_outage_surviving_local_height_when_both_present():
     for kind, run in nav_langs(site_nav(lat, lon, h, stepped, auto_zupt_disable=True)):
         pre = run.at_or_before(t0)
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_COASTING, f"{kind} baro outage")
+        _assert_py_mode(last, MODE_COASTING, f"{kind} baro outage")
         h_pre = require_local_height(pre, f"{kind} H0")
         h_out = require_local_height(last, f"{kind} outage baro")
         dh_step[kind] = h_out - h_pre
@@ -839,8 +821,7 @@ def test_baro_is_outage_surviving_local_height_when_both_present():
     for kind, run in nav_langs(site_nav(lat, lon, h, restored, auto_zupt_disable=True)):
         late = run.at_or_before(t_out)
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_FULL, f"{kind} GNSS return")
+        _assert_py_mode(last, MODE_FULL, f"{kind} GNSS return")
         h_late = require_local_height(late, f"{kind} late-outage")
         h_ret = require_local_height(last, f"{kind} GNSS-return")
         print(f"{kind} return late={h_late} now={h_ret}", flush=True)
@@ -855,7 +836,7 @@ def test_baro_is_outage_surviving_local_height_when_both_present():
 
 
 def test_mocap_only_full_refuses_ellipsoid_height():
-    """L325 / L338 / L339: indoor local-position FULL publishes local, refuses ellipsoid,
+    """indoor local-position FULL publishes local, refuses ellipsoid,
     and does not report the prescribed init origin as WGS84 ellipsoid height."""
     lat_a, lon_a, h_a, origin_a = _site()
     # Second prescribed init height follows the first origin, before either
@@ -864,7 +845,6 @@ def test_mocap_only_full_refuses_ellipsoid_height():
     lat_b, lon_b = runtime_second_site()[:2]
     origin_b = ecef_from_llh_deg(lat_b, lon_b, h_b)
     dh_origin = abs(h_b - h_a)
-    # TEST-FIX(F08): upstream src/nav_suite.c:1188 shows a local-position-only run refuses ellipsoid height and does not report the prescribed init origin; the two init heights differ by a fixed offset, not by two independent runtime_site() draws
     assert dh_origin > 8.0, (
         f"indoor origin heights {h_a} and {h_b} are not distinguishable"
     )
@@ -891,14 +871,13 @@ def test_mocap_only_full_refuses_ellipsoid_height():
                 f"init_h={h}",
                 flush=True,
             )
-            if kind == "py":
-                _assert_py_mode(last, MODE_FULL, f"{kind} mocap {tag}")
+            _assert_py_mode(last, MODE_FULL, f"{kind} mocap {tag}")
             assert last.ready, f"{kind} mocap {tag}: not ready with fresh local aiding"
             assert last.ned_ok and last.ned is not None, f"{kind} mocap {tag}: local unpublished"
-            # L339 first: a hollow that publishes the prescribed init origin as
+            # PRD first: a hollow that publishes the prescribed init origin as
             # ellipsoid is this sentence, not merely "some ellipsoid leaked".
             require_indoor_ellipsoid_not_init_origin(
-                last, h, f"{kind} mocap {tag} L339"
+                last, h, f"{kind} mocap {tag} PRD"
             )
             require_unpublished_ellipsoid(last, f"{kind} mocap {tag}")
             if tag.startswith("p0-"):
@@ -911,7 +890,7 @@ def test_mocap_only_full_refuses_ellipsoid_height():
             and indoor_ellipsoid_matches_init_origin(s2, h2)
         )
         print(
-            f"{kind} L339 origin contrast h {h1}->{h2} ell {s1.ell}->{s2.ell} "
+            f"{kind} PRD origin contrast h {h1}->{h2} ell {s1.ell}->{s2.ell} "
             f"tracked={tracked}",
             flush=True,
         )
@@ -922,7 +901,7 @@ def test_mocap_only_full_refuses_ellipsoid_height():
 
 
 def test_ellipsoid_from_ins_under_gnss_and_local_plus_offset_in_outage():
-    """L325 / L338: under GNSS ellipsoid matches GNSS height; in an outage it follows local + held offset."""
+    """under GNSS ellipsoid matches GNSS height; in an outage it follows local + held offset."""
     lat, lon, h, origin = _site()
     climb = runtime_climb_m()
     p0 = tropospheric_isa_pressure_pa(h)
@@ -939,8 +918,7 @@ def test_ellipsoid_from_ins_under_gnss_and_local_plus_offset_in_outage():
     gap = imu_only(list(pad), duration_s=OUTAGE_3S, baro_pa=p1, mag=mag)
     for kind, run in nav_langs(site_nav(lat, lon, h, pad)):
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(last, MODE_FULL, f"{kind} GNSS ellipsoid")
+        _assert_py_mode(last, MODE_FULL, f"{kind} GNSS ellipsoid")
         ell = require_ellipsoid(last, f"{kind} GNSS ellipsoid")
         print(f"{kind} GNSS ell={ell} site_h={h}", flush=True)
         assert abs(ell - h) < 2.5, f"{kind}: ellipsoid under GNSS was not near GNSS height"
@@ -968,7 +946,7 @@ def test_ellipsoid_from_ins_under_gnss_and_local_plus_offset_in_outage():
 
 
 def test_mocap_owns_ned_constant_offset_not_shifted_origin():
-    """L324: GNSS-first off-origin local is not rewritten onto mocap; indoor Δ in → Δ out; baro keeps ellipsoid unpublished."""
+    """GNSS-first off-origin local is not rewritten onto mocap; indoor Δ in → Δ out; baro keeps ellipsoid unpublished."""
     lat, lon, h, origin = _site()
     p0 = runtime_tracker_ned()
     dn = runtime_mocap_delta_m()
@@ -1065,8 +1043,7 @@ def test_mocap_owns_ned_constant_offset_not_shifted_origin():
         a = run.at_or_before(t_i0)
         b = run.at_or_before(t_i1)
         last = run.last()
-        if kind == "py":
-            _assert_py_mode(a, MODE_FULL, f"{kind} indoor mocap FULL")
+        _assert_py_mode(a, MODE_FULL, f"{kind} indoor mocap FULL")
         assert a.ned is not None and b.ned is not None
         d_pub = b.ned[0] - a.ned[0]
         print(
@@ -1077,10 +1054,10 @@ def test_mocap_owns_ned_constant_offset_not_shifted_origin():
         assert abs(d_pub - dn) < 0.35 * abs(dn), (
             f"{kind}: indoor published north change {d_pub} was not about the mocap Δ {dn}"
         )
-        require_indoor_ellipsoid_not_init_origin(a, h, f"{kind} indoor L339")
+        require_indoor_ellipsoid_not_init_origin(a, h, f"{kind} indoor PRD")
         require_unpublished_ellipsoid(a, f"{kind} indoor ellipsoid")
         require_indoor_ellipsoid_not_init_origin(
-            last, h, f"{kind} indoor baro-after-mocap L339"
+            last, h, f"{kind} indoor baro-after-mocap PRD"
         )
         require_unpublished_ellipsoid(last, f"{kind} indoor baro-after-mocap ellipsoid")
 
@@ -1091,7 +1068,7 @@ def test_mocap_owns_ned_constant_offset_not_shifted_origin():
 
 
 def test_static_attitude_hint_seeds_ins_until_init():
-    """L334: a static yaw hint seeds ARS yaw until INS initializes, and INS yaw after FULL."""
+    """a static yaw hint seeds ARS yaw until INS initializes, and INS yaw after FULL."""
     lat, lon, h, origin = _site()
     yaw = runtime_att_yaw_rad()
     pre_imu = imu_only([], duration_s=1.2)
@@ -1142,7 +1119,7 @@ def test_static_attitude_hint_seeds_ins_until_init():
 
 
 def test_static_attitude_hint_does_not_bias_later_reacquisition():
-    """L334 / L234: after freeze re-acquire, yaw does not snap back to the stale static hint."""
+    """after freeze re-acquire, yaw does not snap back to the stale static hint."""
     lat, lon, h, origin = _site()
     hint = runtime_att_yaw_rad() + 0.8
     y_mag = hint + runtime_mag_offset_rad()
@@ -1171,8 +1148,7 @@ def test_static_attitude_hint_does_not_bias_later_reacquisition():
         fr = run.at_or_before(t_fr)
         last = run.last()
         require_ready_full(ready, f"{kind} last-ready before freeze")
-        if kind == "py":
-            _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} freeze before reacquire")
+        _assert_py_mode(fr, MODE_ATTITUDE_ONLY, f"{kind} freeze before reacquire")
         assert not fr.ready, (
             f"{kind}: freeze snapshot was still INS-ready; re-acquire never left INS"
         )
@@ -1213,7 +1189,7 @@ def test_static_attitude_hint_does_not_bias_later_reacquisition():
 
 
 def test_outlier_override_from_ins_options_reaches_parallel_filters():
-    """L327 / L351: INS-options chi² override reaches baro (after INS is not live), AHRS, and ARS, short horizon."""
+    """INS-options chi² override reaches baro (after INS is not live), AHRS, and ARS, short horizon."""
     lat, lon, h, origin = _site()
     climb = runtime_climb_m() + 8.0
     p0 = tropospheric_isa_pressure_pa(h)
@@ -1296,7 +1272,7 @@ def test_outlier_override_from_ins_options_reaches_parallel_filters():
 
 
 def test_standstill_definition_from_ins_options_reaches_ars_and_baro():
-    """L327 / L264: disabling INS standstill releases ARS/AHRS yaw hold and baro height hold after INS is not live."""
+    """disabling INS standstill releases ARS/AHRS yaw hold and baro height hold after INS is not live."""
     lat, lon, h, origin = _site()
     mag = mag_body(lat, lon, 0.0)
     p0 = tropospheric_isa_pressure_pa(h)
@@ -1382,7 +1358,7 @@ def test_standstill_definition_from_ins_options_reaches_ars_and_baro():
 
 
 def test_four_mode_values_are_pairwise_different():
-    """L319–L322 / L79: C values for the four named conditions are pairwise different."""
+    """C values for the four named conditions are pairwise different."""
     lat, lon, h, origin = _site()
     pad = pad_full(lat, lon, h, origin, baro=True, mag=True)
     full = c_nav_run(site_nav(lat, lon, h, pad))

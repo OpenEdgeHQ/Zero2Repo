@@ -45,7 +45,7 @@ from F02_helpers import (
     runtime_site,
 )
 
-# Named indoor tracker (PRD L174 / L191) and published numeric oracles.
+# Fixed indoor tracker inputs and tolerances.
 TRACKER_NAMED_NED = (1.5, 0.0, 0.0)
 LOCAL_HZ = 10
 CM_STD_M = 0.01
@@ -938,7 +938,6 @@ def _run_aiding(kind: str, scen: AidingScenario) -> AidingRun:
         result = invoke(_C_PROBE, stdin=payload, timeout=LONG_TIMEOUT)
     elif kind == "py":
         ident = product_identity()
-        # TEST-FIX(F03): upstream python/INSLIB/__init__.py:29 shows the package directory make pylib wrote re-exports Config and Ins; python/INSLIB/_core.py:54 loads libINSLIB.so from that directory
         assert ident is not None, "python package directory was not found after make pylib"
         assert ident.library is not None, "shared library is missing after make pylib"
         package = ident.package_name

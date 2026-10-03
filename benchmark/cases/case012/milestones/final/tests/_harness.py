@@ -36,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -177,7 +176,6 @@ _HOST_CATEGORIES_OFF = {
     "nursery": "off",
 }
 
-_ESLINT_CODE_WRAP = re.compile(r"^(?:eslint|eslint-plugin-js)\((.+)\)$")
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +249,12 @@ class RunResult:
 class Diagnostic:
     """One host-linter finding parsed from JSON output.
 
-    ``rule`` is the published code as the host reports it after unwrapping
-    an ``eslint(...)`` wrapper (for example ``lint-policy/no-array-filter-map``).
-    A host parse failure or built-in finding still produces a Diagnostic;
-    it is not turned into ``None``. ``raw`` is the original JSON object.
+    ``rule`` is the finding's ``code`` exactly as the host's JSON report
+    gives it (for a plugin finding ``<plugin>(<rule>)``, for example
+    ``lint-policy(no-array-filter-map)``), or ``""`` when the host gives no
+    code. ``line`` / ``column`` are the 1-based position of the first
+    label's span. A host parse failure still produces a Diagnostic; it is
+    not turned into ``None``. ``raw`` is the original JSON object.
     """
 
     rule: str
@@ -1320,7 +1320,11 @@ def rule_key(plugin: str, rule: str) -> str:
 
 
 def parse_json_value(text: str, *, source: str = "payload") -> Any:
-    """Parse *text* as JSON.
+    """Parse *text* as one JSON document.
+
+    The whole text must be the document. Leading or trailing non-JSON text
+    is not skipped: the Interface Contract states that the host's standard
+    output under ``--format json`` is the JSON report and nothing else.
 
     Raises:
         HarnessError: if *text* is empty or is not JSON. Never returns
@@ -1331,26 +1335,10 @@ def parse_json_value(text: str, *, source: str = "payload") -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        decoder = json.JSONDecoder()
-        stripped = text.lstrip()
-        start = 0
-        for index, char in enumerate(stripped):
-            if char in "[{":
-                start = index
-                break
-        else:
-            excerpt = text if len(text) <= 500 else text[:500] + "…"
-            raise HarnessError(
-                f"{source} is not JSON: {exc}; text={excerpt!r}"
-            ) from exc
-        try:
-            value, _end = decoder.raw_decode(stripped[start:])
-        except json.JSONDecodeError as inner:
-            excerpt = text if len(text) <= 500 else text[:500] + "…"
-            raise HarnessError(
-                f"{source} is not JSON: {inner}; text={excerpt!r}"
-            ) from inner
-        return value
+        excerpt = text if len(text) <= 500 else text[:500] + "…"
+        raise HarnessError(
+            f"{source} is not JSON: {exc}; text={excerpt!r}"
+        ) from exc
 
 
 def parse_json_object(text: str, *, source: str = "payload") -> dict[str, Any]:
@@ -1367,75 +1355,51 @@ def parse_json_object(text: str, *, source: str = "payload") -> dict[str, Any]:
     return value
 
 
-def _unwrap_rule_code(code: Any) -> str:
-    if isinstance(code, dict):
-        inner = code.get("code", code.get("id", code.get("ruleId")))
-        return _unwrap_rule_code(inner)
+def _rule_code(raw: Mapping[str, Any]) -> str:
+    """The finding's ``code`` string; ``""`` when the host gives none.
+
+    A host parse failure carries no ``code``. Plugin findings carry
+    ``<plugin>(<rule>)`` (Interface Contract, "Observing findings").
+    """
+    code = raw.get("code")
     if code is None:
         return ""
-    text = str(code)
-    matched = _ESLINT_CODE_WRAP.match(text)
-    if matched:
-        return matched.group(1)
-    return text
+    if not isinstance(code, str):
+        raise HarnessError(f"finding 'code' is {type(code).__name__}, not a string: {raw!r}")
+    return code
 
 
 def _severity_of(raw: Mapping[str, Any]) -> str:
-    value = raw.get("severity", raw.get("level", raw.get("severityName")))
+    value = raw.get("severity")
     if value is None:
         return ""
-    if isinstance(value, int):
-        if value >= 2:
-            return "error"
-        if value == 1:
-            return "warning"
-        return "off"
-    return str(value).lower()
+    return str(value)
 
 
 def _filename_of(raw: Mapping[str, Any]) -> str:
-    for key in ("filename", "filePath", "file", "path"):
-        value = raw.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
+    value = raw.get("filename")
+    return value if isinstance(value, str) else ""
 
 
 def _line_column(raw: Mapping[str, Any]) -> tuple[int | None, int | None]:
-    line = raw.get("line")
-    column = raw.get("column")
-    loc = raw.get("loc")
-    if isinstance(loc, Mapping):
-        start = loc.get("start", loc)
-        if isinstance(start, Mapping):
-            if line is None:
-                line = start.get("line")
-            if column is None:
-                column = start.get("column")
+    """1-based ``line`` and ``column`` of the first label's ``span``."""
     labels = raw.get("labels")
-    if (line is None or column is None) and isinstance(labels, list) and labels:
-        first = labels[0]
-        if isinstance(first, Mapping):
-            span = first.get("span", first)
-            if isinstance(span, Mapping):
-                if line is None:
-                    line = span.get("line")
-                if column is None:
-                    column = span.get("column")
-    try:
-        line_n = int(line) if line is not None else None
-    except (TypeError, ValueError):
-        line_n = None
-    try:
-        col_n = int(column) if column is not None else None
-    except (TypeError, ValueError):
-        col_n = None
+    if not isinstance(labels, list) or not labels:
+        return None, None
+    first = labels[0]
+    span = first.get("span") if isinstance(first, Mapping) else None
+    if not isinstance(span, Mapping):
+        return None, None
+    line = span.get("line")
+    column = span.get("column")
+    line_n = line if isinstance(line, int) and not isinstance(line, bool) else None
+    col_n = column if isinstance(column, int) and not isinstance(column, bool) else None
     return line_n, col_n
 
 
 def _diagnostic_from_object(raw: Mapping[str, Any]) -> Diagnostic:
-    rule = _unwrap_rule_code(raw.get("ruleId", raw.get("rule", raw.get("code"))))
-    message = raw.get("message", raw.get("msg", raw.get("help")))
+    rule = _rule_code(raw)
+    message = raw.get("message")
     if message is None:
         message = ""
     elif not isinstance(message, str):
@@ -1457,49 +1421,28 @@ def _diagnostic_from_object(raw: Mapping[str, Any]) -> Diagnostic:
 
 
 def _diagnostics_from_value(value: Any, *, source: str) -> list[Diagnostic]:
-    if value is None:
-        raise HarnessError(f"{source} JSON is null; expected diagnostics")
-    if isinstance(value, list):
-        found: list[Diagnostic] = []
-        for item in value:
-            if isinstance(item, Mapping) and "messages" in item:
-                messages = item["messages"]
-                if not isinstance(messages, list):
-                    raise HarnessError(
-                        f"{source} file entry 'messages' is "
-                        f"{type(messages).__name__}, not a list"
-                    )
-                file_name = _filename_of(item)
-                for message in messages:
-                    if not isinstance(message, Mapping):
-                        raise HarnessError(
-                            f"{source} message is {type(message).__name__}, "
-                            "not an object"
-                        )
-                    merged = dict(message)
-                    if file_name and not _filename_of(merged):
-                        merged["filename"] = file_name
-                    found.append(_diagnostic_from_object(merged))
-            elif isinstance(item, Mapping):
-                found.append(_diagnostic_from_object(item))
-            else:
-                raise HarnessError(
-                    f"{source} diagnostic is {type(item).__name__}, not an object"
-                )
-        return found
-    if isinstance(value, Mapping):
-        if "diagnostics" in value:
-            inner = value["diagnostics"]
-            return _diagnostics_from_value(inner, source=f"{source}.diagnostics")
-        if "messages" in value:
-            return _diagnostics_from_value([value], source=source)
+    """Read the host report: an object whose ``diagnostics`` is a list of findings."""
+    if not isinstance(value, Mapping):
         raise HarnessError(
-            f"{source} JSON object has no 'diagnostics' or 'messages' field: "
-            f"keys={sorted(value)!r}"
+            f"{source} JSON is {type(value).__name__}, not the report object"
         )
-    raise HarnessError(
-        f"{source} JSON is {type(value).__name__}, not diagnostics"
-    )
+    if "diagnostics" not in value:
+        raise HarnessError(
+            f"{source} JSON object has no 'diagnostics' field: keys={sorted(value)!r}"
+        )
+    inner = value["diagnostics"]
+    if not isinstance(inner, list):
+        raise HarnessError(
+            f"{source}.diagnostics is {type(inner).__name__}, not a list"
+        )
+    found: list[Diagnostic] = []
+    for item in inner:
+        if not isinstance(item, Mapping):
+            raise HarnessError(
+                f"{source} diagnostic is {type(item).__name__}, not an object"
+            )
+        found.append(_diagnostic_from_object(item))
+    return found
 
 
 def lint_json(result: RunResult) -> Any:
@@ -1555,12 +1498,16 @@ def diagnostics_for(
 ) -> tuple[Diagnostic, ...]:
     """Return findings whose rule is published under *plugin*.
 
-    Matches ``<plugin>/<rule>`` only. ``lint-policy`` does not match
-    ``lint-policy-effect``. An empty tuple means none of the findings
+    Matches the host code ``<plugin>(<rule>)`` only. ``lint-policy`` does
+    not match ``lint-policy-effect``. An empty tuple means none of the findings
     belonged to that plugin — not a failed filter.
     """
-    prefix = f"{plugin}/"
-    return tuple(item for item in findings if item.rule.startswith(prefix))
+    prefix = f"{plugin}("
+    return tuple(
+        item
+        for item in findings
+        if item.rule.startswith(prefix) and item.rule.endswith(")")
+    )
 
 
 def rule_ids(findings: Sequence[Diagnostic]) -> tuple[str, ...]:

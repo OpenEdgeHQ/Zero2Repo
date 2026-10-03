@@ -302,8 +302,6 @@ def require_fresh_empty(report: Mapping[str, Any], *, prefix: str = "") -> None:
 _CALENDAR_RELEASE = re.compile(r"^0\.(\d{2})(0[1-9]|1[0-2])\.(\d+)$")
 
 
-_VERSION_TRIPLE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-_ZON_SKIP_DIRS = {".git", "zig-cache", ".zig-cache", ".cache"}
 
 
 def _strip_zon_comments(text: str) -> str:
@@ -416,109 +414,60 @@ def _split_top_level_zon_fields(text: str) -> list[tuple[str, str]]:
     return fields
 
 
-def _render_version_value(raw: str) -> str | None:
-    """A version string or a major.minor.patch struct, rendered as text.
-
-    Anything else is not a release identifier. ``None`` means this value
-    is not that kind of identifier, not that the read failed.
-    """
+def _zon_string_literal(raw: str) -> str | None:
+    """The body of a plain zon string literal, or ``None`` when *raw* is not one."""
     text = raw.strip()
-    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        body = text[1:-1]
-        if _VERSION_TRIPLE.fullmatch(body):
-            return body
+    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
         return None
-    if text.startswith(".{") and text.endswith("}"):
-        try:
-            nested = _split_top_level_zon_fields(text)
-        except HarnessError:
-            return None
-        parts: dict[str, str] = {}
-        for name, value in nested:
-            if name in {"major", "minor", "patch"} and value.isdigit():
-                parts[name] = value
-        if set(parts) == {"major", "minor", "patch"}:
-            return f"{parts['major']}.{parts['minor']}.{parts['patch']}"
-    return None
+    body = text[1:-1]
+    if '"' in body or "\\" in body:
+        return None
+    return body
 
 
-def _published_release_identifiers(root: Path) -> list[str]:
-    """Version-shaped values the package publishes at the top of a manifest.
+def _declared_release(root: Path) -> str:
+    """The ``.version`` string of the package manifest at the repository root.
 
-    The file name and the field name are not part of the contract. A
-    nested value, a comment, and the module are not this identifier.
-    A manifest this parser cannot read is skipped: the PRD does not
-    require every such file to be a successful import. Finding none at
-    all raises.
+    The Contract states the form: ``<root>/build.zig.zon`` is one zon
+    struct whose top-level field ``.version`` is a string literal holding
+    the declared release. A missing file, an unreadable struct, a missing
+    field, or a value that is not a string literal fails the read.
     """
-    found: list[str] = []
-    saw_manifest = False
+    path = root / "build.zig.zon"
     try:
-        if not root.is_dir():
-            raise HarnessError(f"package root is not a directory: {root}")
-    except OSError as exc:
-        raise HarnessError(f"cannot stat package root {root}: {exc}") from exc
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name
-            for name in dirnames
-            if name not in _ZON_SKIP_DIRS and not name.startswith(".")
-        ]
-        for name in filenames:
-            if not name.endswith(".zon"):
-                continue
-            path = Path(dirpath) / name
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeError) as exc:
-                raise HarnessError(f"cannot read {path}: {exc}") from exc
-            try:
-                fields = _split_top_level_zon_fields(text)
-            except HarnessError:
-                continue
-            saw_manifest = True
-            for _field, raw in fields:
-                rendered = _render_version_value(raw)
-                if rendered is not None:
-                    found.append(rendered)
-    if not saw_manifest and not found:
-        raise HarnessError(
-            f"no package manifest under {root} published a version identifier"
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise AssertionError(f"package manifest {path} is missing") from exc
+    except (OSError, UnicodeError) as exc:
+        raise AssertionError(f"cannot read package manifest {path}: {exc}") from exc
+    try:
+        fields = _split_top_level_zon_fields(text)
+    except HarnessError as exc:
+        raise AssertionError(f"package manifest {path} is not one zon struct: {exc}") from exc
+    values = [raw for name, raw in fields if name == "version"]
+    if len(values) != 1:
+        raise AssertionError(
+            f"package manifest {path} has {len(values)} top-level .version fields, expected 1"
         )
-    return found
-
-
-def _choose_declared_release(identifiers: Sequence[str]) -> str:
-    """The package's own release, not a string that merely looks similar.
-
-    A calendar-form identifier is that release whatever its field was
-    spelled. Another copy of the same form does not fail the choice.
-    When the package publishes no calendar-form release, the identifier
-    it did publish is returned so the form check can fail it. A side
-    string that was never a top-level version is not in *identifiers*.
-    """
-    if not identifiers:
-        raise HarnessError("package published no version identifier")
-    calendar = [item for item in identifiers if _CALENDAR_RELEASE.fullmatch(item)]
-    if calendar:
-        return calendar[0]
-    return identifiers[0]
+    release = _zon_string_literal(values[0])
+    if release is None:
+        raise AssertionError(
+            f"top-level .version of {path} is not a string literal: {values[0]!r}"
+        )
+    return release
 
 
 def observe_declared_release_and_format_word() -> tuple[str, int]:
     """The release the Zig package publishes for itself, and an emit's format word.
 
-    The declared release is a version the package itself publishes: a
-    dotted triple or a major.minor.patch value at the top of a manifest.
-    The file and the field spelling are not required. A string beside
-    that identifier — a comment, a nested value, or the module — is not
-    it. Another copy of the same form does not fail the read. The format
-    word is the little-endian unsigned 16-bit integer in the first two
-    bytes of an emitted buffer. A compile or probe failure raises.
+    The declared release is the top-level ``.version`` string of
+    ``build.zig.zon`` at the repository root (the Contract's stated form).
+    The format word is the little-endian unsigned 16-bit integer in the
+    first two bytes of an emitted buffer. A compile or probe failure raises.
     """
     from F01_helpers import _fail_if_nonzero, product_run_argv, workspace
 
-    release = _choose_declared_release(_published_release_identifiers(repo_root()))
+    release = _declared_release(repo_root())
     source = wrap_f04_probe(
         r"""
     var bm = try klyvmap.Bitmap.init(allocator);

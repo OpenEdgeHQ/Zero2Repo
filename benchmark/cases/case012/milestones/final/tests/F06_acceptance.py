@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from _harness import DEFAULT_COPY_DEST, workspace
-from F01_helpers import assert_fired, assert_only_rule, require_copy_success
+from F01_helpers import assert_fired, assert_only_rule, require_copied_layout
 from F06_helpers import (
     RULE_SHAPE,
     RULE_SPACING,
@@ -86,7 +86,7 @@ from F06_helpers import (
 def copied_plugin():
     with workspace() as ws:
         result = ws.copy()
-        specifier = require_copy_success(result, DEFAULT_COPY_DEST, cwd=ws.path)
+        specifier = require_copied_layout(result, DEFAULT_COPY_DEST, cwd=ws.path)
         print(f"F06 copied specifier={specifier}", flush=True)
         yield ws, specifier
 

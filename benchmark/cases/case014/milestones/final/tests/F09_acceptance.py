@@ -146,7 +146,7 @@ def _imu_only_burst(epochs, origin, *, acc, gyr=(0.0, 0.0, 0.0), duration_s=0.40
 
 
 def test_nan_accelerometer_dropped_counter_increases_later_ready_finite():
-    """Named oracle: one NaN accelerometer sample is dropped (L361)."""
+    """One NaN accelerometer sample is dropped."""
     lat, lon, h, origin = _site()
     nan = float("nan")
     acc_drop = (ABSURD_NORTH_ACC[0], ABSURD_NORTH_ACC[1], nan)
@@ -635,7 +635,7 @@ def test_persistent_mag_heading_error_downweighted_not_rejected():
 
 
 def test_high_rate_local_glitch_skipped_not_downweighted():
-    """High-rate glitchy local-position is skipped, not downweighted (L350 / FP-03)."""
+    """High-rate glitchy local-position is skipped, not downweighted (PRD / FP-03)."""
     lat, lon, h, origin = _site()
     tracker = (0.0, 0.0, 0.0)
     step_n = runtime_local_step_m()
@@ -1147,7 +1147,7 @@ def test_skipped_vs_fused_gnss_diagnostics_distinguishable():
 
 
 def test_timing_anomaly_counter_distinct_from_invalid_and_downweight():
-    """INS backwards timestamp: timing-anomaly class, skip that extra IMU, later finite epochs proceed (L353 / L361)."""
+    """INS backwards timestamp: timing-anomaly class, skip that extra IMU, later finite epochs proceed."""
     pad_yaw = runtime_att_yaw_rad()
     lat, lon, h = runtime_site()
     mag_ned = ned_field_from_independent_wmm(lat, lon, WMM_YEAR)
@@ -1189,8 +1189,8 @@ def test_timing_anomaly_counter_distinct_from_invalid_and_downweight():
     )
     assert ma.n_invalid == mb.n_invalid, "AHRS monotonic twin incremented invalid-input"
 
-    # L353 / L361: INS backwards timestamp is the timing-anomaly class.
-    # AHRS standalone has no such counter; the skip above is the L270 carrier.
+    # INS backwards timestamp is the timing-anomaly class.
+    # AHRS standalone has no such counter; the skip above is the PRD carrier.
     lat, lon, h, origin = _site()
     stepped = _step_ecef(origin)
     pad = hygiene_pad(origin)
@@ -1307,7 +1307,7 @@ def test_diagnostic_counters_are_not_acted_on():
 
 
 def test_override_same_switch_on_config_yaml():
-    """L345: the global outlier-rejection override is the same switch on filter options and config.yaml."""
+    """the global outlier-rejection override is the same switch on filter options and config.yaml."""
     lat, lon, h, origin = _site()
     north = runtime_outlier_north_m()
     offset = north_of(origin, north)
@@ -1347,7 +1347,7 @@ def test_override_same_switch_on_config_yaml():
 
 
 def test_suite_override_disables_downweighting_across_filters():
-    """L351: constructing the suite with the switch on fuses every tested measurement at nominal variance."""
+    """constructing the suite with the switch on fuses every tested measurement at nominal variance."""
     lat, lon, h, origin = _site()
     north = runtime_outlier_north_m()
     offset = north_of(origin, north)
@@ -1435,7 +1435,7 @@ def test_suite_override_disables_downweighting_across_filters():
 
 
 def test_fusion_failure_diagnostic_readable_as_own_class():
-    """L353: a positive-diagonal, not-PD GNSS position covariance is its own class."""
+    """a positive-diagonal, not-PD GNSS position covariance is its own class."""
     lat, lon, h, origin = _site()
     nan = float("nan")
     north = runtime_outlier_north_m()

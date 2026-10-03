@@ -112,7 +112,7 @@ def _arb_climb(before, after, what: str) -> float:
 
 
 def test_gnss_aided_dataset_fused_not_copy_of_ref_or_gnss():
-    """L384 / L398–L399: GNSS-aided directory yields a log-length fused series, not ref or GNSS."""
+    """GNSS-aided directory yields a log-length fused series, not ref or GNSS."""
     lat, lon, h, origin = _site()
     north = _north_m()
     gap_acc = 1.4
@@ -183,7 +183,7 @@ def test_gnss_aided_dataset_fused_not_copy_of_ref_or_gnss():
 
 
 def test_python_replay_accepts_directory_or_config_path():
-    """L385: Python replay accepts the directory or the config.yaml path."""
+    """Python replay accepts the directory or the config.yaml path."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -203,7 +203,7 @@ def test_python_replay_accepts_directory_or_config_path():
 
 
 def test_both_harnesses_consume_the_same_directory():
-    """L368 / L399: C and Python both consume the same GNSS-aided directory."""
+    """C and Python both consume the same GNSS-aided directory."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -221,7 +221,7 @@ def test_both_harnesses_consume_the_same_directory():
 
 
 def test_t_us_span_not_row_clock():
-    """L374 / L77 / L398: same row count, only the timestamp span changes; only the long span fuses."""
+    """same row count, only the timestamp span changes; only the long span fuses."""
     lat, lon, h, origin = _site()
     n = int(round(HAPPY_DURATION_S * IMU_HZ))
     long_dt = 10_000
@@ -254,7 +254,7 @@ def test_t_us_span_not_row_clock():
 
 
 def test_optional_imu_temperature_column_ignored():
-    """L375: optional eighth-column IMU temperature is ignored by both harnesses."""
+    """optional eighth-column IMU temperature is ignored by both harnesses."""
     lat, lon, h, _origin = _site()
     gap_acc = 1.4
     extra_s = 2.0
@@ -321,7 +321,7 @@ def test_optional_imu_temperature_column_ignored():
 
 
 def test_inputs_section_overrides_filenames():
-    """L381: inputs: overrides filenames; unset keeps the conventional name."""
+    """inputs: overrides filenames; unset keeps the conventional name."""
     lat, lon, h, _origin = _site()
     decoy = runtime_site()
     gnss_name = runtime_filename("gnss")
@@ -377,7 +377,7 @@ def test_inputs_section_overrides_filenames():
 
 
 def test_zero_gnss_diagonal_replaced_by_config_fallback():
-    """L377: zero GNSS diagonal is unknown and is replaced by the config fallback."""
+    """zero GNSS diagonal is unknown and is replaced by the config fallback."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         loose = write_replay_dataset(
@@ -415,7 +415,7 @@ def test_zero_gnss_diagonal_replaced_by_config_fallback():
 
 
 def test_aiding_ref_synthesizes_fix_without_gnss_stream():
-    """L383: aiding: ref synthesizes a fix from the reference; GNSS is not required."""
+    """aiding: ref synthesizes a fix from the reference; GNSS is not required."""
     lat, lon, h, origin = _site()
     with workspace() as ws:
         ref_dir = write_replay_dataset(
@@ -569,7 +569,7 @@ def test_aiding_ref_synthesizes_fix_without_gnss_stream():
 
 
 def test_aiding_ref_positive_written_gnss_fallback_runs():
-    """L382 / L398: a positive written GNSS fallback under aiding ref lets the directory run."""
+    """a positive written GNSS fallback under aiding ref lets the directory run."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         present = write_replay_dataset(
@@ -606,7 +606,7 @@ def test_aiding_ref_positive_written_gnss_fallback_runs():
 
 
 def test_aiding_none_ins_uninitialized_ars_attitude_exists():
-    """L383 / L398: aiding: none keeps INS unpublished; ARS attitude and baro still run."""
+    """aiding: none keeps INS unpublished; ARS attitude and baro still run."""
     lat, lon, h, _origin = _site()
     p = tropospheric_isa_pressure_pa(h if 0.0 <= h < 2000.0 else 150.0)
     with workspace() as ws:
@@ -640,7 +640,7 @@ def test_aiding_none_ins_uninitialized_ars_attitude_exists():
 
 
 def test_c_harness_accepts_aiding_none_as_a_run():
-    """L368 / L383 / L392: C treats none as a run, not as an unknown aiding value."""
+    """C treats none as a run, not as an unknown aiding value."""
     lat, lon, h, _origin = _site()
     pad_h = h if 0.0 <= h < 2000.0 else 150.0
     p = tropospheric_isa_pressure_pa(pad_h)
@@ -696,7 +696,7 @@ def test_c_harness_accepts_aiding_none_as_a_run():
         none_text = reporting_text(c_none)
         require_still_pad_ars(none_err, "C none ARS")
         require_errdump_not_written(bad_err, "unknown-aiding twin of the none directory")
-        # Present barometer on none: published local height (L383 / L398).
+        # Present barometer on none: published local height.
         # Dataset dump does not write that column; the YAML runner does.
         # No GNSS = no absolute position aiding, same duty as aiding none.
         # This contrast is not the C none process exit.
@@ -787,7 +787,7 @@ def test_c_harness_accepts_aiding_none_as_a_run():
 
 
 def test_unknown_aiding_exits_nonzero_and_names_offender():
-    """L383 / L392 / L398: aiding: not-a-mode exits non-zero and names that value."""
+    """aiding: not-a-mode exits non-zero and names that value."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -805,7 +805,7 @@ def test_unknown_aiding_exits_nonzero_and_names_offender():
 
 
 def test_init_auto_and_ref_both_accepted():
-    """L383: init auto and init ref both run a legal GNSS-aided directory."""
+    """init auto and init ref both run a legal GNSS-aided directory."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         auto_dir = write_replay_dataset(
@@ -830,7 +830,7 @@ def test_init_auto_and_ref_both_accepted():
 
 
 def test_missing_imu_stream_fails():
-    """L390: missing IMU stream: the run does not succeed.
+    """missing IMU stream: the run does not succeed.
 
     Differential: the same directory with the IMU stream written runs on
     both harnesses, so the refusal is caused by the missing stream and not
@@ -866,7 +866,7 @@ def test_missing_imu_stream_fails():
 
 
 def test_missing_reference_trajectory_fails():
-    """L390 / L398: missing reference trajectory: the run does not succeed."""
+    """missing reference trajectory: the run does not succeed."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -898,7 +898,7 @@ def test_missing_reference_trajectory_fails():
 
 
 def test_aiding_gnss_without_gnss_stream_exits_nonzero():
-    """L391 / L398: aiding: gnss without a GNSS stream exits non-zero."""
+    """aiding: gnss without a GNSS stream exits non-zero."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -933,7 +933,7 @@ def test_aiding_gnss_without_gnss_stream_exits_nonzero():
 
 
 def test_unknown_config_key_exits_nonzero_and_names_offender():
-    """L382 / L392 / L398: unknown owned config.yaml key is refused and named."""
+    """unknown owned config.yaml key is refused and named."""
     lat, lon, h, _origin = _site()
     key = runtime_unknown_key("cfg")
     with workspace() as ws:
@@ -952,7 +952,7 @@ def test_unknown_config_key_exits_nonzero_and_names_offender():
 
 
 def test_misspelled_imu_noise_key_aborts_before_score():
-    """L398: a misspelled IMU noise key aborts before a score."""
+    """a misspelled IMU noise key aborts before a score."""
     lat, lon, h, _origin = _site()
     key = runtime_unknown_key("gyr")
     with workspace() as ws:
@@ -973,7 +973,7 @@ def test_misspelled_imu_noise_key_aborts_before_score():
 
 
 def test_required_imu_spectral_densities_present_or_zero_default():
-    """L382 / L398: required IMU densities must be written and positive; omit or 0 aborts."""
+    """required IMU densities must be written and positive; omit or 0 aborts."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         missing = write_replay_dataset(
@@ -1024,7 +1024,7 @@ def test_required_imu_spectral_densities_present_or_zero_default():
 
 
 def test_c_harness_reads_configured_regression_limit():
-    """L384: same directory and error, only the limit number changes: loose 0, tight non-zero."""
+    """same directory and error, only the limit number changes: loose 0, tight non-zero."""
     lat, lon, h, _origin = _site()
     north = _north_m()
     with workspace() as ws:
@@ -1061,7 +1061,7 @@ def test_c_harness_reads_configured_regression_limit():
 
 
 def test_c_refuses_nonpositive_min_epoch_python_zero_default_still_solves():
-    """L393: C refuses a non-positive scoring minimum-epoch count; Python still writes a series."""
+    """C refuses a non-positive scoring minimum-epoch count; Python still writes a series."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         zeroed = write_replay_dataset(
@@ -1106,7 +1106,7 @@ def test_c_refuses_nonpositive_min_epoch_python_zero_default_still_solves():
 
 
 def test_comment_and_malformed_csv_lines_skipped():
-    """L394: comment and malformed rows are skipped; the series still covers the later motion."""
+    """comment and malformed rows are skipped; the series still covers the later motion."""
     lat, lon, h, origin = _site()
     north = _north_m()
     with workspace() as ws:
@@ -1149,7 +1149,7 @@ def test_comment_and_malformed_csv_lines_skipped():
 
 
 def test_mixed_sample_rates_allowed():
-    """L394: mixed sample rates are allowed; optional 10 Hz baro and two-column speed do not abort."""
+    """mixed sample rates are allowed; optional 10 Hz baro and two-column speed do not abort."""
     lat, lon, h, _origin = _site()
     p = tropospheric_isa_pressure_pa(h if h < 2000 else 120.0)
     with workspace() as ws:
@@ -1184,7 +1184,7 @@ def _runner_mag(lat, lon):
 
 
 def test_runner_mixed_unit_static_pad_full_near_gnss():
-    """L386 / L398–L399: 30 s mixed-unit IMU+GNSS pad writes FULL near the GNSS pad."""
+    """30 s mixed-unit IMU+GNSS pad writes FULL near the GNSS pad."""
     lat, lon, h, _origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p0 = tropospheric_isa_pressure_pa(150.0)
@@ -1229,7 +1229,7 @@ def test_runner_mixed_unit_static_pad_full_near_gnss():
 
 
 def test_runner_time_unit_span_not_row_clock():
-    """L386: runner time unit s/ms/µs; same row count, only the span reaches FULL."""
+    """runner time unit s/ms/µs; same row count, only the span reaches FULL."""
     lat, lon, h, _origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(150.0)
@@ -1297,7 +1297,7 @@ def test_runner_time_unit_span_not_row_clock():
 
 
 def test_runner_gyro_accel_unit_conversion():
-    """L386: gyro deg/s vs rad/s and accelerometer m/s² vs g change the converted quantity."""
+    """gyro deg/s vs rad/s and accelerometer m/s² vs g change the converted quantity."""
     lat, lon, h, _origin = _site()
     dps = 12.0
     with workspace() as ws:
@@ -1422,7 +1422,7 @@ def test_runner_gyro_accel_unit_conversion():
 
 
 def test_runner_pressure_unit_tokens():
-    """L386: Pa / hPa / mbar / kPa are accepted; conversion matches a live climb, not local 0."""
+    """Pa / hPa / mbar / kPa are accepted; conversion matches a live climb, not local 0."""
     lat, lon, h, _origin = _site()
     p0 = tropospheric_isa_pressure_pa(150.0)
     p1 = tropospheric_isa_pressure_pa(350.0)
@@ -1487,7 +1487,7 @@ def test_runner_pressure_unit_tokens():
 
 
 def test_runner_mag_unit_tokens():
-    """L386: mag tokens µT/gauss/mGauss/nT are accepted; FULL rows carry named NED.
+    """mag tokens µT/gauss/mGauss/nT are accepted; FULL rows carry named NED.
 
     Milligauss-scale conversion onto the microtesla convention is stated but
     not scored on those named columns; do not restore a heading split.
@@ -1558,7 +1558,7 @@ def test_runner_mag_unit_tokens():
 
 
 def test_runner_gnss_geodetic_radians_and_ecef():
-    """L386: GNSS geodetic degrees, radians, and ECEF; unconverted radians would sit near (0,0)."""
+    """GNSS geodetic degrees, radians, and ECEF; unconverted radians would sit near (0,0)."""
     lat, lon, h, origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(150.0)
@@ -1611,7 +1611,7 @@ def test_runner_gnss_geodetic_radians_and_ecef():
 
 
 def test_runner_column_mapping_follows_yaml():
-    """L386: column mapping follows the YAML, not a fixed tutorial layout."""
+    """column mapping follows the YAML, not a fixed tutorial layout."""
     lat, lon, h, _origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(150.0)
@@ -1646,7 +1646,7 @@ def test_runner_column_mapping_follows_yaml():
 
 
 def test_runner_merges_latest_sample_at_or_before_imu_epoch():
-    """L386: IMU begins the epoch; the latest GNSS at or before t is attached, not the next.
+    """IMU begins the epoch; the latest GNSS at or before t is attached, not the next.
 
     Differential against a twin whose GNSS never jumps: every epoch before the
     jump must be the twin's epoch (a later sample was not attached early), and
@@ -1657,8 +1657,8 @@ def test_runner_merges_latest_sample_at_or_before_imu_epoch():
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(150.0)
     north = _north_m()
-    # First fix at 0.5 s + 5 s entry dwell + 1.5 s ready wait (PRD L231 /
-    # L149): published by 7 s under any reading of the dwell boundary. The
+    # First fix at 0.5 s + 5 s entry dwell + 1.5 s ready wait (PRD /
+    # PRD): published by 7 s under any reading of the dwell boundary. The
     # jump sits on a later 1 Hz fix.
     jump_s = 9.5
     duration_s = jump_s + 2.5
@@ -1727,7 +1727,7 @@ def test_runner_merges_latest_sample_at_or_before_imu_epoch():
 
 
 def test_magnetometer_optional_directory_still_runs():
-    """L374: both harnesses require IMU and the reference; magnetometer is optional."""
+    """both harnesses require IMU and the reference; magnetometer is optional."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         dest = write_replay_dataset(
@@ -1753,7 +1753,7 @@ def test_magnetometer_optional_directory_still_runs():
 
 
 def test_ref_csv_geodetic_attitude_ned_velocity_consumed():
-    """L376: ref.csv lat/lon/height m, roll/pitch/yaw deg, and NED velocity are the reference."""
+    """ref.csv lat/lon/height m, roll/pitch/yaw deg, and NED velocity are the reference."""
     lat, lon, h, origin = _site()
     with workspace() as ws:
         match = write_replay_dataset(
@@ -1994,7 +1994,7 @@ def test_ref_csv_geodetic_attitude_ned_velocity_consumed():
 
 
 def test_gnss_packed_covariance_velocity_and_valid_flag():
-    """L377: gnss.csv packed NED pos/vel covariance order, NED velocity, and vel_ok."""
+    """gnss.csv packed NED pos/vel covariance order, NED velocity, and vel_ok."""
     lat, lon, h, origin = _site()
     north = _north_m()
     east = _east_m()
@@ -2492,7 +2492,7 @@ def test_gnss_packed_covariance_velocity_and_valid_flag():
 
 
 def test_dataset_mag_csv_frd_microtesla_consumed():
-    """L378: a present mag.csv of FRD magnetometer in microtesla is consumed."""
+    """a present mag.csv of FRD magnetometer in microtesla is consumed."""
     lat, lon, h, _origin = _site()
     ned = ned_field_from_independent_wmm(lat, lon, WMM_YEAR)
     mag0 = body_mag_for_yaw(0.0, 0.0, 0.0, ned)
@@ -2532,7 +2532,7 @@ def test_dataset_mag_csv_frd_microtesla_consumed():
 
 
 def test_origin_section_and_optional_zero_as_default():
-    """L382 / L398: origin section is ignored; optional keys treat written 0 as the default."""
+    """origin section is ignored; optional keys treat written 0 as the default."""
     lat, lon, h, _origin = _site()
     typo = runtime_unknown_key()
     with workspace() as ws:
@@ -2589,7 +2589,7 @@ def test_origin_section_and_optional_zero_as_default():
 
 
 def test_radio_link_section_accepted_and_ignored():
-    """L382 / L392 / L398: a radio-link section is accepted and ignored, not an owned typo."""
+    """a radio-link section is accepted and ignored, not an owned typo."""
     lat, lon, h, _origin = _site()
     typo = runtime_unknown_key()
     with workspace() as ws:
@@ -2635,7 +2635,7 @@ def test_radio_link_section_accepted_and_ignored():
 
 
 def test_runner_merges_latest_baro_and_mag_at_or_before():
-    """L386: latest barometer and magnetometer samples at or before t are attached."""
+    """latest barometer and magnetometer samples at or before t are attached."""
     lat, lon, h, _origin = _site()
     ned = ned_field_from_independent_wmm(lat, lon, WMM_YEAR)
     mag0 = body_mag_for_yaw(0.0, 0.0, 0.0, ned)
@@ -2690,7 +2690,7 @@ def test_runner_merges_latest_baro_and_mag_at_or_before():
 
 
 def test_runner_maps_into_the_same_navigator_loop():
-    """L368: YAML runner maps custom CSVs into the same IMU-consuming navigator loop."""
+    """YAML runner maps custom CSVs into the same IMU-consuming navigator loop."""
     lat, lon, h, _origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(150.0)
@@ -2759,7 +2759,7 @@ def test_runner_maps_into_the_same_navigator_loop():
 
 
 def test_dataset_baro_csv_consumed_as_pressure():
-    """L379: a present baro.csv is static pressure in pascals, not already-altitude."""
+    """a present baro.csv is static pressure in pascals, not already-altitude."""
     lat, lon, h, origin = _site()
     p_true = tropospheric_isa_pressure_pa(h if 0.0 <= h < 2000.0 else 150.0)
     p_climb = tropospheric_isa_pressure_pa((h if 0.0 <= h < 2000.0 else 150.0) + 40.0)
@@ -2807,7 +2807,7 @@ def test_dataset_baro_csv_consumed_as_pressure():
 
 
 def test_speed_csv_scalar_from_config_not_extra_columns():
-    """L380: speed.csv is scalar m/s; uncertainty and delay come from config.yaml."""
+    """speed.csv is scalar m/s; uncertainty and delay come from config.yaml."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         no_speed = write_replay_dataset(
@@ -2915,7 +2915,7 @@ def test_speed_csv_scalar_from_config_not_extra_columns():
 
 
 def test_speed_csv_uncertainty_from_config():
-    """L380: identical speed.csv bytes with a different configured uncertainty change fused speed."""
+    """identical speed.csv bytes with a different configured uncertainty change fused speed."""
     lat, lon, h, _origin = _site()
     with workspace() as ws:
         tight = write_replay_dataset(
@@ -2967,7 +2967,7 @@ def test_speed_csv_uncertainty_from_config():
 
 
 def test_speed_optional_and_hash_header_accepted():
-    """L374: speed.csv is optional; a leading # header is the header, not a data row."""
+    """speed.csv is optional; a leading # header is the header, not a data row."""
     lat, lon, h, _origin = _site()
     mag, _ned = _runner_mag(lat, lon)
     p = tropospheric_isa_pressure_pa(h if 0.0 <= h < 2000.0 else 150.0)
@@ -3011,7 +3011,7 @@ def test_speed_optional_and_hash_header_accepted():
 
 
 def test_imu_csv_gyro_frd_consumed():
-    """L375: imu.csv gyro FRD x/y/z in rad/s is consumed, distinguishable from unused."""
+    """imu.csv gyro FRD x/y/z in rad/s is consumed, distinguishable from unused."""
     lat, lon, h, _origin = _site()
     rate = 0.05
     with workspace() as ws:
@@ -3083,7 +3083,7 @@ def test_imu_csv_gyro_frd_consumed():
 
 
 def test_imu_csv_accelerometer_frd_yz_consumed():
-    """L375: imu.csv accelerometer FRD x/y/z in m/s² is consumed, distinguishable from unused."""
+    """imu.csv accelerometer FRD x/y/z in m/s² is consumed, distinguishable from unused."""
     lat, lon, h, _origin = _site()
     extra_s = 2.0
     gnss_end_us = int(round(HAPPY_DURATION_S * 1.0e6))
