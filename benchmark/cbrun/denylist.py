@@ -1493,6 +1493,7 @@ SOCK_PATH = SOCK_DIR + "/hook.sock"
 HOOK_SRC = "/opt/cbrun/cbrun_access_hook.py"
 HOOK_MODULE = "cbrun_access_hook.py"
 MONITOR_SELF = "/opt/cbrun/access_monitor.py"
+IMAGE_DISTS = "/opt/cbrun/image_dists.json"
 LOADER = os.path.join("encodings", "__init__.py")
 LOADER_MARKER = "# cbrun access hook"
 LOADER_LINES = (
@@ -1537,8 +1538,54 @@ _SITE_NAMES = ("site-packages", "dist-packages")
 _LOCAL_DISTS: dict[str, tuple[int, set[str]]] = {}
 
 
+def _dist_identity(info: str) -> str | None:
+    """A distribution's install identity: its RECORD, so a reinstall changes it."""
+    try:
+        st = os.stat(os.path.join(info, "RECORD"))
+    except OSError:
+        return None
+    return f"{os.path.realpath(info)}:{st.st_ino}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _local_url_dists() -> list[str]:
+    """Every installed distribution whose recorded origin is a local path."""
+    found: list[str] = []
+    for site_root in _site_roots():
+        for info in sorted(glob.glob(os.path.join(site_root, "*.dist-info"))):
+            try:
+                with open(os.path.join(info, "direct_url.json"), encoding="utf-8") as fh:
+                    url = str(json.load(fh).get("url") or "")
+            except (OSError, ValueError, AttributeError):
+                continue
+            ident = _dist_identity(info) if url.startswith("file:") else None
+            if ident:
+                found.append(ident)
+    return found
+
+
+def _site_roots() -> list[str]:
+    roots: dict[str, None] = {}
+    for py in _all_pythons():
+        info = _python_layout(py) or {}
+        for site_root in info.get("sites") or []:
+            if os.path.isdir(str(site_root)):
+                roots[os.path.realpath(str(site_root))] = None
+    return list(roots)
+
+
+def _image_dists() -> frozenset[str]:
+    """Local-path distributions the image already had before any solve started.
+
+    Package builders (conda among them) record their own build directory as a
+    ``file:`` origin, so that origin alone does not mark the agent's code. What
+    the agent installs from a local path appears only after this snapshot.
+    """
+    with open(IMAGE_DISTS, encoding="utf-8") as fh:
+        return frozenset(json.load(fh))
+
+
 def _locally_installed(site_root: str) -> set[str]:
-    """Top-level names of distributions installed from a local path (e.g. ``pip install .``)."""
+    """Top-level names of distributions the agent installed from a local path (e.g. ``pip install .``)."""
     try:
         stamp = os.stat(site_root).st_mtime_ns
     except OSError:
@@ -1546,6 +1593,7 @@ def _locally_installed(site_root: str) -> set[str]:
     cached = _LOCAL_DISTS.get(site_root)
     if cached and cached[0] == stamp:
         return cached[1]
+    baseline = _image_dists()
     names: set[str] = set()
     for info in glob.glob(os.path.join(site_root, "*.dist-info")):
         try:
@@ -1553,7 +1601,7 @@ def _locally_installed(site_root: str) -> set[str]:
                 url = str(json.load(fh).get("url") or "")
         except (OSError, ValueError, AttributeError):
             continue
-        if not url.startswith("file:"):
+        if not url.startswith("file:") or _dist_identity(info) in baseline:
             continue
         try:
             with open(os.path.join(info, "RECORD"), encoding="utf-8") as fh:
@@ -1648,13 +1696,16 @@ def install_hooks() -> int:
             with open(loader, "a", encoding="utf-8") as fh:
                 fh.write(LOADER_LINES)
         count += 1
+    with open(IMAGE_DISTS, "w", encoding="utf-8") as fh:
+        json.dump(_local_url_dists(), fh)
+    os.chmod(IMAGE_DISTS, 0o644)
     print(f"[cbrun] access hook installed for {count} stdlib dir(s)", flush=True)
     return 0 if count else 1
 
 
 def guarded_files() -> list[str]:
     """Files whose change would disable attribution or monitoring."""
-    paths = [HOOK_SRC, MONITOR_SELF, str(HASHES)]
+    paths = [HOOK_SRC, MONITOR_SELF, str(HASHES), IMAGE_DISTS]
     for stdlib in _stdlib_dirs():
         link = os.path.join(stdlib, HOOK_MODULE)
         loader = os.path.join(stdlib, LOADER)
