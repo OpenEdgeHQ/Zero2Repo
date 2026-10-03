@@ -1116,13 +1116,15 @@ def test_present_status_outside_closed_set_is_gate_finding_omit_and_draft_stable
             assert_both_pass(payload)
 
 
-def test_status_draft_capital_d_is_gate_finding():
+def test_status_values_are_compared_ignoring_letter_case():
     with workspace() as ws:
         ident = unique_tokens("id")[0]
-        payload = require_gate_finding_pair(
-            ws, ident, {"status": "Draft"}, {"status": "draft"}
-        )
-        assert_conformant_gate_fail(payload)
+        for value in ("Draft", "STABLE", "Deprecated"):
+            rel = unique_tokens("s")[0]
+            seed_validatable_bundle(ws, rel, [fact_concept(ident, extra={"status": value})])
+            result, payload = run_validate_structured(ws, rel, strict=True)
+            require_cli_status_0(result)
+            assert_both_pass(payload)
 
 
 def test_absolute_and_dotdot_code_refs_are_gate_findings():
