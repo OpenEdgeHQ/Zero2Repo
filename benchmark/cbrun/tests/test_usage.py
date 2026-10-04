@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from cbrun.agent_spec import resolve_agent
@@ -193,3 +194,83 @@ def test_prices_cover_sol_deepseek_and_kimi():
     assert kimi["unpriced_models"] == []
     deepseek = trial_cost(buckets, "openai/deepseek-v4-pro-0813")
     assert deepseek["cost_cny"] == 37.0
+
+
+def _step_finish(inp: int, read: int, write: int, output: int, reasoning: int, cost: float) -> str:
+    tokens = {"input": inp, "output": output, "reasoning": reasoning, "cache": {"read": read, "write": write}}
+    return json.dumps({"type": "step_finish", "part": {"type": "step-finish", "tokens": tokens, "cost": cost}}) + "\n"
+
+
+def test_opencode_step_finish_bills_reasoning_as_output(tmp_path: Path):
+    # OpenCode subtracts reasoning from output; the billed output includes it.
+    _write(tmp_path / "agent.log", _step_finish(10, 100, 20, 30, 7, 0.1) + _step_finish(5, 50, 0, 3, 2, 0.2))
+    usage = collect_trial_usage(tmp_path)
+    assert usage["output_tokens"] == 42
+    assert usage["reasoning_tokens"] == 9
+    assert usage["total_tokens"] == 15 + 150 + 20 + 42
+    assert usage["sources"] == ["opencode_step_finish"]
+    cost = trial_cost(usage, "anthropic/claude-sonnet-5-5")
+    assert cost["cost_usd"] == round((15 * 2.0 + 150 * 0.2 + 20 * 2.5 + 42 * 10.0) / 1e6, 6)
+
+
+def _opencode_db(path: Path, rows: list[tuple]) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, cost REAL, tokens_input INTEGER, "
+        "tokens_output INTEGER, tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER)"
+    )
+    con.executemany("INSERT INTO session VALUES (?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+    return con
+
+
+def test_opencode_db_adds_subagent_sessions_the_stream_omits(tmp_path: Path):
+    # The stream only shows the top-level session's steps.
+    _write(tmp_path / "agent.log", _step_finish(10, 100, 20, 30, 7, 0.1))
+    archive = tmp_path / "container_logs" / "usage"
+    # Kept open so the rows stay in the WAL, as in a container snapshot.
+    first = _opencode_db(
+        archive / "0" / "opencode.db",
+        [("root", None, 0.1, 10, 30, 7, 100, 20), ("child", "root", 0.05, 4, 6, 1, 40, 0)],
+    )
+    # A later archive repeats the root session with a larger total.
+    second = _opencode_db(
+        archive / "1" / "opencode.db",
+        [("root", None, 0.3, 15, 33, 9, 150, 20), ("fix", None, 0.01, 1, 1, 0, 0, 0)],
+    )
+    try:
+        assert (archive / "0" / "opencode.db-wal").is_file()
+        usage = collect_trial_usage(tmp_path)
+    finally:
+        first.close()
+        second.close()
+    # root (latest) + child + fix; output includes reasoning.
+    assert usage["input_tokens"] == 15 + 4 + 1
+    assert usage["cache_read_tokens"] == 150 + 40
+    assert usage["cache_write_tokens"] == 20
+    assert usage["output_tokens"] == (33 + 9) + (6 + 1) + 1
+    assert usage["reasoning_tokens"] == 10
+    assert usage["sources"] == ["opencode_session_db"]
+    assert usage["harness_cost_usd"] == 0.36
+    assert usage["complete"] is True
+
+
+def test_opencode_db_is_ignored_for_claude_logs(tmp_path: Path):
+    _write(
+        tmp_path / "agent.log",
+        json.dumps({"type": "result", "usage": {"input_tokens": 5, "output_tokens": 1}}) + "\n",
+    )
+    con = _opencode_db(tmp_path / "container_logs" / "usage" / "0" / "opencode.db", [("s", None, 1.0, 99, 99, 0, 0, 0)])
+    try:
+        usage = collect_trial_usage(tmp_path)
+    finally:
+        con.close()
+    assert usage["sources"] == ["claude_result"]
+    assert usage["input_tokens"] == 5
+
+
+def test_opencode_spec_archives_its_data_dir():
+    invocation = resolve_agent(backend="opencode", model="bailian/kimi-k3")
+    assert invocation.spec.usage_paths == ("${XDG_DATA_HOME:-$HOME/.local/share}/opencode",)

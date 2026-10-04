@@ -581,6 +581,8 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         run_as="root",
         model_prefix="keep",
         runtime="node",
+        # Session totals, subagents included, written as each step finishes.
+        usage_paths=("${XDG_DATA_HOME:-$HOME/.local/share}/opencode",),
         command=(
             "opencode --model={model_quoted} run "
             "--format=json --thinking --auto "

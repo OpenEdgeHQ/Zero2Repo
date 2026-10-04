@@ -8,6 +8,7 @@ explicitly reference a hook (discouraged for external specs).
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 # Mirrors agents._CLAUDE_OAUTH_STRIP_KEYS
@@ -71,6 +72,15 @@ def opencode_env(*, model: str, environ: dict[str, str], spec: Any) -> dict[str,
     provider = model.split("/", 1)[0] if "/" in model else ""
     for key in _OPENCODE_PROVIDER_KEYS.get(provider, []):
         if environ.get(key):
+            out[key] = environ[key]
+    # A custom provider (e.g. an OpenAI-compatible gateway) is declared in
+    # OPENCODE_CONFIG_CONTENT; pass it and the {env:NAME} keys it references.
+    config = (environ.get("OPENCODE_CONFIG_CONTENT") or "").strip()
+    if config:
+        out["OPENCODE_CONFIG_CONTENT"] = config
+        for key in re.findall(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}", config):
+            if not environ.get(key):
+                raise RuntimeError(f"cbrun: OPENCODE_CONFIG_CONTENT references unset {key}")
             out[key] = environ[key]
     out["OPENCODE_FAKE_VCS"] = "git"
     return out

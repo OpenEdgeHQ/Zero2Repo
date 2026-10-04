@@ -29,6 +29,9 @@ startup snapshot. The OpenHands setup appends each returned completion to
 ``container_logs/openhands_usage.jsonl`` inside ``add_token_usage``. Those
 lines are summed when the logs have no usage. A finished run's
 ``base_state.json`` total is used when it is larger than the appended lines.
+OpenCode prints ``step_finish`` only for the top-level session; its archived
+database also holds subagent sessions and is used when it records more.
+OpenCode reports output with reasoning subtracted, so reasoning is added back.
 ``complete`` is False when some log produced no usage at all;
 ``missing`` names those logs.
 """
@@ -36,7 +39,10 @@ lines are summed when the logs have no usage. A finished run's
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -229,12 +235,12 @@ def parse_usage_text(text: str) -> LogUsage:
         if etype == "step_finish" and isinstance(part, dict) and isinstance(part.get("tokens"), dict):
             tokens = part["tokens"]
             cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
-            step = Buckets(
-                input_tokens=_int(tokens.get("input")),
-                cache_read_tokens=_int(cache.get("read")),
-                cache_write_tokens=_int(cache.get("write")),
-                output_tokens=_int(tokens.get("output")),
-                reasoning_tokens=_int(tokens.get("reasoning")),
+            step = _opencode_buckets(
+                input_tokens=tokens.get("input"),
+                cache_read=cache.get("read"),
+                cache_write=cache.get("write"),
+                output=tokens.get("output"),
+                reasoning=tokens.get("reasoning"),
             )
             opencode_calls = opencode_calls or Buckets()
             opencode_calls.add(step)
@@ -385,6 +391,62 @@ def _openhands_jsonl_buckets(out_dir: Path) -> Buckets | None:
     return total
 
 
+def _opencode_buckets(*, input_tokens: Any, cache_read: Any, cache_write: Any, output: Any, reasoning: Any) -> Buckets:
+    """OpenCode reports output with reasoning subtracted; billed output includes it."""
+    return Buckets(
+        input_tokens=_int(input_tokens),
+        cache_read_tokens=_int(cache_read),
+        cache_write_tokens=_int(cache_write),
+        output_tokens=_int(output) + _int(reasoning),
+        reasoning_tokens=_int(reasoning),
+    )
+
+
+def _opencode_db_usage(out_dir: Path) -> tuple[Buckets, float] | None:
+    """Sum the per-session totals OpenCode keeps in its archived database.
+
+    Every session counts, including subagent sessions, which ``run --format
+    json`` does not print. Totals grow as each step finishes, so a killed run
+    keeps its finished steps. A session found in several archives keeps its
+    largest total.
+    """
+    root = out_dir / "container_logs" / USAGE_ARCHIVE_DIR
+    if not root.is_dir():
+        return None
+    sessions: dict[str, tuple[Buckets, float]] = {}
+    for path in sorted(root.rglob("opencode*.db")):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Copy with the WAL so rows not yet checkpointed are read too.
+            for src in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+                if src.is_file():
+                    shutil.copy2(src, Path(tmp) / src.name)
+            con = sqlite3.connect(Path(tmp) / path.name)
+            try:
+                rows = con.execute(
+                    "SELECT id, tokens_input, tokens_cache_read, tokens_cache_write, "
+                    "tokens_output, tokens_reasoning, cost FROM session"
+                ).fetchall()
+            except sqlite3.Error as exc:
+                raise RuntimeError(f"cbrun: cannot read OpenCode usage from {path}: {exc}") from exc
+            finally:
+                con.close()
+        for sid, inp, read, write, output, reasoning, cost in rows:
+            buckets = _opencode_buckets(
+                input_tokens=inp, cache_read=read, cache_write=write, output=output, reasoning=reasoning
+            )
+            prior = sessions.get(sid)
+            if prior is None or buckets.total() > prior[0].total():
+                sessions[sid] = (buckets, float(cost or 0.0))
+    if not sessions:
+        return None
+    total = Buckets()
+    cost = 0.0
+    for buckets, session_cost in sessions.values():
+        total.add(buckets)
+        cost += session_cost
+    return total, cost
+
+
 def _openhands_state_buckets(out_dir: Path) -> Buckets | None:
     """Sum accumulated usage from every archived ``base_state.json``."""
     root = out_dir / "container_logs" / USAGE_ARCHIVE_DIR
@@ -442,10 +504,11 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
     sessions = _session_usage(out_dir / "container_logs" / USAGE_ARCHIVE_DIR)
     hook = _cursor_hook_buckets(out_dir)
     openhands = _openhands_buckets(out_dir)
+    opencode_db = _opencode_db_usage(out_dir)
     record: dict[str, Any] = {name: 0 for name in _BUCKETS}
     record.update({"reasoning_tokens": 0, "total_tokens": 0, "sources": [], "complete": False, "missing": []})
 
-    if not per_log and sessions is None and hook is None and openhands is None:
+    if not per_log and sessions is None and hook is None and openhands is None and opencode_db is None:
         record["missing"] = ["agent.log"]
         return record
 
@@ -496,6 +559,23 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
         record["sources"] = [source]
         record["complete"] = True
         record["missing"] = []
+        record.pop("by_model", None)
+    # The database also holds subagent sessions the JSON stream leaves out.
+    if (
+        opencode_db is not None
+        and set(record["sources"]) <= {"opencode_step_finish"}
+        and opencode_db[0].total() >= record["total_tokens"]
+    ):
+        buckets, db_cost = opencode_db
+        for name in _BUCKETS:
+            record[name] = getattr(buckets, name)
+        record["cache_write_1h_tokens"] = 0
+        record["reasoning_tokens"] = buckets.reasoning_tokens
+        record["total_tokens"] = buckets.total()
+        record["sources"] = ["opencode_session_db"]
+        record["complete"] = True
+        record["missing"] = []
+        record["harness_cost_usd"] = round(db_cost, 6)
         record.pop("by_model", None)
     if hook is not None and not has_cursor_result:
         for name in _BUCKETS:
