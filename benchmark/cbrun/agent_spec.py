@@ -437,6 +437,116 @@ if [ -f "$CODEX_HOME/config.toml" ]; then
 fi
 """
 
+# Cursor's headless CLI reports the billed total on one turnEnded message and
+# prints it on the result line only if the process then exits. This patches
+# that handler so the total is appended under /logs/agent the moment it
+# arrives. The patch is inside the CLI bundle, not under /app.
+_CURSOR_USAGE_HOOK_SETUP = r"""set -eu
+mkdir -p /logs/agent
+python3 - << 'PY'
+import os
+from pathlib import Path
+marker = 'case"turnEnded":{const e=n.message.value;'
+needle = "/logs/agent/cursor_usage.jsonl"
+inject = (
+    marker
+    + 'try{var _cbv=e;if(_cbv.inputTokens!=null||_cbv.outputTokens!=null||_cbv.cacheReadTokens!=null||_cbv.cacheWriteTokens!=null){'
+    + 'require("fs").appendFileSync("/logs/agent/cursor_usage.jsonl",JSON.stringify({'
+    + 'input_tokens:Math.max(Number(_cbv.inputTokens??0)-Number(_cbv.cacheReadTokens??0)-Number(_cbv.cacheWriteTokens??0),0),'
+    + 'output_tokens:Number(_cbv.outputTokens??0),'
+    + 'cache_read_tokens:Number(_cbv.cacheReadTokens??0),'
+    + 'cache_write_tokens:Number(_cbv.cacheWriteTokens??0)})+"\\n")}}catch(_cb){}'
+)
+roots = [Path("/root/.local/share/cursor-agent/versions"), Path("/usr/local/share/cursor-agent/versions")]
+found = []
+for root in roots:
+    if not root.is_dir():
+        continue
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            if not name.endswith(".js"):
+                continue
+            path = Path(dirpath) / name
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if marker in text:
+                found.append(path)
+if len(found) != 1:
+    raise SystemExit("cbrun: cursor usage patch matched %d files" % len(found))
+path = found[0]
+text = path.read_text(encoding="utf-8")
+if needle in text:
+    raise SystemExit(0)
+if text.count(marker) != 1:
+    raise SystemExit("cbrun: cursor usage marker count %d" % text.count(marker))
+path.write_text(text.replace(marker, inject, 1), encoding="utf-8")
+PY
+"""
+
+# OpenHands adds each completion to an in-memory Metrics object and only
+# rewrites base_state.json when some other conversation field changes. A kill
+# therefore leaves the startup snapshot, whose counters are still zero. This
+# appends the completion inside add_token_usage, before the process can exit.
+_OPENHANDS_USAGE_SETUP = r"""set -eu
+mkdir -p /logs/agent
+python3 - << 'PY'
+import os
+from pathlib import Path
+marker = "        self.token_usages.append(usage)\n"
+needle = "/logs/agent/openhands_usage.jsonl"
+inject = marker + (
+    "        try:\n"
+    "            import json as _cb_json\n"
+    "            import os as _cb_os\n"
+    "            _cb_os.makedirs(\"/logs/agent\", exist_ok=True)\n"
+    "            with open(\"/logs/agent/openhands_usage.jsonl\", \"a\", encoding=\"utf-8\") as _cb_fh:\n"
+    "                _cb_fh.write(_cb_json.dumps({\n"
+    "                    \"model\": usage.model,\n"
+    "                    \"prompt_tokens\": int(usage.prompt_tokens),\n"
+    "                    \"completion_tokens\": int(usage.completion_tokens),\n"
+    "                    \"cache_read_tokens\": int(usage.cache_read_tokens),\n"
+    "                    \"cache_write_tokens\": int(usage.cache_write_tokens),\n"
+    "                    \"reasoning_tokens\": int(usage.reasoning_tokens),\n"
+    "                    \"response_id\": usage.response_id,\n"
+    "                }) + \"\\n\")\n"
+    "                _cb_fh.flush()\n"
+    "                _cb_os.fsync(_cb_fh.fileno())\n"
+    "        except Exception:\n"
+    "            pass\n"
+)
+roots = [
+    Path("/root/.local/share/uv/tools/openhands/lib"),
+    Path("/usr/local/lib"),
+]
+found = []
+for root in roots:
+    if not root.is_dir():
+        continue
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            if name != "metrics.py":
+                continue
+            path = Path(dirpath) / name
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if marker in text:
+                found.append(path)
+if len(found) != 1:
+    raise SystemExit("cbrun: openhands usage patch matched %d files" % len(found))
+path = found[0]
+text = path.read_text(encoding="utf-8")
+if needle in text:
+    raise SystemExit(0)
+if text.count(marker) != 1:
+    raise SystemExit("cbrun: openhands usage marker count %d" % text.count(marker))
+path.write_text(text.replace(marker, inject, 1), encoding="utf-8")
+PY
+"""
+
 _BUILTIN_SPECS: dict[str, AgentSpec] = {
     "codex": AgentSpec(
         name="codex",
@@ -503,6 +613,11 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         run_as="root",
         model_prefix="keep",
         home="/root",
+        # The billed total arrives on turnEnded and is otherwise printed only
+        # on the final result line. The setup writes that total to
+        # /logs/agent immediately, so a crash after the server has reported
+        # it still leaves a usage file for the archive to copy.
+        setup_script=_CURSOR_USAGE_HOOK_SETUP,
         command=(
             "cursor-agent -p --force --trust --sandbox disabled "
             "--model {model_quoted} --workspace {workdir_quoted} "
@@ -517,6 +632,9 @@ _BUILTIN_SPECS: dict[str, AgentSpec] = {
         run_as="root",
         model_prefix="keep",
         home="/root",
+        # Each completion is appended under /logs/agent as add_token_usage
+        # returns, so a kill does not lose the calls already billed.
+        setup_script=_OPENHANDS_USAGE_SETUP,
         usage_paths=("/root/.openhands",),
         command=(
             "openhands --headless --json --always-approve "

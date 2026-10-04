@@ -17,8 +17,20 @@ Sources, per log:
 
 A process killed by the wall clock or the stall watchdog never writes its final
 summary. Codex and Claude Code session files are written as the run goes, so
-they are used when any log lacks a summary. ``complete`` is False when some
-log produced no usage at all; ``missing`` names those logs.
+they are used when any log lacks a summary. Cursor's headless stream reports
+the billed total once, on ``turnEnded``, which is also what ``result.usage``
+contains. The Cursor setup writes that message to
+``container_logs/cursor_usage.jsonl`` as soon as it arrives, and that file is
+used when the process dies before the result line. A kill while the model is
+still generating happens before ``turnEnded``; the CLI has not reported a
+bill yet. OpenHands keeps its total in memory and rewrites ``base_state.json``
+only when conversation state changes, so a kill leaves that file at the empty
+startup snapshot. The OpenHands setup appends each returned completion to
+``container_logs/openhands_usage.jsonl`` inside ``add_token_usage``. Those
+lines are summed when the logs have no usage. A finished run's
+``base_state.json`` total is used when it is larger than the appended lines.
+``complete`` is False when some log produced no usage at all;
+``missing`` names those logs.
 """
 
 from __future__ import annotations
@@ -41,6 +53,10 @@ __all__ = [
 # Solve rounds in order: the first, then fix rounds after a denylist finding.
 AGENT_LOG_NAMES = ("agent.log", "agent_fix.log", "agent_fix_2.log")
 USAGE_ARCHIVE_DIR = "usage"
+# Written by the Cursor turnEnded patch as soon as the billed total arrives.
+CURSOR_USAGE_LOG = "cursor_usage.jsonl"
+# One JSON line per OpenHands completion, written inside add_token_usage.
+OPENHANDS_USAGE_LOG = "openhands_usage.jsonl"
 
 _BUCKETS = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens")
 
@@ -280,6 +296,137 @@ def _session_usage(usage_dir: Path) -> LogUsage | None:
     return LogUsage(summary=total, summary_source="+".join(sorted(sources)))
 
 
+def _cursor_hook_buckets(out_dir: Path) -> Buckets | None:
+    """Sum Cursor ``turnEnded`` totals written before the process exits.
+
+    One JSON line per turn. The CLI adds those turns to produce
+    ``result.usage``, so the lines are summed the same way. The same
+    ``generation_id`` keeps its last line. Lines without an id each count.
+    """
+    path = out_dir / "container_logs" / CURSOR_USAGE_LOG
+    if not path.is_file():
+        return None
+    latest: dict[str, Buckets] = {}
+    anonymous: list[Buckets] = []
+    found = False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for event in _json_events(text):
+        usage = event.get("usage") if isinstance(event.get("usage"), dict) else event
+        if not isinstance(usage, dict):
+            continue
+        buckets = Buckets(
+            input_tokens=_int(usage.get("input_tokens", usage.get("inputTokens"))),
+            cache_read_tokens=_int(usage.get("cache_read_tokens", usage.get("cacheReadTokens"))),
+            cache_write_tokens=_int(usage.get("cache_write_tokens", usage.get("cacheWriteTokens"))),
+            output_tokens=_int(usage.get("output_tokens", usage.get("outputTokens"))),
+        )
+        if buckets.total() == 0:
+            continue
+        found = True
+        generation = event.get("generation_id") or event.get("generationId")
+        if isinstance(generation, str) and generation:
+            latest[generation] = buckets
+        else:
+            anonymous.append(buckets)
+    if not found:
+        return None
+    total = Buckets()
+    for buckets in latest.values():
+        total.add(buckets)
+    for buckets in anonymous:
+        total.add(buckets)
+    return total
+
+
+def _openhands_call_buckets(usage: dict) -> Buckets | None:
+    """Convert one OpenHands usage object.
+
+    ``prompt_tokens`` includes cache read and cache write. ``completion_tokens``
+    includes reasoning, so reasoning is kept aside and not added again.
+    """
+    prompt = _int(usage.get("prompt_tokens"))
+    completion = _int(usage.get("completion_tokens"))
+    cache_read = _int(usage.get("cache_read_tokens"))
+    cache_write = _int(usage.get("cache_write_tokens"))
+    if prompt == 0 and completion == 0 and cache_read == 0 and cache_write == 0:
+        return None
+    return Buckets(
+        input_tokens=max(prompt - cache_read - cache_write, 0),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+        output_tokens=completion,
+        reasoning_tokens=_int(usage.get("reasoning_tokens")),
+    )
+
+
+def _openhands_jsonl_buckets(out_dir: Path) -> Buckets | None:
+    path = out_dir / "container_logs" / OPENHANDS_USAGE_LOG
+    if not path.is_file():
+        return None
+    latest: dict[str, Buckets] = {}
+    anonymous: list[Buckets] = []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for event in _json_events(text):
+        buckets = _openhands_call_buckets(event)
+        if buckets is None:
+            continue
+        response_id = event.get("response_id")
+        if isinstance(response_id, str) and response_id:
+            latest[response_id] = buckets
+        else:
+            anonymous.append(buckets)
+    if not latest and not anonymous:
+        return None
+    total = Buckets()
+    for buckets in latest.values():
+        total.add(buckets)
+    for buckets in anonymous:
+        total.add(buckets)
+    return total
+
+
+def _openhands_state_buckets(out_dir: Path) -> Buckets | None:
+    """Sum accumulated usage from every archived ``base_state.json``."""
+    root = out_dir / "container_logs" / USAGE_ARCHIVE_DIR
+    if not root.is_dir():
+        return None
+    total = Buckets()
+    found = False
+    for path in sorted(root.rglob("base_state.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        metrics = ((data.get("stats") or {}).get("usage_to_metrics") or {})
+        if not isinstance(metrics, dict):
+            continue
+        for slot in metrics.values():
+            if not isinstance(slot, dict):
+                continue
+            usage = slot.get("accumulated_token_usage")
+            if not isinstance(usage, dict):
+                continue
+            buckets = _openhands_call_buckets(usage)
+            if buckets is None:
+                continue
+            total.add(buckets)
+            found = True
+    return total if found else None
+
+
+def _openhands_buckets(out_dir: Path) -> tuple[Buckets, str] | None:
+    """Live completion lines, or the state snapshot when it recorded more."""
+    logged = _openhands_jsonl_buckets(out_dir)
+    state = _openhands_state_buckets(out_dir)
+    if logged is None and state is None:
+        return None
+    if state is None or (logged is not None and logged.total() >= state.total()):
+        return logged, "openhands_usage_log"  # type: ignore[return-value]
+    if logged is None or state.total() > logged.total():
+        return state, "openhands_base_state"
+    return logged, "openhands_usage_log"
+
+
 def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
     """Return the ``token_usage`` record for one trial directory."""
     out_dir = Path(out_dir)
@@ -293,10 +440,12 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
             per_log[name] = parse_usage_text(text)
 
     sessions = _session_usage(out_dir / "container_logs" / USAGE_ARCHIVE_DIR)
+    hook = _cursor_hook_buckets(out_dir)
+    openhands = _openhands_buckets(out_dir)
     record: dict[str, Any] = {name: 0 for name in _BUCKETS}
     record.update({"reasoning_tokens": 0, "total_tokens": 0, "sources": [], "complete": False, "missing": []})
 
-    if not per_log and sessions is None:
+    if not per_log and sessions is None and hook is None and openhands is None:
         record["missing"] = ["agent.log"]
         return record
 
@@ -335,6 +484,29 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
     by_model = _by_model(per_log.values()) if all_summarized or sessions is None else None
     if by_model:
         record["by_model"] = by_model
+
+    has_cursor_result = any(log.summary_source == "cursor_result" for log in per_log.values())
+    if openhands is not None and record["total_tokens"] == 0 and not has_cursor_result:
+        buckets, source = openhands
+        for name in _BUCKETS:
+            record[name] = getattr(buckets, name)
+        record["cache_write_1h_tokens"] = buckets.cache_write_1h_tokens
+        record["reasoning_tokens"] = buckets.reasoning_tokens
+        record["total_tokens"] = buckets.total()
+        record["sources"] = [source]
+        record["complete"] = True
+        record["missing"] = []
+        record.pop("by_model", None)
+    if hook is not None and not has_cursor_result:
+        for name in _BUCKETS:
+            record[name] = getattr(hook, name)
+        record["cache_write_1h_tokens"] = 0
+        record["reasoning_tokens"] = 0
+        record["total_tokens"] = hook.total()
+        record["sources"] = ["cursor_response_hooks"]
+        record["complete"] = True
+        record["missing"] = []
+        record.pop("by_model", None)
     return record
 
 

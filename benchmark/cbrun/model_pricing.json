@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-10-01",
+  "fetched_at": "2026-10-04",
   "currency": "USD",
   "unit": "per_1M_tokens",
-  "notes": "Standard-tier list prices of the first-party endpoint on OpenRouter. Long-context surcharges (GPT-6 Astra above 272K prompt tokens, Grok 4.7 above 200K) apply per request and are not applied to per-trial totals.",
+  "notes": "USD entries are standard-tier list prices. GPT-6 Sol is the OpenAI API price; the others are the first-party endpoint on OpenRouter. Long-context surcharges (GPT-6 Astra and GPT-6 Sol above 272K prompt tokens, Grok 4.7 above 200K) apply per request and are not applied to per-trial totals. CNY entries are the Bailian list prices supplied for DeepSeek V4 Pro and Kimi K3; they are yuan per million tokens and are not converted. No separate cache-write price was supplied for those two, so a cache write is priced as fresh input.",
   "models": {
     "openai/gpt-6-astra": {
       "aliases": ["gpt-6-astra"],
@@ -38,6 +38,30 @@
       "cache_write_per_m": 1.6,
       "output_per_m": 4.8,
       "source_url": "https://openrouter.ai/x-ai/grok-4.7"
+    },
+    "openai/gpt-6-sol": {
+      "aliases": ["gpt-6-sol"],
+      "input_per_m": 2.0,
+      "cache_read_per_m": 0.2,
+      "cache_write_per_m": 2.5,
+      "output_per_m": 10.0,
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6-sol"
+    },
+    "deepseek/deepseek-v4-pro": {
+      "aliases": ["deepseek-v4-pro", "deepseek-v4-pro-0813"],
+      "currency": "CNY",
+      "input_per_m": 12.0,
+      "cache_read_per_m": 1.0,
+      "cache_write_per_m": 12.0,
+      "output_per_m": 24.0
+    },
+    "moonshot/kimi-k3": {
+      "aliases": ["kimi-k3"],
+      "currency": "CNY",
+      "input_per_m": 20.0,
+      "cache_read_per_m": 2.0,
+      "cache_write_per_m": 20.0,
+      "output_per_m": 100.0
     }
   }
 }

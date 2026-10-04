@@ -1,9 +1,11 @@
-"""USD cost of a trial's token usage from the bundled list-price table.
+"""Cost of a trial's token usage from the bundled list-price table.
 
 ``model_pricing.json`` holds per-1M-token prices for the evaluated models.
 A model string such as ``commonstack/claude-opus-5-5-20260921`` or
 ``grok-4.7-high`` is matched by its last path segment, with any date suffix
 and reasoning-effort suffix removed, against each entry's aliases.
+An entry's ``currency`` is ``USD`` when omitted. Yuan prices stay in
+``cost_cny`` and are not folded into ``cost_usd``.
 
 ``cache_write_1h_tokens`` is the part of ``cache_write_tokens`` written with a
 one-hour TTL; it uses ``cache_write_1h_per_m`` when the model has one.
@@ -73,17 +75,21 @@ def _price(buckets: Mapping[str, Any], entry: Mapping[str, Any]) -> float:
 
 
 def trial_cost(usage: Mapping[str, Any], model: str | None) -> dict[str, Any]:
-    """Return ``cost_usd`` fields for one ``token_usage`` record.
+    """Return cost fields for one ``token_usage`` record.
 
     Per-model usage (``by_model``) is priced model by model; otherwise the
-    totals are priced as ``model``. ``cost_usd`` is None when any model with
-    usage has no price.
+    totals are priced as ``model``. Both cost fields are None when any model
+    with usage has no price. ``cost_usd`` sums USD entries and ``cost_cny``
+    sums CNY entries.
     """
     by_model = usage.get("by_model")
     parts: list[tuple[str | None, Mapping[str, Any]]] = (
         list(by_model.items()) if isinstance(by_model, Mapping) and by_model else [(model, usage)]
     )
-    total = 0.0
+    usd = 0.0
+    cny = 0.0
+    saw_usd = False
+    saw_cny = False
     priced: list[str] = []
     unpriced: list[str] = []
     for name, buckets in parts:
@@ -92,11 +98,22 @@ def trial_cost(usage: Mapping[str, Any], model: str | None) -> dict[str, Any]:
             unpriced.append(str(name))
             continue
         model_id, entry = found
-        total += _price(buckets, entry)
+        amount = _price(buckets, entry)
+        currency = str(entry.get("currency") or "USD").upper()
+        if currency == "USD":
+            usd += amount
+            saw_usd = True
+        elif currency == "CNY":
+            cny += amount
+            saw_cny = True
+        else:
+            unpriced.append(str(name))
+            continue
         if model_id not in priced:
             priced.append(model_id)
     return {
-        "cost_usd": None if unpriced else round(total, 6),
+        "cost_usd": None if unpriced or not saw_usd else round(usd, 6),
+        "cost_cny": None if unpriced or not saw_cny else round(cny, 6),
         "priced_models": priced,
         "unpriced_models": unpriced,
         "pricing_fetched_at": _table()["fetched_at"],
