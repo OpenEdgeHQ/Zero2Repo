@@ -203,6 +203,7 @@ Standard output is plain text, not JSON.
 **Writing contract.** Its content is the PRD's. Its shell parts:
 
 - Every word of the PRD's banned-vocabulary list appears as a standalone word.
+- Wherever the text names `source code` (any letter case; the two words joined by a space or a hyphen), the standalone word `never` or `not` (any letter case) comes earlier in the same sentence. A sentence ends at `.`, `!`, `?`, or a line break.
 - At `full`: the full-level target score appears as a standalone integer, together with the band word `clean` or the band name `light tells`. The text does not contain `--clean`.
 - At `strict`: the strict-level target score appears as a standalone integer; the band word `clean` appears apart from the switch spelling; and the text asks for a finish through `--clean`, written exactly so.
 - At `lite`: neither the full-level target integer nor `light tells` appears.
@@ -524,7 +525,7 @@ tells: <label> (x<count>)[; <label> (x<count>)]...
 
 ### Not scored
 
-Each of these replies contains no standalone integer from 0 through 100 once the path and base name it names are removed, and carries exactly one of the marks `not a file`, `cannot read`, `no readable text`, `detector unavailable`, `no report` as listed (never another of those marks):
+Each of these replies names the file only by the path as typed (quotes and the leading `@` removed) or by its base name. Each contains no standalone integer from 0 through 100 once the path and base name it names are removed, and carries exactly one of the marks `not a file`, `cannot read`, `no readable text`, `detector unavailable`, `no report` as listed (never another of those marks):
 
 - A directory: `not a file`.
 - A path that is not on disk: `cannot read`, and the path string as typed is in the reply.

@@ -87,11 +87,12 @@ def _kb_figure(row) -> int:
     # Contract: a size skip names the archive / notebook cap in kilobytes
     # (PRD FP-02: 4096) in the stated row form.
     assert row.kind == "size", f"not a size-skip row: {row.line!r}"
-    assert row.kb in ARCHIVE_KB_FIGURES, (
+    named = [kb for kb in row.kbs if kb in ARCHIVE_KB_FIGURES]
+    assert named, (
         f"size skip did not name {ARCHIVE_KB_FIGURES[0]}; "
         f"row={row.line!r}"
     )
-    return row.kb
+    return named[0]
 
 
 def test_unset_level_uses_full_threshold_not_strict():
@@ -1236,7 +1237,7 @@ def test_plain_text_over_512_kb_names_512():
             shown = show_text(ws, sid)
             row = show_row(shown, name)
             assert row.kind == "size", f"over-cap plain text is not a size skip: {row.line!r}"
-            assert row.kb == PLAIN_KB, f"size skip names {row.kb}, not {PLAIN_KB}"
+            assert PLAIN_KB in row.kbs, f"size skip names {row.kbs}, not {PLAIN_KB}"
 
 
 def test_zip_between_the_caps_is_still_scored():

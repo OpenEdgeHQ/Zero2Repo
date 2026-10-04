@@ -808,7 +808,7 @@ def not_scored_marks(text: str) -> list[str]:
     return [mark for mark in NOT_SCORED_MARKS if mark in low]
 
 
-_OVER_KB = re.compile(r"(?<![A-Za-z])over (\d+) KB(?![A-Za-z])")
+_OVER_KB = re.compile(r"(?i)(?<![A-Za-z])over (\d+) KB(?![A-Za-z])")
 
 
 def kilobyte_figure(cap_bytes: int) -> int:
@@ -861,36 +861,27 @@ def require_check_not_a_file(reply: str, *paths: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def show_rows(reply: str) -> list[tuple[str, str]]:
-    """Rows ``  <file> - <rest>`` after the header, newest first."""
-    lines = reply.splitlines()
-    assert len(lines) >= 2, f"show reply has no ledger rows: {reply[:400]!r}"
-    rows: list[tuple[str, str]] = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        assert line.startswith("  ") and " - " in line, f"show row form: {line!r}"
-        name, rest = line.strip().split(" - ", 1)
-        rows.append((name, rest))
-    return rows
-
-
 def show_row(reply: str, basename: str) -> str:
-    """Remainder of the newest row for *basename*."""
-    for name, rest in show_rows(reply):
-        if name == basename:
-            return rest
+    """Remainder of the newest row ``<file> - <rest>`` for *basename*.
+
+    A row is optional leading whitespace, then the base name and `` - ``;
+    other lines (such as a heading) are free and may be absent.
+    """
+    head = f"{basename} - "
+    for line in reply.splitlines():
+        if line.strip().startswith(head):
+            return line.strip()[len(head):]
     raise AssertionError(f"show has no row for {basename!r}: {reply[:400]!r}")
 
 
 _SHOW_SCORE = re.compile(r"\(score \d{1,3}/")
-_SHOW_SIZE_SKIP = re.compile(r"^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$")
+_SHOW_SIZE_SKIP = re.compile(r"(?i)^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$")
 
 
 def require_binary_ledger_record(blob: str, basename: str) -> None:
     """Binary row: ``<file> - binary, ... (not re-scored)``; no score, not a size skip."""
     rest = show_row(blob, basename)
-    assert "not re-scored" in rest, f"binary row does not say not re-scored: {rest!r}"
+    assert "not re-scored" in rest.lower(), f"binary row does not say not re-scored: {rest!r}"
     assert not _SHOW_SCORE.search(rest), f"binary row carries a score: {rest!r}"
     assert not _SHOW_SIZE_SKIP.match(rest), f"binary row is a size skip: {rest!r}"
     print(f"[F02] ledger binary row {basename!r}: {rest!r}", flush=True)
@@ -899,10 +890,10 @@ def require_binary_ledger_record(blob: str, basename: str) -> None:
 def require_show_size_skip(blob: str, basename: str, *, cap_bytes: int) -> None:
     """Size-skip row: ``<file> - not scored: <free text naming <KB> KB>``; no score."""
     rest = show_row(blob, basename)
-    m = _SHOW_SIZE_SKIP.match(rest)
-    assert m, f"size-skip row is not the stated form: {rest!r}"
-    assert int(m.group(1)) in _cap_figures(cap_bytes), (
-        f"size-skip row names {m.group(1)} KB, stated {_cap_figures(cap_bytes)}"
+    assert _SHOW_SIZE_SKIP.match(rest), f"size-skip row is not the stated form: {rest!r}"
+    named = [int(n) for n in re.findall(r"(?i)(?<![0-9])(\d+) KB(?![A-Za-z])", rest)]
+    assert set(named) & set(_cap_figures(cap_bytes)), (
+        f"size-skip row names {named} KB, stated {_cap_figures(cap_bytes)}"
     )
     assert not _SHOW_SCORE.search(rest)
 

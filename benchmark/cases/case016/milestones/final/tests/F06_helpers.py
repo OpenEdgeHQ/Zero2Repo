@@ -300,7 +300,7 @@ CHECK_NOT_SCORED_PHRASES: tuple[str, ...] = (
 
 def check_over_cap_figure(text: str) -> int | None:
     """The kilobyte figure in ``over <KB> KB``, or None."""
-    m = re.search(r"(?<![A-Za-z])over (\d+) KB(?![A-Za-z])", text)
+    m = re.search(r"(?i)(?<![A-Za-z])over (\d+) KB(?![A-Za-z])", text)
     return int(m.group(1)) if m else None
 
 
@@ -476,17 +476,19 @@ def require_scored_row_shows(body: str, measured: Measured) -> ScoredRow:
     return row
 
 
-def size_skip_figure(body: str) -> int | None:
-    m = re.fullmatch(r"not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*", body)
-    return int(m.group(1)) if m else None
+def size_skip_figures(body: str) -> tuple[int, ...]:
+    """Every ``<n> KB`` figure of a ``not scored: `` row; empty when it has none."""
+    if not body.lower().startswith("not scored: "):
+        return ()
+    return tuple(int(n) for n in re.findall(r"(?i)(?<![0-9])(\d+) KB(?![A-Za-z])", body))
 
 
 def is_binary_row(body: str) -> bool:
-    return "not re-scored" in body and "not scored:" not in body
+    return "not re-scored" in body.lower() and "not scored:" not in body.lower()
 
 
 def failed_row_reason(body: str) -> str | None:
-    if not body.startswith("not scored: ") or size_skip_figure(body) is not None:
+    if not body.lower().startswith("not scored: ") or size_skip_figures(body):
         return None
     return body[len("not scored: "):]
 

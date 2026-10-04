@@ -693,7 +693,7 @@ def test_check_scores_at_plain_text_cap_and_refuses_one_byte_over():
     human_check = score_in_check_reply(human_blob, expected=human_det)
     assert human_check == human_det
     assert human_check < 40
-    require_check_over_cap(over_blob, cap_bytes=PLAIN_CAP)
+    require_check_over_cap(over_blob, cap_bytes=PLAIN_CAP, path=str(ws.resolve("over.md")))
     print(
         f"[F02] plain cap at={at_score} human={human_check} over_reply={over_blob!r}",
         flush=True,
@@ -712,7 +712,7 @@ def test_check_scores_at_archive_cap_and_refuses_one_byte_over():
         over_result, over_blob = check_file(ws, "over.docx")
         _cannot_read_and_not_a_file_replies(ws)
     assert over_result.returncode == 0
-    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP)
+    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP, path=str(ws.resolve("over.docx")))
     print(
         f"[F02] archive cap at={at_score} over_det={over_det} over_reply={over_blob!r}",
         flush=True,
@@ -734,7 +734,7 @@ def test_check_scores_notebook_between_plain_text_and_archive_cap_and_refuses_on
         over_result, over_blob = check_file(ws, "over.ipynb")
         _cannot_read_and_not_a_file_replies(ws)
     assert over_result.returncode == 0
-    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP)
+    require_check_over_cap(over_blob, cap_bytes=ARCHIVE_CAP, path=str(ws.resolve("over.ipynb")))
     print(
         f"[F02] notebook mid bytes={size} score={mid_score} over_det={over_det} "
         f"over_reply={over_blob!r}",
@@ -768,7 +768,7 @@ def test_guard_over_cap_write_exits_without_scoring_nudge():
         f"over-cap Write still carried a scoring nudge: {over_guard_blob[:400]!r}"
     )
     require_show_size_skip(show_blob, "over.md", cap_bytes=PLAIN_CAP)
-    require_check_over_cap(check_blob, cap_bytes=PLAIN_CAP)
+    require_check_over_cap(check_blob, cap_bytes=PLAIN_CAP, path=str(ws.resolve("over.md")))
     print(
         f"[F02] guard over-cap exit={guard_over.returncode} "
         f"in_nudge_len={len(in_guard_blob)} show={show_blob!r} check={check_blob!r}",

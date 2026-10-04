@@ -124,7 +124,7 @@ from F06_helpers import (
     shared_sweep_clock,
     show_row,
     shows_integer,
-    size_skip_figure,
+    size_skip_figures,
     standalone_count,
     stamp_cutoff_offset,
     states_prose_only_scope,
@@ -1189,9 +1189,9 @@ def test_show_size_binary_and_failed_rows_differ(isolated_ws):
     shown = _ask(ws, "show", session_id=session)
     require_scored_row_shows(show_row(shown, scored_path.name), scored)
     size_row = show_row(shown, sized.name)
-    assert size_skip_figure(size_row) == 512, size_row
+    assert 512 in size_skip_figures(size_row), size_row
     archive_row = show_row(shown, archive.name)
-    assert size_skip_figure(archive_row) == 4096, archive_row
+    assert 4096 in size_skip_figures(archive_row), archive_row
     binary_row = show_row(shown, binary.name)
     assert is_binary_row(binary_row), binary_row
     failed_row = show_row(shown, missing.name)

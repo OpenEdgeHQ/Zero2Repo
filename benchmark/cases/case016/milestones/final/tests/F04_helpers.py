@@ -716,75 +716,22 @@ def has_cleanup_switch_finish(text: str) -> bool:
     return CLEANUP_SWITCH in str(text)
 
 
-_SCOPE_APPLY = re.compile(
-    r"(?i)\b(appl(?:y|ies)|govern(?:s)?|cover(?:s)?|includ(?:e|es|ing)|"
-    r"in\s+scope)\b"
-)
-_SCOPE_NEG = re.compile(
-    r"(?i)\b(never|not|don't|doesn't|do\s+not|exclud\w*|untouch\w*|"
-    r"outside|no)\b"
-)
-_SOURCE_CODE = re.compile(r"(?i)\bsource\s*[- ]?code\b")
+_SOURCE_CODE = re.compile(r"(?i)\bsource[- ]code\b")
+_SOURCE_CODE_DENIAL = re.compile(r"(?i)\b(?:never|not)\b")
 
 
-_CLAUSE_BREAK = re.compile(
-    r"\b(?:and|but|while|whereas|or)\b|;",
-    flags=re.IGNORECASE,
-)
-_NEG_TAIL = re.compile(
-    r"[\s,:'\"-]*(?:(?:does|do|did|is|are|be|the|this|a|an|it|contract|"
-    r"writing|rules?)[\s,:'\"-]*)*",
-    flags=re.IGNORECASE,
-)
+def names_source_code_without_denial(text: str, *paths: str) -> bool:
+    """True when a sentence names source code with no ``never`` / ``not`` before it.
 
-
-def _apply_relation_denied(piece: str) -> bool:
-    """A negation excuses only the clause that denies applying to source code.
-
-    ``does not apply to source code`` denies the claim. ``applies to source
-    code and not to chat`` makes it: the negation sits on a different clause.
-    """
-    apply_m = _SCOPE_APPLY.search(piece)
-    source_m = _SOURCE_CODE.search(piece)
-    if apply_m is None or source_m is None:
-        return True
-    before = piece[: apply_m.start()]
-    negs = list(_SCOPE_NEG.finditer(before))
-    if negs:
-        tail = before[negs[-1].end() :]
-        if _NEG_TAIL.fullmatch(tail):
-            return True
-    lo = min(apply_m.end(), source_m.end())
-    hi = max(apply_m.start(), source_m.start())
-    if hi > lo and _SCOPE_NEG.search(piece[lo:hi]):
-        return True
-    return False
-
-
-def says_contract_applies_to_source_code(text: str, *paths: str) -> bool:
-    """True when a sentence claims the contract applies to source code.
-
-    Silence, and a sentence that only denies the claim, are not that claim.
-    A sentence that makes the claim still counts when it also negates
-    something else. Absence of a source-file token is not this observation.
+    Contract shell part: wherever the writing contract names source code,
+    the standalone word ``never`` or ``not`` comes earlier in the same
+    sentence; a sentence ends at ``.``, ``!``, ``?`` or a line break.
     """
     stripped = strip_hook_covariates(text, *paths, levels=ON_LEVELS)
-    for sentence in re.split(r"[.!?\n]+", stripped):
-        if _SOURCE_CODE.search(sentence) is None:
-            continue
-        pieces = [sentence]
-        pieces.extend(
-            part for part in _CLAUSE_BREAK.split(sentence) if part.strip()
-        )
-        for piece in pieces:
-            if (
-                _SOURCE_CODE.search(piece) is None
-                or _SCOPE_APPLY.search(piece) is None
-            ):
-                continue
-            if _apply_relation_denied(piece):
-                continue
-            return True
+    for sentence in re.split(r"[.!?\n]", stripped):
+        for source_m in _SOURCE_CODE.finditer(sentence):
+            if _SOURCE_CODE_DENIAL.search(sentence, 0, source_m.start()) is None:
+                return True
     return False
 
 
@@ -795,9 +742,9 @@ def require_banned_list(text: str) -> None:
 
 
 def require_not_source_code_scope(text: str, *paths: str) -> None:
-    """The delivery does not say the contract applies to source code (L199)."""
-    assert not says_contract_applies_to_source_code(text, *paths), (
-        "session-start delivery says the contract applies to source code"
+    """The delivery names source code only as something it never / does not cover."""
+    assert not names_source_code_without_denial(text, *paths), (
+        "session-start delivery names source code with no never / not before it in the sentence"
     )
 
 

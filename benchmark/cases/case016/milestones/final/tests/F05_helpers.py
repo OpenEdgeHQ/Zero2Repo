@@ -397,7 +397,7 @@ class ShowRow:
     truncated: bool = False
     status: str | None = None  # "flagged", "under", or None (no labels clause)
     labels: tuple[str, ...] = ()
-    kb: int | None = None
+    kbs: tuple[int, ...] = ()  # every <n> KB figure in a size-skip row
     reason: str | None = None
 
 
@@ -440,15 +440,17 @@ def show_row(text: str, base: str) -> ShowRow:
             score=int(scored.group("score")), band=scored.group("band"),
             truncated=scored.group("cov") is not None, status=status, labels=labels,
         )
-    size = re.match(r"^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$", rest)
+    size = re.match(r"(?i)^not scored: .*?(?<![0-9])(\d+) KB(?![A-Za-z]).*$", rest)
     if size:
-        return ShowRow(kind="size", line=line, kb=int(size.group(1)))
-    if "not re-scored" in rest and "not scored:" not in rest:
+        kbs = tuple(int(n) for n in re.findall(r"(?i)(?<![0-9])(\d+) KB(?![A-Za-z])", rest))
+        return ShowRow(kind="size", line=line, kbs=kbs)
+    low = rest.lower()
+    if "not re-scored" in low and "not scored:" not in low:
         return ShowRow(kind="binary", line=line)
-    if rest.startswith("not scored: "):
+    if low.startswith("not scored: "):
         reason = rest[len("not scored: "):]
         assert reason.strip(), f"failed row has no reason: {line!r}"
-        assert not re.search(r"(?<![0-9])\d+ KB(?![A-Za-z])", reason), f"failed row reads as a size skip: {line!r}"
+        assert not re.search(r"(?i)(?<![0-9])\d+ KB(?![A-Za-z])", reason), f"failed row reads as a size skip: {line!r}"
         return ShowRow(kind="failed", line=line, reason=reason)
     raise AssertionError(f"show row for {base!r} is not in a stated form: {line!r}")
 
