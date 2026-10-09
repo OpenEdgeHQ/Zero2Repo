@@ -575,7 +575,11 @@ def collect_trial_usage(out_dir: Path | str) -> dict[str, Any]:
         record["sources"] = ["opencode_session_db"]
         record["complete"] = True
         record["missing"] = []
-        record["harness_cost_usd"] = round(db_cost, 6)
+        # A custom provider has no price in OpenCode, which then reports 0.
+        if db_cost > 0:
+            record["harness_cost_usd"] = round(db_cost, 6)
+        else:
+            record.pop("harness_cost_usd", None)
         record.pop("by_model", None)
     if hook is not None and not has_cursor_result:
         for name in _BUCKETS:

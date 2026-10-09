@@ -181,19 +181,33 @@ def test_prices_cover_sol_deepseek_and_kimi():
     assert sol["input_per_m"] == 2.0
     assert sol["cache_read_per_m"] == 0.2
     assert sol["output_per_m"] == 10.0
-    assert lookup_model("deepseek-v4-pro-0813")[1]["currency"] == "CNY"
+    assert lookup_model("deepseek-v4-pro-0813")[1].get("currency", "USD") == "USD"
     buckets = {
         "input_tokens": 1_000_000,
         "cache_read_tokens": 1_000_000,
         "cache_write_tokens": 0,
         "output_tokens": 1_000_000,
     }
-    kimi = trial_cost(buckets, "openai/kimi-k3")
-    assert kimi["cost_usd"] is None
-    assert kimi["cost_cny"] == 122.0
+    kimi = trial_cost(buckets, "bailian/kimi-k3")
+    assert kimi["cost_cny"] is None
+    assert kimi["cost_usd"] == round(0.67 + 0.66 + 14.0, 6)
     assert kimi["unpriced_models"] == []
-    deepseek = trial_cost(buckets, "openai/deepseek-v4-pro-0813")
-    assert deepseek["cost_cny"] == 37.0
+    deepseek = trial_cost(buckets, "bailian/deepseek-v4-pro-0813")
+    assert deepseek["cost_usd"] == round(0.1901 + 0.19 + 4.2, 6)
+    glm_id, glm_price = lookup_model("bailian/glm-5.3")
+    assert glm_id == "z-ai/glm-5.3"
+    assert glm_price["cache_write_per_m"] == glm_price["input_per_m"]
+    glm = trial_cost(buckets, "bailian/glm-5.3")
+    assert glm["cost_usd"] == round(0.06 + 0.03 + 4.4, 6)
+    qwen_id, qwen_price = lookup_model("bailian/qwen3.8-max-0902")
+    assert qwen_id == "qwen/qwen3.8-max"
+    assert lookup_model("qwen3.8-max")[0] == "qwen/qwen3.8-max"
+    assert qwen_price["cache_read_5m_per_m"] == 0.17
+    assert qwen_price["cache_write_per_m"] == 2.5
+    qwen = trial_cost(buckets, "bailian/qwen3.8-max-0902")
+    assert qwen["cost_usd"] == round(2.0 + 0.25 + 6.0, 6)
+    qwen_write = trial_cost({**buckets, "cache_write_tokens": 1_000_000}, "qwen3.8-max-0902")
+    assert qwen_write["cost_usd"] == round(2.0 + 0.25 + 2.5 + 6.0, 6)
 
 
 def _step_finish(inp: int, read: int, write: int, output: int, reasoning: int, cost: float) -> str:
@@ -274,3 +288,31 @@ def test_opencode_db_is_ignored_for_claude_logs(tmp_path: Path):
 def test_opencode_spec_archives_its_data_dir():
     invocation = resolve_agent(backend="opencode", model="bailian/kimi-k3")
     assert invocation.spec.usage_paths == ("${XDG_DATA_HOME:-$HOME/.local/share}/opencode",)
+
+
+def test_opencode_output_cap_reaches_the_container():
+    invocation = resolve_agent(
+        backend="opencode",
+        model="anthropic/claude-sonnet-5-5",
+        environ={"OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX": "128000"},
+    )
+    assert invocation.env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] == "128000"
+    try:
+        resolve_agent(backend="opencode", model="anthropic/claude-sonnet-5-5", environ={"OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX": "lots"})
+    except RuntimeError as exc:
+        assert "positive integer" in str(exc)
+    else:
+        raise AssertionError("a non-numeric cap must be rejected")
+
+
+def test_opencode_zero_self_cost_is_not_recorded(tmp_path: Path):
+    # A custom provider has no price in OpenCode, so its self-reported cost is 0.
+    _write(tmp_path / "agent.log", _step_finish(10, 100, 0, 30, 7, 0.0))
+    con = _opencode_db(tmp_path / "container_logs" / "usage" / "0" / "opencode.db", [("root", None, 0.0, 10, 30, 7, 100, 0)])
+    try:
+        usage = collect_trial_usage(tmp_path)
+    finally:
+        con.close()
+    assert usage["sources"] == ["opencode_session_db"]
+    assert "harness_cost_usd" not in usage
+    assert trial_cost(usage, "bailian/kimi-k3")["cost_usd"] > 0

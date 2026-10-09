@@ -3,7 +3,9 @@
 ``model_pricing.json`` holds per-1M-token prices for the evaluated models.
 A model string such as ``commonstack/claude-opus-5-5-20260921`` or
 ``grok-4.7-high`` is matched by its last path segment, with any date suffix
-and reasoning-effort suffix removed, against each entry's aliases.
+and reasoning-effort suffix removed, against each entry's aliases. The
+unstripped leaf is also tried, so a model whose name itself ends in ``-max``
+(``qwen3.8-max``) still matches.
 An entry's ``currency`` is ``USD`` when omitted. Yuan prices stay in
 ``cost_cny`` and are not folded into ``cost_usd``.
 
@@ -12,6 +14,8 @@ one-hour TTL; it uses ``cache_write_1h_per_m`` when the model has one.
 ``uncached_input_is_cache_write`` marks models whose provider caches every
 eligible prompt automatically and bills the write: when the log reports no
 cache writes, uncached input is priced as cache writes.
+``cache_read_5m_per_m`` records an explicit 5-minute cache-read rate. Trial
+logs have one cache-read bucket, so those tokens use ``cache_read_per_m``.
 """
 
 from __future__ import annotations
@@ -35,18 +39,24 @@ def _table() -> dict[str, Any]:
     return json.loads(PRICING_PATH.read_text(encoding="utf-8"))
 
 
-def _slug(model: str) -> str:
-    slug = model.strip().lower().rsplit("/", 1)[-1]
-    slug = _DATE_SUFFIX.sub("", slug)
-    return _EFFORT_SUFFIX.sub("", slug)
+def _candidates(model: str) -> list[str]:
+    leaf = model.strip().lower().rsplit("/", 1)[-1]
+    dated = _DATE_SUFFIX.sub("", leaf)
+    stripped = _EFFORT_SUFFIX.sub("", dated)
+    found: list[str] = []
+    for item in (leaf, dated, stripped):
+        if item and item not in found:
+            found.append(item)
+    return found
 
 
 def lookup_model(model: str | None) -> tuple[str, dict[str, Any]] | None:
     if not model or not model.strip():
         return None
-    slug = _slug(model)
+    candidates = _candidates(model)
     for model_id, entry in _table()["models"].items():
-        if slug == model_id.rsplit("/", 1)[-1] or slug in entry.get("aliases", ()):
+        names = {model_id.rsplit("/", 1)[-1], *entry.get("aliases", ())}
+        if any(candidate in names for candidate in candidates):
             return model_id, entry
     return None
 

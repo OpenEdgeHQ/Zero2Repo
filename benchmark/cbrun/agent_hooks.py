@@ -82,5 +82,15 @@ def opencode_env(*, model: str, environ: dict[str, str], spec: Any) -> dict[str,
             if not environ.get(key):
                 raise RuntimeError(f"cbrun: OPENCODE_CONFIG_CONTENT references unset {key}")
             out[key] = environ[key]
+    # OpenCode caps each reply at 32000 output tokens unless this is raised;
+    # the per-model limit.output in the config still applies on top of it.
+    output_max = (environ.get("OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX") or "").strip()
+    if output_max:
+        if not output_max.isdigit() or int(output_max) <= 0:
+            raise RuntimeError(
+                "cbrun: OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX must be a positive integer, "
+                f"got {output_max!r}"
+            )
+        out["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = output_max
     out["OPENCODE_FAKE_VCS"] = "git"
     return out
