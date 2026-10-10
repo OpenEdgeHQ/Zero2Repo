@@ -25,7 +25,14 @@ __all__ = [
     "image_exists",
     "ExecResult",
     "Container",
+    "CONTAINER_MEMORY",
 ]
+
+# Hard memory cap for every container cbrun starts (solve, judge, scans). The
+# host runs several trials side by side; without a cap one runaway program can
+# exhaust host memory and stall every other trial with it. Swap is capped to the
+# same value so the limit is not bypassed through swap.
+CONTAINER_MEMORY = "16g"
 
 
 def docker_available() -> bool:
@@ -85,6 +92,7 @@ class Container:
         the host daemon.
         """
         argv = ["docker", "run", "--platform", platform_name(), "-d", "--rm"]
+        argv += ["--memory", CONTAINER_MEMORY, "--memory-swap", CONTAINER_MEMORY]
         if name:
             argv += ["--name", name]
         if gpus:

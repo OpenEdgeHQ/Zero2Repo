@@ -288,8 +288,14 @@ def run_judge(
     artifacts_dir: Path,
     denylist=None,
     judge_bans: list[str] | tuple[str, ...] = (),
+    test_seed: str | None = None,
 ) -> JudgeOutcome:
-    """Inject hidden tests + task.toml, run final_judge, parse the reward."""
+    """Inject hidden tests + task.toml, run final_judge, parse the reward.
+
+    *test_seed* pins the hidden tests' runtime randomisation (``CB_TEST_SEED``),
+    so a rejudge can replay the scenario values of an earlier judge. Trials leave
+    it unset and the tests draw a fresh seed.
+    """
     if not (Path(tests_final_dir) / "test_manifest.json").is_file():
         raise RuntimeError(f"hidden tests cache invalid: {tests_final_dir}")
     if not FINAL_JUDGE_SRC.is_file():
@@ -317,6 +323,8 @@ def run_judge(
         "CODING_BENCH_PYTEST_LAUNCHER": CONTAINER_LAUNCHER_PATH,
         **ban_env,
     }
+    if test_seed is not None:
+        env["CB_TEST_SEED"] = str(test_seed)
     bans = [str(x).strip() for x in judge_bans if str(x).strip()]
     if bans:
         env["CODING_BENCH_JUDGE_BANS"] = ",".join(bans)

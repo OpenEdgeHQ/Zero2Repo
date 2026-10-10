@@ -573,7 +573,7 @@ def build_task(
     verifier_timeout_sec: float = 600.0,
     build_timeout_sec: float = 600.0,
     cpus: int = 2,
-    memory_mb: int = 4096,
+    memory_mb: int = 16384,
     storage_mb: int = 10240,
     require_released: bool = True,
 ) -> Path:
