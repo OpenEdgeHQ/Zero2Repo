@@ -45,6 +45,7 @@ from F01_helpers import (
     c_rpy_roundtrip,
     c_rpy_to_quat,
     c_wmm_all,
+    c_wmm_mag_span,
     hamilton_zyx_quaternion,
     hypot3,
     independent_wmm,
@@ -128,13 +129,21 @@ def _quat_close_to_identity(q, what):
     _assert_close(q[3], 0.0, SINGLE_ABS, f"{what}.z")
 
 
-def _wmm_self_consistent(d, i, f, bn, be, bd, what):
+def _assert_total_field_matches_epoch_ned(f, lat, lon, what):
+    # The two-argument total field uses a year of the implementer's choice
+    # within the model epoch, so it must equal |B_ned| at some epoch year to
+    # MAG_REL: it lies inside the span of |B_ned| over 2025.0-2030.0.
+    lo, hi = c_wmm_mag_span(lat, lon)
+    print(f"{what} F={f} epoch |B| span=[{lo}, {hi}]", flush=True)
+    assert lo * (1.0 - MAG_REL) <= f <= hi * (1.0 + MAG_REL), (
+        f"{what}: F={f} matches no epoch-year |B| in [{lo}, {hi}] to relative {MAG_REL}"
+    )
+
+
+def _wmm_self_consistent(d, i, f, bn, be, bd, lat, lon, what):
     heading = ned_heading_deg(bn, be)
-    mag = ned_magnitude(bn, be, bd)
     _assert_angle_deg(heading, d, HEADING_SELF_DEG, f"{what} heading vs D")
-    rel = abs(mag - f) / max(abs(f), 1e-6)
-    print(f"{what} |B|={mag} F={f} rel={rel}", flush=True)
-    assert rel <= MAG_REL, f"{what}: |B| vs F relative {rel} > {MAG_REL}"
+    _assert_total_field_matches_epoch_ned(f, lat, lon, what)
     _ = i  # inclination is a returned quantity; sign is asserted elsewhere
 
 
@@ -370,7 +379,9 @@ def test_polar_azimuth_transport_rate_finite_with_east_velocity():
 def test_wmm_four_quantities_ned_self_consistent():
     d, i, f, bn, be, bd = c_wmm_all(STUTTGART_LAT_DEG, STUTTGART_LON_DEG, _YEAR)
     print(f"WMM Stuttgart D={d} I={i} F={f} B=({bn},{be},{bd})", flush=True)
-    _wmm_self_consistent(d, i, f, bn, be, bd, "Stuttgart")
+    _wmm_self_consistent(
+        d, i, f, bn, be, bd, STUTTGART_LAT_DEG, STUTTGART_LON_DEG, "Stuttgart"
+    )
 
 
 def test_inclination_positive_down_northern_hemisphere():
@@ -398,9 +409,11 @@ def test_python_ned_heading_and_magnitude_match_c():
     mag = ned_magnitude(*pb)
     print(f"Python B={pb} heading={heading} |B|={mag} C D={d} F={f}", flush=True)
     _assert_angle_deg(heading, d, HEADING_SELF_DEG, "Python heading vs C D")
-    rel = abs(mag - f) / max(abs(f), 1e-6)
-    assert rel <= MAG_REL, f"Python |B| vs C F relative {rel} > {MAG_REL}"
-    _ = (i, bn, be, bd)
+    c_mag = ned_magnitude(bn, be, bd)
+    rel = abs(mag - c_mag) / max(abs(c_mag), 1e-6)
+    assert rel <= MAG_REL, f"Python |B| vs C |B| (same year) relative {rel} > {MAG_REL}"
+    _assert_total_field_matches_epoch_ned(f, STUTTGART_LAT_DEG, STUTTGART_LON_DEG, "Python")
+    _ = i
 
 
 # ---------------------------------------------------------------------------
@@ -478,8 +491,11 @@ def test_longitude_190_agrees_with_minus_170():
     pb = py_wmm_ned(lat, -170.0, year)
     _assert_angle_deg(ned_heading_deg(pa[0], pa[1]), a[0], HEADING_SELF_DEG, "Python 190 vs C D")
     _assert_angle_deg(ned_heading_deg(pb[0], pb[1]), b[0], HEADING_SELF_DEG, "Python -170 vs C D")
-    rel_a = abs(ned_magnitude(*pa) - a[2]) / max(abs(a[2]), 1e-6)
-    rel_b = abs(ned_magnitude(*pb) - b[2]) / max(abs(b[2]), 1e-6)
+    # Same-year comparison: Python |B| vs C |B| (the C F is year-free).
+    c_mag_a = ned_magnitude(*a[3:6])
+    c_mag_b = ned_magnitude(*b[3:6])
+    rel_a = abs(ned_magnitude(*pa) - c_mag_a) / max(abs(c_mag_a), 1e-6)
+    rel_b = abs(ned_magnitude(*pb) - c_mag_b) / max(abs(c_mag_b), 1e-6)
     assert rel_a <= MAG_REL and rel_b <= MAG_REL
 
 

@@ -29,6 +29,7 @@ from F02_helpers import (
     GNSS_STD_M,
     HAPPY_DURATION_S,
     ecef_from_llh_deg,
+    ecef_plus_ned,
     runtime_site,
 )
 from F03_helpers import CM_STD_M, G_MPS2, angle_diff_rad, runtime_tracker_ned, still_level_acc
@@ -558,7 +559,13 @@ def test_best_attitude_falls_back_to_ahrs_then_ars():
     mag = mag_body(lat, lon, y_mag)
     rate = runtime_z_rate_rps()
     pad = pad_full(lat, lon, h, origin, baro=False, mag=False, yaw_rad=y_ins)
-    with_mag = imu_only(list(pad), duration_s=FREEZE_11S, mag=mag)
+    # The magnetometer arrives only after the coasting window has expired:
+    # the frozen INS fuses nothing (FP-05), so its yaw stays at y_ins while
+    # the suite AHRS starts on the first magnetometer sample at y_mag. Fed
+    # earlier, a live INS may legitimately pull its own yaw toward the
+    # magnetometer at a rate the PRD leaves open, which would erase the split.
+    frozen_imu = imu_only(list(pad), duration_s=FREEZE_11S)
+    with_mag = imu_only(list(frozen_imu), duration_s=2.5, mag=mag)
     pad_ars = pad_full(lat, lon, h, origin, baro=False, mag=False, yaw_rad=y_ins)
     to_freeze = imu_only(list(pad_ars), duration_s=FREEZE_11S, gyr=(0.0, 0.0, rate))
     t_fr = to_freeze[-1].t_us
@@ -579,7 +586,8 @@ def test_best_attitude_falls_back_to_ahrs_then_ars():
             flush=True,
         )
         assert gap > math.radians(10.0), (
-            f"{kind}: mag reference and frozen INS were not split (required setup)"
+            f"{kind}: AHRS yaw and frozen INS yaw were not split although the "
+            "magnetometer only arrived after INS froze"
         )
         assert d_ahrs < 0.5 * gap, f"{kind}: best yaw was not the AHRS yaw"
         assert d_ins > d_ahrs, f"{kind}: best yaw was as close to frozen INS as to AHRS"
@@ -946,7 +954,7 @@ def test_ellipsoid_from_ins_under_gnss_and_local_plus_offset_in_outage():
 
 
 def test_mocap_owns_ned_constant_offset_not_shifted_origin():
-    """GNSS-first off-origin local is not rewritten onto mocap; indoor Δ in → Δ out; baro keeps ellipsoid unpublished."""
+    """GNSS-first then mocap keeps the INS origin; indoor Δ in → Δ out; baro keeps ellipsoid unpublished."""
     lat, lon, h, origin = _site()
     p0 = runtime_tracker_ned()
     dn = runtime_mocap_delta_m()
@@ -991,25 +999,32 @@ def test_mocap_owns_ned_constant_offset_not_shifted_origin():
         assert abs(l0.ned[0]) > 1.5, (
             f"{kind}: GNSS-first published local was still the origin ({l0.ned})"
         )
-        d_l0 = math.hypot(hold.ned[0] - l0.ned[0], hold.ned[1] - l0.ned[1])
-        d_p0 = math.hypot(hold.ned[0] - p0[0], hold.ned[1] - p0[1])
-        d_zero = math.hypot(hold.ned[0], hold.ned[1])
-        l0_h = math.hypot(l0.ned[0], l0.ned[1])
-        assert d_zero > 0.25 * l0_h, (
-            f"{kind}: published local collapsed to the origin when mocap started"
-        )
-        assert d_p0 > 0.45 * math.hypot(l0.ned[0] - p0[0], l0.ned[1] - p0[1]), (
-            f"{kind}: published local was rewritten onto mocap P0"
-        )
-        ecef_jump = ecef_err_m(hold.ecef, l0.ecef)
-        p0_scale = math.hypot(p0[0], p0[1], p0[2])
-        assert ecef_jump < 0.55 * max(p0_scale, 2.0), (
-            f"{kind}: unified ECEF jumped by about P0 when mocap started ({ecef_jump} m)"
+        # The NED origin is the init anchor (FP-03) and mocap owns that frame:
+        # the suite subtracts a constant offset from mocap samples instead of
+        # shifting the INS origin (FP-08). Which constant is not specified, so
+        # where the published local lands is free; what must hold is that the
+        # published ECEF stays the init anchor plus the published local NED.
+        # Shifting the origin onto mocap (or to the current position) breaks
+        # that by about the shift, |P0 - L0| (or |L0|).
+        res_l0 = [
+            g - e for g, e in zip(l0.ecef, ecef_plus_ned(origin, *l0.ned))
+        ]
+        res_hold = [
+            g - e for g, e in zip(hold.ecef, ecef_plus_ned(origin, *hold.ned))
+        ]
+        origin_shift = math.sqrt(sum((a - b) ** 2 for a, b in zip(res_hold, res_l0)))
+        shift_scale = min(
+            math.hypot(l0.ned[0] - p0[0], l0.ned[1] - p0[1], l0.ned[2] - p0[2]),
+            math.hypot(l0.ned[0], l0.ned[1], l0.ned[2]),
         )
         print(
-            f"{kind} GNSS-first stay-L0 d_l0={d_l0} d_p0={d_p0} ecef_jump={ecef_jump} "
+            f"{kind} GNSS-first origin shift={origin_shift} scale={shift_scale} "
             f"afterΔ_n={last.ned[0] - hold.ned[0]}",
             flush=True,
+        )
+        assert origin_shift < 0.45 * shift_scale, (
+            f"{kind}: NED origin implied by published ECEF and local moved by "
+            f"{origin_shift} m when mocap started"
         )
     indoor0 = nav_append(
         [],
@@ -1039,7 +1054,13 @@ def test_mocap_owns_ned_constant_offset_not_shifted_origin():
         local_std=(CM_STD_M, CM_STD_M, CM_STD_M),
         baro_pa=p_baro,
     )
-    for kind, run in nav_langs(site_nav(lat, lon, h, indoor_baro)):
+    # The IMU stays perfectly still while the tracker creeps by centimetres,
+    # so the automatic standstill detector would legitimately fuse zero
+    # velocity against the mocap ramp (FP-03); how strongly is tuning the
+    # PRD leaves open. This arm is about the constant offset (delta in ->
+    # delta out), so the detector is switched off through its public option.
+    indoor_scen = site_nav(lat, lon, h, indoor_baro, auto_zupt_disable=True)
+    for kind, run in nav_langs(indoor_scen):
         a = run.at_or_before(t_i0)
         b = run.at_or_before(t_i1)
         last = run.last()

@@ -243,7 +243,7 @@ def test_nine_no_detector_numbers_never_appear_as_findings():
         SHORT_FACTUAL,
         f"They delve into the records. I hope this helps with the draft today.",
         f"{PLACEHOLDER} see {TRACKING_URL}",
-        "They launched a bold, ambitious, transformative, innovative initiative.",
+        "They launched a bold, ambitious, transformative, innovative plan.",
     ]
     seen: set[int] = catalogue_numbers(ai_f) | catalogue_numbers(slop_f)
     for text in corpus:
@@ -1486,7 +1486,7 @@ FIRE_CASES = [
     ("simple-yet", "The latch is simple yet powerful in daily use.", (5,)),
     (
         "adj-stack",
-        "They launched a bold, ambitious, transformative, innovative initiative.",
+        "They launched a bold, ambitious, transformative, innovative plan.",
         (6,),
     ),
     (
@@ -1683,7 +1683,7 @@ NONFIRE_CASES = [
         "noun-list",
         "We bought apples, oranges, bananas, grapes and pears for breakfast.",
         (6,),
-        "They launched a bold, ambitious, transformative, innovative initiative.",
+        "They launched a bold, ambitious, transformative, innovative plan.",
     ),
     (
         "nanotech",

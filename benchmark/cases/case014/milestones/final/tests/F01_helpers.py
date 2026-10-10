@@ -277,6 +277,21 @@ int main(int argc, char **argv)
         printf("%.9g %.9g %.9g %.9g %.9g %.9g\n", d, i, f, b[0], b[1], b[2]);
         return 0;
     }
+    if (strcmp(op, "wmm_mag_span") == 0 && argc == 4) {
+        /* |B_ned| over the model epoch, sampled every 1/8 year. */
+        float lat = (float)atof(argv[2]);
+        float lon = (float)atof(argv[3]);
+        float lo = 0.0f, hi = 0.0f;
+        for (int k = 0; k <= 40; ++k) {
+            float b[3];
+            magnetic_field_ned_uT(lat, lon, 2025.0f + 0.125f * (float)k, b);
+            float m = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+            if (k == 0 || m < lo) lo = m;
+            if (k == 0 || m > hi) hi = m;
+        }
+        printf("%.9g %.9g\n", lo, hi);
+        return 0;
+    }
     return fail_usage();
 }
 """
@@ -582,6 +597,7 @@ _C_ARITY = {
     "dned_to_dllh": 3,
     "omega_transport": 9,
     "wmm_all": 6,
+    "wmm_mag_span": 2,
 }
 _PY_ARITY = {
     "rpy_to_quat": 4,
@@ -667,6 +683,12 @@ def c_omega_transport(
 def c_wmm_all(lat_deg: float, lon_deg: float, year: float) -> tuple[float, ...]:
     """D, I, F, Bn, Be, Bd."""
     return tuple(_c("wmm_all", lat_deg, lon_deg, year))
+
+
+def c_wmm_mag_span(lat_deg: float, lon_deg: float) -> tuple[float, float]:
+    """Min and max C |B_ned| (µT) over the WMM2025 epoch years 2025.0-2030.0."""
+    lo, hi = _c("wmm_mag_span", lat_deg, lon_deg)
+    return lo, hi
 
 
 def py_wmm_ned(lat_deg: float, lon_deg: float, year: float) -> tuple[float, ...]:

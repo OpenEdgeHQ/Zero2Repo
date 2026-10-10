@@ -20,35 +20,35 @@ from _harness import CallResult, HarnessError, call
 
 # GEZDGNBV totp SHA1 parse input and named rebuilds.
 GEZDGNBV_TOTP_SHA1_URI = (
-    "otpauth://totp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1"
+    "otpauth://totp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1"
 )
 GEZDGNBV_SECRET_PLACEHOLDER_URI = "otpauth://totp/Secret?secret=GEZDGNBV"
 GEZDGNBV_N_I_REBUILD_URI = "otpauth://totp/i:n?secret=GEZDGNBV&issuer=i"
 
 # same skeleton with period=60.
 GEZDGNBV_TOTP_PERIOD60_URI = (
-    "otpauth://totp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1&period=60"
+    "otpauth://totp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1&period=60"
 )
 
 # hotp GEZDGNBV parse inputs.
 GEZDGNBV_HOTP_URI = (
-    "otpauth://hotp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1"
+    "otpauth://hotp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1"
 )
 GEZDGNBV_HOTP_COUNTER1_URI = (
-    "otpauth://hotp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1&counter=1"
+    "otpauth://hotp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA1&counter=1"
 )
 
 # last algorithm SHA256 / SHA512 parse inputs.
 GEZDGNBV_TOTP_SHA256_URI = (
-    "otpauth://totp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA256"
+    "otpauth://totp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA256"
 )
 GEZDGNBV_TOTP_SHA512_URI = (
-    "otpauth://totp?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA512"
+    "otpauth://totp/?algorithm=SHA1&secret=GEZDGNBV&algorithm=SHA512"
 )
 
 # image accepted and ignored.
-GEZDGNBV_IMAGE_FOOBAR_URI = "otpauth://totp?secret=GEZDGNBV&image=foobar"
-GEZDGNBV_NO_IMAGE_URI = "otpauth://totp?secret=GEZDGNBV"
+GEZDGNBV_IMAGE_FOOBAR_URI = "otpauth://totp/?secret=GEZDGNBV&image=foobar"
+GEZDGNBV_NO_IMAGE_URI = "otpauth://totp/?secret=GEZDGNBV"
 
 # literal-colon vs encoded-colon labels.
 FFFFF_SECRET = "FFFFFFFAAAAAABBBBBBB"
@@ -67,11 +67,11 @@ ISSUER_BIG_CORP = "Big Corp"
 
 # Fixed refusal inputs.
 HTTP_HELLO_URI = "http://hello.com"
-OTPAUTH_TOTP_NO_SECRET_URI = "otpauth://totp"
-DERP_SECRET_URI = "otpauth://derp?secret=foo"
-DIGITS_MINUS_ONE_URI = "otpauth://totp?digits=-1"
+OTPAUTH_TOTP_NO_SECRET_URI = "otpauth://totp/"
+DERP_SECRET_URI = "otpauth://derp/?secret=foo"
+DIGITS_MINUS_ONE_URI = "otpauth://totp/?digits=-1"
 SOME_ANOTHER_ISSUER_URI = "otpauth://totp/SomeIssuer:?issuer=AnotherIssuer"
-ALGORITHM_AES_URI = "otpauth://totp?algorithm=aes"
+ALGORITHM_AES_URI = "otpauth://totp/?algorithm=aes"
 NAMED_ISSUER_SOME = "SomeIssuer"
 NAMED_ISSUER_ANOTHER = "AnotherIssuer"
 

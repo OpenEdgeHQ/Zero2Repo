@@ -8137,7 +8137,7 @@ def serve_transfer(operation):
             continue
         if command.startswith("version "):
             log_event("version_selected", version=1)
-            send_status(200, lines=[])
+            send_status(200)
             continue
         if command == "quit" or command.startswith("quit "):
             send_status(200)

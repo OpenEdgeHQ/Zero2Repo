@@ -49,7 +49,7 @@ Placeholders: `<sep>` is the separator; `<payload>` is the signed value’s byte
 
 - `<serialized>` — exactly the output of the dump/load object’s `dumps(obj, **serializer_kwargs)` (UTF-8 encoded when it is text).
 - `<signature>` — the signing algorithm’s output bytes encoded as URL-safe base64 (RFC 4648 §5) with the `=` padding removed. Under `NoneAlgorithm` it is empty.
-- `<time>` — the signing time, written in characters from the URL-safe alphabet (letters, digits, `-`, `_`) and never containing `<sep>`. Its encoding is the implementer’s choice.
+- `<time>` — the signing time, written in characters from the URL-safe alphabet (letters, digits, `-`, `_`) and never containing `<sep>`. Its encoding is the implementer’s choice, except that it is at most 11 characters long. A time field of more than 11 characters from that alphabet is therefore never a signing time as the product writes it: a token whose signature verifies and whose time field is that long is refused as a malformed timestamp (PRD FP-03).
 - `<b64payload>` — either the serialized payload encoded as URL-safe base64 (RFC 4648 §5) without padding, or `<sep>` followed by the compressed serialized payload encoded the same way. The compression format and level are the implementer’s choice.
 - The signature covers everything before the last `<sep>`.
 

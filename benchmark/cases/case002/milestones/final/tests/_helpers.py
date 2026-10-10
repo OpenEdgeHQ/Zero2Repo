@@ -137,36 +137,6 @@ def require_not_two_char_escape(value: object, letter: str) -> None:
     print(f"escape letter={letter!r} value={value!r} is not {literal!r}", flush=True)
 
 
-def require_decoded_escape_char(value: object, letter: str) -> str:
-    """Return the one-character interpretation of a listed double-quote escape.
-
-    Empty text, the two-character backslash+letter literal, and a dropped
-    backslash (the letter alone, when that letter is not itself the listed
-    result) are not accepted. The concrete code point is not pinned when the
-    PRD does not name it.
-    """
-    if not isinstance(value, str):
-        raise HarnessError(
-            f"escape observation is not text; got {type(value)!r}: {value!r}"
-        )
-    if len(letter) != 1:
-        raise HarnessError(f"letter must be one character; got {letter!r}")
-    literal = "\\" + letter
-    assert len(value) == 1, (
-        f"listed escape {literal!r} did not decode to a single character: {value!r}"
-    )
-    if letter in ("\\", "'"):
-        assert value == letter, (
-            f"listed escape {literal!r} recorded {value!r}, not {letter!r}"
-        )
-    else:
-        assert value != letter, (
-            f"listed escape {literal!r} dropped the backslash and kept {letter!r}"
-        )
-    print(f"decoded escape letter={letter!r} value={value!r}", flush=True)
-    return value
-
-
 def require_script_success(result: RunResult, *, label: str) -> str:
     """Return stdout after a successful child script.
 

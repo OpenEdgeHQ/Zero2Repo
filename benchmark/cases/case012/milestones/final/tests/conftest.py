@@ -35,6 +35,7 @@ __test__ = False
 from _harness import (  # noqa: E402
     OXLINT_BIN_RELPATH,
     PRODUCT_ROOT_ENV,
+    HarnessError,
     copy_script,
     host_modules_root,
     node_executable,
@@ -47,6 +48,10 @@ from _harness import (  # noqa: E402
 _SUPPORT_BASENAMES = frozenset({"_harness.py", "conftest.py"})
 _SESSION_CWD = os.getcwd()
 _SESSION_PRODUCT_ROOT: str | None = None
+# Set when the host linter cannot be located or materialized at configure
+# time. Every collected test then fails with this reason instead of the
+# whole session aborting before any test runs.
+_HOST_SETUP_ERROR: str | None = None
 
 # pytest consults these for directory collection. CLI-named initial paths
 # still need pytest_ignore_collect below.
@@ -84,11 +89,16 @@ def pytest_configure(config):
     overlays source without that tree; env-warm or a lockfile materialize
     still has it.
     """
-    global _SESSION_PRODUCT_ROOT
+    global _SESSION_PRODUCT_ROOT, _HOST_SETUP_ERROR
     root = repo_root()
     os.environ.setdefault(PRODUCT_ROOT_ENV, str(root))
     _SESSION_PRODUCT_ROOT = os.environ[PRODUCT_ROOT_ENV]
-    modules_root = host_modules_root(root=root)
+    try:
+        modules_root = host_modules_root(root=root)
+    except HarnessError as exc:
+        _HOST_SETUP_ERROR = f"host-linter setup failed for product root {root}: {exc}"
+        print(f"[conftest] {_HOST_SETUP_ERROR}", file=sys.stderr, flush=True)
+        return
     print(
         f"[conftest] product_root={root} host_linter={modules_root}",
         flush=True,
@@ -99,6 +109,25 @@ def pytest_configure(config):
     if bin_dir not in parts:
         os.environ["PATH"] = os.pathsep.join([bin_dir, *parts]) if parts else bin_dir
     os.environ.setdefault("NODE_PATH", str(node_modules_path(root=root)))
+
+
+def pytest_collection_modifyitems(session, config, items):
+    """Fail every collected test with the stored host-linter setup error.
+
+    The error is recorded in ``pytest_configure``. Each test keeps its own
+    node id and is reported as failed with that reason; fixture setup is
+    skipped because every fixture here depends on the host linter.
+    """
+    if _HOST_SETUP_ERROR is None:
+        return
+    reason = _HOST_SETUP_ERROR
+
+    def _fail() -> None:
+        pytest.fail(reason, pytrace=False)
+
+    for item in items:
+        item.setup = lambda: None
+        item.runtest = _fail
 
 
 def pytest_sessionstart(session):

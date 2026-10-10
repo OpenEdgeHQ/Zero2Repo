@@ -81,6 +81,7 @@ from F03_helpers import (
 )
 
 MAG_VAR_WEAK = (0.0, 0.0, 0.0)
+MAG_VAR_STRONG = (1.0e-4, 1.0e-4, 1.0e-4)  # µT², explicit near-exact magnetometer
 GNSS_VEL_STD = (0.15, 0.15, 0.15)
 TURN_RPS = math.radians(18.0)
 DRIFT_RPS = 0.15
@@ -386,6 +387,15 @@ def test_default_mag_rate_limit_not_every_100hz_sample():
 
 
 def test_zero_mag_variance_is_weak_default_not_perfect():
+    """all-zero mag variance fuses as some positive finite variance: not exact, not a skip.
+
+    Three otherwise identical arms bracket it: no magnetometer at all (a
+    skip), the same samples with an explicit very small variance (close to
+    infinite trust), and the same samples with all-zero variance. A finite
+    positive default pulls heading part of the way: the zero arm's final
+    yaw lies strictly between the other two. The size of the library's
+    default is not assumed.
+    """
     lat, lon, h = runtime_wmm_site()
     origin = ecef_from_llh_deg(lat, lon, h)
     mag_n = magnetic_north_ned(lat, lon, WMM_YEAR)
@@ -397,32 +407,38 @@ def test_zero_mag_variance_is_weak_default_not_perfect():
     zero = extend_epochs(
         list(base), duration_s=3.5, gyr=gyr, mag=body, mag_var=MAG_VAR_WEAK
     )
-    t0 = base[-1].t_us
-    none_scen = aiding_site(
-        lat, lon, h, none, origin_ecef=origin, magnetic_n=mag_n, mag_min_delay_ms=1000
+    strong = extend_epochs(
+        list(base), duration_s=3.5, gyr=gyr, mag=body, mag_var=MAG_VAR_STRONG
     )
-    zero_scen = aiding_site(
-        lat, lon, h, zero, origin_ecef=origin, magnetic_n=mag_n, mag_min_delay_ms=1000
-    )
+
+    def _scen(epochs):
+        return aiding_site(
+            lat, lon, h, epochs, origin_ecef=origin, magnetic_n=mag_n, mag_min_delay_ms=1000
+        )
+
+    margin = math.radians(1.0)
     for kind, runner in (("c", c_aiding_run), ("py", py_aiding_run)):
-        nrun = runner(none_scen)
-        zrun = runner(zero_scen)
-        ns, zs = nrun.last(), zrun.last()
+        ns = runner(_scen(none)).last()
+        zs = runner(_scen(zero)).last()
+        ss = runner(_scen(strong)).last()
         require_ready_solution(ns, f"{kind} none")
         require_ready_solution(zs, f"{kind} zero-var")
-        t_mid = t0 + 1_700_000
-        zs2 = _snap_after(zrun, t_mid, f"{kind} zero@1.7")
-        err_z = abs(angle_diff_rad(zs2.rpy[2], yaw_cmd))
-        dyaw_none = abs(angle_diff_rad(zs.rpy[2], ns.rpy[2]))
+        require_ready_solution(ss, f"{kind} strong-var")
+        pull_zero = angle_diff_rad(zs.rpy[2], ns.rpy[2])
+        pull_strong = angle_diff_rad(ss.rpy[2], ns.rpy[2])
         print(
-            f"{kind}: |yaw-cmd| @1.7s zero={err_z}; zero vs none at end {dyaw_none}",
+            f"{kind}: yaw vs no-mag arm: zero-var pull={pull_zero} "
+            f"strong-var pull={pull_strong}",
             flush=True,
         )
-        assert err_z > math.radians(3.0), (
-            f"{kind}: all-zero mag variance locked heading like a perfect instrument"
+        assert abs(pull_strong) > 2.0 * margin, (
+            f"{kind}: scenario error, a near-exact magnetometer did not move heading"
         )
-        assert dyaw_none > math.radians(2.0), (
-            f"{kind}: zero-variance arm never acted as a heading anchor"
+        assert abs(pull_zero) > margin and pull_zero * pull_strong > 0.0, (
+            f"{kind}: all-zero mag variance did not act as a heading anchor (treated as a skip)"
+        )
+        assert abs(pull_zero) + margin < abs(pull_strong), (
+            f"{kind}: all-zero mag variance pulled heading as far as an explicit near-exact variance"
         )
 
 

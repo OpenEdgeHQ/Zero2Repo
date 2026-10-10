@@ -2495,8 +2495,11 @@ def test_gnss_packed_covariance_velocity_and_valid_flag():
     assert dve_ed > 1.0e-3, (
         f"packed velocity east-down covariance slot did not change the solution ({dve_ed:.4f})"
     )
-    assert abs(vdd[2]) > abs(vddn[2]), (
-        "swapping packed velocity dd/nn did not change down-velocity pull"
+    # Same distance-to-measurement form as the north check above: a tight dd
+    # slot holds down velocity nearer the 2 m/s measurement than a loose one.
+    assert abs(vdd[2] - v_meas) + 0.05 < abs(vddn[2] - v_meas), (
+        "swapping packed velocity dd/nn did not change down-velocity pull "
+        f"(tight-down {vdd[2]:.3f}, loose-down {vddn[2]:.3f} vs {v_meas} m/s)"
     )
 
 

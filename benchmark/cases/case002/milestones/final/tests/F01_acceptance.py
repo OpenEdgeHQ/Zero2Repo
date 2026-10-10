@@ -24,7 +24,6 @@ from _helpers import (
     load_text,
     require_absent,
     require_binding,
-    require_decoded_escape_char,
     require_empty_string,
     require_labeled_line,
     require_no_value,
@@ -429,17 +428,41 @@ def test_double_quote_escaped_double_quote():
     assert require_binding(mapping, "a") == 'b"c'
 
 
+# PRD FP-01 listed double-quote escapes and the single character each denotes.
+_LISTED_DOUBLE_QUOTE_ESCAPES = {
+    "\\": "\\",
+    "'": "'",
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+
+
 @pytest.mark.parametrize("letter", ["\\", "'", "a", "b", "f", "r", "t", "v"])
 def test_double_quote_listed_escapes_are_not_two_char_literals(letter):
-    name = unique_token()
-    whole = bindings_from_text(_quoted_escape_source(name, letter))
-    decoded = require_decoded_escape_char(require_binding(whole, name), letter)
+    # Ordinary text always follows the escape: a listed escape placed right
+    # before the closing quote is not observed here.
+    expected = _LISTED_DOUBLE_QUOTE_ESCAPES[letter]
+    literal = "\\" + letter
+
+    leading_name, after = unique_token(), unique_token()
+    leading = bindings_from_text(_quoted_escape_source(leading_name, letter, "", after))
+    recorded_leading = require_binding(leading, leading_name)
+    print(f"escape {literal!r} then text recorded={recorded_leading!r}", flush=True)
+    assert recorded_leading == expected + after, (
+        f"listed escape {literal!r} followed by text did not decode to "
+        f"{expected!r}: {recorded_leading!r}"
+    )
 
     left, right, wrapped_name = unique_token(), unique_token(), unique_token()
     wrapped = bindings_from_text(_quoted_escape_source(wrapped_name, letter, left, right))
     recorded_wrapped = require_binding(wrapped, wrapped_name)
-    assert recorded_wrapped == left + decoded + right, (
-        f"wrapped listed escape did not insert the decoded character {decoded!r}: "
+    print(f"wrapped escape {literal!r} recorded={recorded_wrapped!r}", flush=True)
+    assert recorded_wrapped == left + expected + right, (
+        f"wrapped listed escape {literal!r} did not insert {expected!r}: "
         f"{recorded_wrapped!r}"
     )
 

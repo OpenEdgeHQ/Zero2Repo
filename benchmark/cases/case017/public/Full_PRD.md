@@ -121,7 +121,7 @@ Every feature point below is real roaring-bitmap behavior over 64-bit values who
 
 - Set of a value already present does not change cardinality and reports that it was not newly added.
 - Remove of a value that was never set reports false and does not change cardinality.
-- Whether remove shortens the emitted buffer or matches FP-05’s compact canonical bytes is the implementer’s choice. Membership after remove is what this feature promises.
+- Remove does not by itself reclaim the room of a prefix it empties: membership and cardinality update immediately, but that prefix’s room stays in the emitted buffer until cleanup (FP-07) or compact (FP-05) reclaims it. Beyond that, how remove changes the emitted buffer is the implementer’s choice.
 - Set on a borrowed bitmap never writes the caller’s buffer (FP-04). Remove on a borrowed bitmap is not specified until after a set, or after compact in FP-05.
 
 ---

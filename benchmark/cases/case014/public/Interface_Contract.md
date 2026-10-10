@@ -58,7 +58,7 @@ float magnetic_field_strength_uT(float lat_deg, float lon_deg);
 void  magnetic_field_ned_uT(float lat_deg, float lon_deg, float year, float b_ned_uT[3]);
 ```
 
-Latitude and longitude in degrees, `year` a decimal year. Returns: declination in degrees (positive east), inclination in degrees (positive down), total field in µT; `magnetic_field_ned_uT` writes the NED field `[north, east, down]` in µT. The two-argument entries use a year of the implementer's choice within the model epoch.
+Latitude and longitude in degrees, `year` a decimal year. Returns: declination in degrees (positive east), inclination in degrees (positive down), total field in µT; `magnetic_field_ned_uT` writes the NED field `[north, east, down]` in µT. The two-argument entries use a year of the implementer's choice within the model epoch (2025.0 to 2030.0); the total field then equals the magnitude of `magnetic_field_ned_uT` at that year.
 
 ### 3.3 `ins.h` — INS filter
 
@@ -435,7 +435,7 @@ build/replay <dataset> [ERRDUMP]
 
 - `<dataset>` is the dataset directory (or the path of its `config.yaml`).
 - `ERRDUMP`, when given, is written with a per-epoch error dump: lines that begin with `#` are comments; each data row has nine comma-separated numeric fields — seconds since the first GNSS fix (since the first reference sample when aiding is not `gnss`), reference ground speed in m/s, INS roll, pitch, and yaw error against the reference in degrees, INS position error in metres, then ARS roll, pitch, and yaw error in degrees. A row is written at each reference epoch where INS is ready or, with `score.ahrs: 1`, the suite's ARS attitude is published; the fields of a filter that is not published at that epoch are 0. A refused run writes no data row.
-- **Exit status:** 0 when the replay ran to the end and every configured limit passed; non-zero when any limit failed; non-zero for a refused run, which also writes a message on standard error containing the offending key or value. The rest of the report on standard output is free text.
+- **Exit status:** 0 when the replay ran to the end and every configured limit passed; non-zero when any limit failed; non-zero for a refused run (the refusals of the Python replay, plus a missing or non-positive `score.min_epochs`), which also writes a message on standard error containing the offending key or value. The rest of the report on standard output is free text.
 
 ## 6. Custom-CSV runner: `python -m NAVFILTER <mapping.yaml>`
 

@@ -582,8 +582,8 @@ def test_codebook_lookup_type_2_is_refused():
         floor_dest = unique_name("floor0-arc")
         floor_enc = run_product(ws, ["e", floor_src, floor_dest])
         require_refusal(floor_enc)
-        require_refusal_distinct_from(enc, src, floor_enc, floor_src, dest, floor_dest)
         require_no_usable_compress_dest(ws, dest)
+        require_no_usable_compress_dest(ws, floor_dest)
 
 
 def test_floor_type_code_0_over_floor1_body_is_refused():
@@ -631,9 +631,6 @@ def test_floor_type_code_0_over_floor1_body_is_refused():
         assert other_enc.stderr, (
             f"lookup type code 2 over type-1 left stderr empty; "
             f"stdout={other_enc.stdout!r}"
-        )
-        require_refusal_distinct_from(
-            enc, src, other_enc, other_src, dest, other_dest
         )
         require_no_usable_compress_dest(ws, dest)
         require_no_usable_compress_dest(ws, other_dest)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import platform
 import secrets
 import select
 import signal
@@ -445,10 +446,12 @@ _PTRACE_EVENT_VFORK = 2
 _PTRACE_EVENT_CLONE = 3
 _WAIT_WALL = 0x40000000  # __WALL: wait for clone and non-clone children
 
-# Network syscalls the previous strace -e trace=network parser named.
-# Numbers from arch/x86/entry/syscalls/syscall_64.tbl and
-# include/uapi/asm-generic/unistd.h (aarch64).
-_NETWORK_SYSCALLS = {
+# Socket-family syscall numbers, one table per architecture. x86_64 and
+# aarch64 do not share these numbers: on x86_64, 200 is tkill, 201 is time,
+# 202 is futex, and 203 is sched_setaffinity, none of which is network I/O.
+# Only the table for the machine the tracee runs on is consulted.
+# x86_64: arch/x86/entry/syscalls/syscall_64.tbl
+_X86_64_NETWORK_SYSCALLS = {
     41: "socket",
     42: "connect",
     43: "accept",
@@ -459,17 +462,29 @@ _NETWORK_SYSCALLS = {
     49: "bind",
     50: "listen",
     288: "accept4",
+}
+# aarch64: include/uapi/asm-generic/unistd.h
+_AARCH64_NETWORK_SYSCALLS = {
     198: "socket",
     200: "bind",
     201: "listen",
     202: "accept",
     203: "connect",
-    207: "sendto",
-    208: "recvfrom",
+    206: "sendto",
+    207: "recvfrom",
     211: "sendmsg",
     212: "recvmsg",
     242: "accept4",
 }
+
+
+def _network_syscall_table() -> dict[int, str]:
+    machine = platform.machine()
+    if machine in {"x86_64", "amd64"}:
+        return _X86_64_NETWORK_SYSCALLS
+    if machine in {"aarch64", "arm64"}:
+        return _AARCH64_NETWORK_SYSCALLS
+    raise HarnessError(f"no network syscall table for {machine}")
 
 
 class _SyscallEntry(ctypes.Structure):
@@ -631,6 +646,7 @@ def trace_network_syscalls(
     """
     if not argv:
         raise HarnessError("trace argv must be non-empty")
+    table = _network_syscall_table()
     workdir = str(Path(cwd).resolve())
     child_env = dict(env)
     lib = _libc()
@@ -739,8 +755,8 @@ def trace_network_syscalls(
             if sig == (signal.SIGTRAP | 0x80):
                 syscall_stops += 1
                 nr = _syscall_nr_at_stop(lib, wpid)
-                if nr is not None and nr in _NETWORK_SYSCALLS:
-                    hits.append(_NETWORK_SYSCALLS[nr])
+                if nr is not None and nr in table:
+                    hits.append(table[nr])
                 _resume(wpid)
             elif sig == signal.SIGTRAP and event in (
                 _PTRACE_EVENT_FORK,

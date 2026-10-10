@@ -5,12 +5,15 @@ This file is the complete module. Import what you need (`from _helpers import ..
 
 from __future__ import annotations
 
+import fcntl
 import io
 import os
 import pty
+import re
 import select
 import subprocess
 import sys
+import termios
 import threading
 import time
 import uuid
@@ -1019,6 +1022,16 @@ def styled_stdout_remainder(result: Any, payload: str) -> str:
     return text.replace(payload, "")
 
 
+def _take_stdin_as_controlling_tty() -> None:
+    """Make the pty on fd 0 the child's controlling terminal.
+
+    Runs in the forked child after ``start_new_session`` made it a
+    session leader, so ``/dev/tty`` resolves to the pty as it does in
+    a real terminal session.
+    """
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+
 def run_python_on_tty(code: str, *, timeout: float = DEFAULT_TIMEOUT) -> RunResult:
     """Run *code* in a child interpreter whose stdio is a real pty.
 
@@ -1047,6 +1060,8 @@ def run_python_on_tty(code: str, *, timeout: float = DEFAULT_TIMEOUT) -> RunResu
                 cwd=str(ws.path),
                 env=ws.env,
                 close_fds=True,
+                start_new_session=True,
+                preexec_fn=_take_stdin_as_controlling_tty,
             )
         except Exception as exc:
             os.close(master)
@@ -1209,6 +1224,29 @@ def require_file_no_longer_usable(file: Any) -> None:
         "file did not report closed and a further read succeeded "
         f"(including empty); closed={closed_attr!r} data={data!r}"
     )
+
+
+def marker_occurs(text: str, marker: str) -> bool:
+    """True when *marker* occurs in *text* not glued to a word character.
+
+    A labeled marker such as ``T:42`` must start a token: the same
+    characters inside a random id (``GREET:42ab...``) are not the
+    marker. Everything after the marker start is still a plain
+    substring match, so a marker followed by extra text counts.
+    """
+    if not marker:
+        raise ValueError("marker must be a non-empty string")
+    if text is None:
+        raise RuntimeError(f"text is None; cannot observe {marker!r}")
+    return re.search(r"(?<!\w)" + re.escape(marker), text) is not None
+
+
+def assert_marker_absent(text: str, marker: str) -> None:
+    """*marker* must not occur in *text* as a token (see :func:`marker_occurs`)."""
+    if marker_occurs(text, marker):
+        raise AssertionError(
+            f"marker {marker!r} unexpectedly present; text={text!r}"
+        )
 
 
 def labeled_stdout_fields(result: Any, label: str) -> list[str]:
@@ -1728,6 +1766,8 @@ def start_python_on_tty(
             cwd=str(ws.path),
             env=env,
             close_fds=True,
+            start_new_session=True,
+            preexec_fn=_take_stdin_as_controlling_tty,
         )
     except Exception as exc:
         os.close(master)

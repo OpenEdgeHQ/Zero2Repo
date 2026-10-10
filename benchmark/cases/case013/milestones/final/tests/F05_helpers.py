@@ -59,6 +59,9 @@ _LIST_ITEM = re.compile(r"^[ \t]*(?:[*+\-]|\d+[.)])[ \t]+(.*)$")
 _INLINE_LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 _WRAP_PUNCT = re.compile(r"[\"'`\[\]\(\)\{\}<>*_.,:;]+")
 _KEY_LINE = re.compile(r"^[ \t]*([^:#\s][^:]*)[ \t]*:(.*)$")
+_BLOCK_KEY_LINE = re.compile(
+    r"""^[ \t]*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^:#\s"'][^:]*?)[ \t]*:(.*)$"""
+)
 _COMBINED_AT = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})"
     r"[T ]"
@@ -833,29 +836,188 @@ def assert_no_verified_key(mapping_text: str) -> None:
         )
 
 
+def _yaml_quoted_scalar(text: str, start: int) -> tuple[str, int]:
+    """Read a YAML single- or double-quoted scalar starting at ``start``.
+
+    Returns the decoded value and the index just past the closing quote.
+    """
+    quote = text[start]
+    index = start + 1
+    out: list[str] = []
+    while index < len(text):
+        char = text[index]
+        if quote == "'":
+            if char == "'":
+                if text[index + 1 : index + 2] == "'":
+                    out.append("'")
+                    index += 2
+                    continue
+                return "".join(out), index + 1
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\":
+            escape = text[index + 1 : index + 2]
+            simple = {
+                '"': '"', "\\": "\\", "/": "/", "n": "\n", "t": "\t",
+                "r": "\r", "0": "\0", " ": " ", "b": "\b", "f": "\f",
+            }
+            if escape in simple:
+                out.append(simple[escape])
+                index += 2
+                continue
+            widths = {"x": 2, "u": 4, "U": 8}
+            if escape in widths:
+                digits = text[index + 2 : index + 2 + widths[escape]]
+                if len(digits) != widths[escape] or not all(
+                    d in "0123456789abcdefABCDEF" for d in digits
+                ):
+                    raise HarnessError(
+                        f"bad escape in YAML double-quoted scalar: {text!r}"
+                    )
+                out.append(chr(int(digits, 16)))
+                index += 2 + widths[escape]
+                continue
+            raise HarnessError(
+                f"unsupported escape in YAML double-quoted scalar: {text!r}"
+            )
+        if char == '"':
+            return "".join(out), index + 1
+        out.append(char)
+        index += 1
+    raise HarnessError(f"unterminated YAML quoted scalar: {text!r}")
+
+
+def _yaml_flow_mapping(text: str) -> dict[str, str]:
+    """Parse a one-level YAML flow mapping ``{k: v, "k": 'v', ...}``.
+
+    Keys and values may be plain, single-quoted, or double-quoted scalars.
+    Raises ``HarnessError`` when the text is not such a mapping.
+    """
+    body = text.strip()
+    if not (body.startswith("{") and body.endswith("}")):
+        raise HarnessError(f"not a YAML flow mapping: {text!r}")
+    inner = body[1:-1]
+    result: dict[str, str] = {}
+    index = 0
+
+    def skip_space(pos: int) -> int:
+        while pos < len(inner) and inner[pos] in " \t\r\n":
+            pos += 1
+        return pos
+
+    def read_scalar(pos: int, is_key: bool) -> tuple[str, int]:
+        pos = skip_space(pos)
+        if pos < len(inner) and inner[pos] in "\"'":
+            value, pos = _yaml_quoted_scalar(inner, pos)
+            return value, skip_space(pos)
+        begin = pos
+        while pos < len(inner):
+            char = inner[pos]
+            if char == ",":
+                break
+            if is_key and char == ":":
+                following = inner[pos + 1 : pos + 2]
+                if following == "" or following in " \t\r\n,":
+                    break
+            if char in "{}[]":
+                raise HarnessError(
+                    f"nested flow collection in generated mapping: {text!r}"
+                )
+            pos += 1
+        return inner[begin:pos].strip(), pos
+
+    while True:
+        index = skip_space(index)
+        if index >= len(inner):
+            break
+        key, index = read_scalar(index, is_key=True)
+        if index >= len(inner) or inner[index] != ":":
+            raise HarnessError(f"flow mapping entry has no ':': {text!r}")
+        value, index = read_scalar(index + 1, is_key=False)
+        result[key] = value
+        index = skip_space(index)
+        if index < len(inner):
+            if inner[index] != ",":
+                raise HarnessError(f"unexpected text in flow mapping: {text!r}")
+            index += 1
+    return result
+
+
+def _yaml_key(raw: str) -> str:
+    text = raw.strip()
+    if text and text[0] in "\"'":
+        value, end = _yaml_quoted_scalar(text, 0)
+        if text[end:].strip():
+            raise HarnessError(f"unexpected text after quoted key: {raw!r}")
+        return value
+    return text
+
+
+def _yaml_block_scalar(raw: str) -> str:
+    text = raw.strip()
+    if text and text[0] in "\"'":
+        value, _end = _yaml_quoted_scalar(text, 0)
+        return value
+    return text
+
+
+def _flow_mapping_text(first: str, following: list[str]) -> str:
+    """Collect a flow mapping that may continue over following lines."""
+    collected = first
+    remaining = iter(following)
+    while True:
+        depth = 0
+        quote: str | None = None
+        index = 0
+        while index < len(collected):
+            char = collected[index]
+            if quote is not None:
+                if quote == '"' and char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return collected[: index + 1]
+            index += 1
+        nxt = next(remaining, None)
+        if nxt is None:
+            raise HarnessError(f"unterminated generated flow mapping: {first!r}")
+        collected += "\n" + nxt
+
+
 def generated_by_and_at(mapping_text: str) -> tuple[str, str]:
-    """Return ``(by, at)`` from a generated mapping (flow or nested block)."""
+    """Return ``(by, at)`` from a generated mapping (flow or nested block).
+
+    Keys and values may be plain or quoted, as YAML allows.
+    """
     lines = mapping_text.splitlines()
     for index, line in enumerate(lines):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        match = re.match(r"^[ \t]*generated[ \t]*:(.*)$", line)
+        match = re.match(
+            r"""^[ \t]*(?:generated|"generated"|'generated')[ \t]*:(.*)$""",
+            line,
+        )
         if match is None:
             continue
         rest = match.group(1).strip()
-        if rest.startswith("{") and "}" in rest:
-            flow = rest[rest.find("{") + 1 : rest.rfind("}")]
-            by_match = re.search(r"\bby[ \t]*:([^,}]+)", flow)
-            at_match = re.search(r"\bat[ \t]*:([^,}]+)", flow)
-            if by_match is None or at_match is None:
+        if rest.startswith("{"):
+            flow = _flow_mapping_text(rest, lines[index + 1 :])
+            entries = _yaml_flow_mapping(flow)
+            if "by" not in entries or "at" not in entries:
                 raise HarnessError(
-                    f"generated flow mapping is missing by or at: {rest!r}"
+                    f"generated flow mapping is missing by or at: {flow!r}"
                 )
-            return (
-                _strip_yaml_quotes(by_match.group(1)),
-                _strip_yaml_quotes(at_match.group(1)),
-            )
+            return entries["by"], entries["at"]
         by_val: str | None = None
         at_val: str | None = None
         parent_indent = len(line) - len(line.lstrip(" \t"))
@@ -865,11 +1027,11 @@ def generated_by_and_at(mapping_text: str) -> tuple[str, str]:
             indent = len(nested) - len(nested.lstrip(" \t"))
             if indent <= parent_indent:
                 break
-            nested_match = _KEY_LINE.match(nested.strip())
+            nested_match = _BLOCK_KEY_LINE.match(nested.strip())
             if nested_match is None:
                 continue
-            nested_key = nested_match.group(1).strip()
-            nested_val = _strip_yaml_quotes(nested_match.group(2))
+            nested_key = _yaml_key(nested_match.group(1))
+            nested_val = _yaml_block_scalar(nested_match.group(2))
             if nested_key == "by":
                 by_val = nested_val
             elif nested_key == "at":

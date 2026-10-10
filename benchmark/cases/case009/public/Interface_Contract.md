@@ -126,6 +126,7 @@ Booleans are compared case-insensitively. Truthy: `true`, `1`, `on`, `yes`, `t`.
 
 ### SSH helpers
 
+- **SSH program.** The client runs the program named by the `GIT_SSH_COMMAND` environment variable (a shell command line), else by `GIT_SSH` (a program path run directly, without a shell), else by Git's `core.sshCommand`, else `ssh`. In the forms below `ssh` stands for that program: it receives any SSH options, then `[<user>@]<host>`, then the remote command line as its arguments.
 - **Authenticate.** `ssh [<user>@]<host> git-orbulk-authenticate <repository-path> <download|upload>`. On success the helper prints a JSON object with `header` (map of HTTP headers to attach), optional `href` (endpoint URL to use instead of the derived one), and optional `expires_in` / `expires_at`.
 - **Pure SSH transfer.** `ssh [<user>@]<host> git-orbulk-transfer <repository-path> <download|upload>`, then pkt-lines on the channel:
   - A packet is four lowercase hex digits giving the total packet length including those four, then the payload. `0000` is a flush (ends a request or reply); `0001` is a delimiter (separates text packets from a following body).
